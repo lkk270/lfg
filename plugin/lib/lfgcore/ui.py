@@ -118,7 +118,10 @@ def api(view, q):
         return S.storage()
     if view == "sessions":
         from . import sessions as SS
-        return SS.listing()
+        return SS.listing(hidden=_arg(q, "hidden") == "1")
+    if view == "sessiondone":
+        from . import sessions as SS
+        return SS.group_cleanup(_arg(q, "repo"), _arg(q, "group"))
     if view == "claude":
         from . import control as K
         return K.claude_view()
@@ -195,11 +198,20 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
-    if what in ("session_name", "session_folder"):
+    if what in ("session_name", "session_folder", "session_hide", "session_trash", "worktree_remove"):
         from . import sessions as SS
         try:
             if what == "session_name":
                 return SS.rename(body.get("id"), body.get("name"))
+            if what == "session_hide":
+                ids = body.get("ids") or []
+                if not isinstance(ids, list):
+                    raise ValueError("ids must be a list")
+                return SS.hide(ids, on=body.get("on", True) is not False)
+            if what == "session_trash":
+                return SS.trash(body.get("id"))
+            if what == "worktree_remove":
+                return SS.remove_worktree(str(body.get("path") or ""))
             return SS.file_into(body.get("id"), body.get("folder"))
         except ValueError as e:
             raise S.Invalid(str(e)) from None

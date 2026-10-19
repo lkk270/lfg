@@ -1087,6 +1087,43 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(d["models"][0]["input"], 1000000)
         self.assertEqual(d["spend"]["today"], 6.0)  # 1M in at $4 + 0.1M out at $20
 
+    def test_hide_keeps_the_file_and_trash_moves_it_to_the_trash(self):
+        a = "%08d-0000-0000-0000-000000000000" % 1
+        self.write(a, "/nowhere/app", "main", "hello")
+        self.SS.hide([a])
+        self.assertEqual(self.SS.listing()["sessions"], [])
+        self.assertTrue(self.SS.listing(hidden=True)["sessions"][0]["hidden"])
+        self.SS.hide([a], on=False)
+        self.assertEqual(len(self.SS.listing()["sessions"]), 1)
+        f = glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0]
+        with self.assertRaises(ValueError):  # just written, so maybe still open
+            self.SS.trash(a)
+        os.utime(f, (time.time() - 3600, time.time() - 3600))
+        fake_home = os.path.join(self.dir, "home")
+        os.makedirs(os.path.join(fake_home, ".Trash"))
+        with mock.patch.object(self.SS.C, "HOME", fake_home):
+            moved = self.SS.trash(a)["moved_to_trash"]
+        self.assertFalse(os.path.exists(f))
+        self.assertTrue(all(os.path.exists(m) and m.startswith(os.path.join(fake_home, ".Trash")) for m in moved))
+
+    def test_a_worktree_with_work_in_it_is_never_removed(self):
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        repo, wt = os.path.join(self.dir, "repo"), os.path.join(self.dir, "wt")
+        run = lambda *a, cwd=repo: subprocess.run(a, cwd=cwd, env=env, check=True, capture_output=True)  # noqa: E731
+        os.makedirs(repo)
+        run("git", "init", "-q")
+        run("git", "commit", "-q", "--allow-empty", "-m", "x")
+        run("git", "worktree", "add", "-q", "-b", "feat", wt)
+        self.assertFalse(self.SS.worktree_state(repo)["safe"])  # the main checkout
+        run("git", "commit", "-q", "--allow-empty", "-m", "local only", cwd=wt)
+        st = self.SS.worktree_state(wt)
+        self.assertFalse(st["safe"])
+        self.assertIn("not pushed", st["why"])
+        with self.assertRaises(ValueError):
+            self.SS.remove_worktree(wt)
+        self.assertTrue(os.path.isdir(wt))
+
     def test_names_and_folders_are_yours_and_reversible(self):
         a = "%08d-0000-0000-0000-000000000000" % 1
         self.write(a, "/nowhere/app", "main", "hello")
@@ -1098,7 +1135,7 @@ class SessionsTest(unittest.TestCase):
         self.SS.file_into(a, "")
         r = self.SS.listing()["sessions"][0]
         self.assertEqual((r["name"], r["folder"]), ("hello", ""))
-        self.assertEqual(self.SS.prefs(), {"names": {}, "folders": {}})
+        self.assertEqual(self.SS.prefs(), {"names": {}, "folders": {}, "hidden": []})
         with self.assertRaises(ValueError):
             self.SS.rename("../../etc/passwd", "x")
 

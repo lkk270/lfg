@@ -1040,7 +1040,7 @@ PAGES.knowledge = async () => {
 
 /* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
 PAGES.sessions = async () => {
-  const [d, unlocked] = await Promise.all([api("sessions"), isUnlocked()]);
+  const [d, unlocked] = await Promise.all([api("sessions", state.showHidden ? { hidden: "1" } : {}), isUnlocked()]);
   state.sessions = d;
   const q = (state.sessionFind || "").toLowerCase();
   const hit = s => !q || [s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd].join(" ").toLowerCase().includes(q);
@@ -1057,12 +1057,14 @@ PAGES.sessions = async () => {
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
-      <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"}>${s.folder ? "Move" : "Add to folder"}</button></li>`;
-  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span></summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
+      <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"}>${s.folder ? "Move" : "Add to folder"}</button>
+      <button class="btn small" data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}' ${unlocked ? "" : "disabled"}>${s.hidden ? "Show again" : "Hide"}</button>
+      <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></li>`;
+  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span>${repo !== "Your folders" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
   const lock = unlocked ? "" : `<div class="callout warn">Rename and folders are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
   return `${head("Sessions", "Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up.")}
     ${lock}
-    <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span></div>
+    <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span>${d.hidden_count ? `<label class="small"><input type="checkbox" id="sess-hidden" ${state.showHidden ? "checked" : ""}> Show ${plural(d.hidden_count, "hidden session")}</label>` : ""}</div>
     ${rows.length ? groups.join("") : empty("No sessions match", q ? "Try a ticket number, a branch or a repo name." : "No Claude Code sessions found in " + esc(d.projects_dir))}`;
 };
 function wireSessions(root) {
@@ -1094,6 +1096,51 @@ function wireSessions(root) {
     $("#sess-save").onclick = go;
     $("#sess-val").onkeydown = e => { if (e.key === "Enter") go(); };
   };
+  const hid = $("#sess-hidden", root);
+  if (hid) hid.onchange = () => { state.showHidden = hid.checked; route(); };
+  $$("[data-sess-hide]", root).forEach(b => b.onclick = async () => {
+    const [id, on] = JSON.parse(b.dataset.sessHide);
+    b.disabled = true;
+    const r = await save("session_hide", { ids: [id], on });
+    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
+    route();
+  });
+  $$("[data-sess-trash]", root).forEach(b => b.onclick = () => {
+    const s = (state.sessions.sessions || []).find(x => x.id === b.dataset.sessTrash) || {};
+    openDrawer("Delete this session?", `<div class="readable"><p><b>${esc(s.name)}</b></p><p>Its file goes to the macOS Trash, so you can still get it back from there. It disappears from <code>/resume</code>. If you only want it out of this list, use Hide instead.</p>
+      <div class="set-actions"><button class="btn primary" id="sess-trash-go">Move to Trash</button><span class="save-msg" id="sess-trash-msg"></span></div></div>`);
+    $("#sess-trash-go").onclick = async () => {
+      const r = await save("session_trash", { id: s.id });
+      saidMsg($("#sess-trash-msg"), r, "Moved to the Trash.");
+      if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 700);
+    };
+  });
+  $$("[data-sess-done]", root).forEach(b => b.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    const [repo, group] = JSON.parse(b.dataset.sessDone);
+    openDrawer(`Done with ${group}`, '<div class="skeleton"></div>');
+    const d = await api("sessiondone", { repo, group });
+    const wts = d.worktrees || [];
+    const wtRow = w => `<li><label class="row"><input type="checkbox" data-wt="${esc(w.path)}" ${w.safe ? "checked" : "disabled"}><span class="grow"><span class="mono small">${esc(w.path)}</span><div class="meta">${w.safe ? `nothing would be lost${w.branch ? `; the branch <span class="mono">${esc(w.branch)}</span> is kept` : ""}` : `<span class="bad-tx">kept: ${esc(w.why)}</span>`}</div>${(w.dirty || []).length ? `<pre class="small">${esc(w.dirty.join("\n"))}</pre>` : ""}${(w.unpushed || []).length ? `<pre class="small">${esc(w.unpushed.join("\n"))}</pre>` : ""}</span></label></li>`;
+    openDrawer(`Done with ${group}`, `<div class="readable">
+      <label class="row"><input type="checkbox" id="done-hide" checked><span>Hide its ${plural(d.sessions.length, "session")} from this page. Their files stay, so <code>/resume</code> still works, and "Show hidden" brings them back.</span></label>
+      ${wts.length ? `<div class="k">Worktrees these sessions used</div><p class="muted small">Only ones with nothing uncommitted or unpushed can be deleted. Files git ignores there (node_modules, copied .env files) go with them.</p><ul class="items box">${wts.map(wtRow).join("")}</ul>` : `<p class="muted">None of these sessions ran in a worktree.</p>`}
+      <div class="set-actions"><button class="btn primary" id="done-go">Clean up</button><span class="save-msg" id="done-msg"></span></div></div>`);
+    $("#done-go").onclick = async () => {
+      const go = $("#done-go"), msg = $("#done-msg"), out = [];
+      go.disabled = true;
+      if ($("#done-hide").checked && d.sessions.length) {
+        const r = await save("session_hide", { ids: d.sessions, on: true });
+        out.push(r.ok ? `hid ${plural(d.sessions.length, "session")}` : `couldn't hide: ${r.why}`);
+      }
+      for (const box of $$("[data-wt]:checked")) {
+        const r = await save("worktree_remove", { path: box.dataset.wt });
+        out.push(r.ok ? `deleted ${box.dataset.wt.split("/").pop()}` : r.why);
+      }
+      msg.textContent = out.join(" · ") || "Nothing selected.";
+      setTimeout(() => { closeDrawer(); route(); }, 1600);
+    };
+  });
   $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
   $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
 }

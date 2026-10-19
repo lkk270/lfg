@@ -31,7 +31,8 @@ def _prefs_path():
 
 def prefs():
     p = C.read_json(_prefs_path(), {}) or {}
-    return {"names": dict(p.get("names") or {}), "folders": dict(p.get("folders") or {})}
+    return {"names": dict(p.get("names") or {}), "folders": dict(p.get("folders") or {}),
+            "hidden": list(p.get("hidden") or [])}
 
 
 def _save_prefs(p):
@@ -176,15 +177,16 @@ def resume_command(s):
     return "cd %s && claude --resume %s" % (shlex.quote(s["cwd"] or C.HOME), s["id"])
 
 
-def listing(days=None, scripted=False):
+def listing(days=None, scripted=False, hidden=False):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
     by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`."""
     p = prefs()
     folder_of = {sid: f for f, ids in p["folders"].items() for sid in ids}
+    hid = set(p["hidden"])
     cut = time.time() - days * 86400 if days else 0
     rows = []
     for s in scan():
-        if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted):
+        if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted) or (s["id"] in hid and not hidden):
             continue
         repo, root, wt = _where(s["cwd"])
         r = dict(s, repo=repo, root=root, worktree=wt,
@@ -194,6 +196,7 @@ def listing(days=None, scripted=False):
         r["name"] = name_for(r, p["names"].get(s["id"], ""))
         r["auto_name"] = name_for(r)
         r["folder"] = folder_of.get(s["id"], "")
+        r["hidden"] = s["id"] in hid
         r["group"] = r["folder"] or r["ticket"] or (r["branch"] if r["branch"] not in ("", "HEAD") else "") \
             or ("(no branch)" if r["root"] else "Not in a repo")
         r["resume"] = resume_command(r)
@@ -202,7 +205,7 @@ def listing(days=None, scripted=False):
             r.pop(k, None)
         rows.append(r)
     rows.sort(key=lambda r: r["modified"], reverse=True)
-    return {"sessions": rows, "folders": sorted(p["folders"]), "projects_dir": PROJECTS}
+    return {"sessions": rows, "folders": sorted(p["folders"]), "projects_dir": PROJECTS, "hidden_count": len(hid)}
 
 
 def _known(sid):
@@ -359,3 +362,84 @@ def usage(days=30):
             "models": sorted([dict(r, cache_write=r["cache_write_5m"] + r["cache_write_1h"])
                               for r in as_rows(per_model, "model")], key=lambda r: -r["usd"]),
             "spend": {k: round(v, 2) for k, v in spend.items()}, "unpriced": sorted(unpriced)}
+
+
+# ---------------------------------------------------------------- done with a ticket: hide, trash, worktrees
+
+def hide(ids, on=True):
+    """Hide sessions from the Sessions page (or show them again). Their files are untouched, so /resume still works."""
+    ids = [_known(i) for i in ids]
+    p = prefs()
+    hidden = set(p.get("hidden") or [])
+    hidden = hidden | set(ids) if on else hidden - set(ids)
+    p["hidden"] = sorted(hidden)
+    _save_prefs(p)
+    return {"hidden": len(ids) if on else 0, "shown": 0 if on else len(ids)}
+
+
+def trash(sid):
+    """Move a session's transcript (and its subagents' folder) to the macOS Trash. Refused while it looks in use."""
+    sid = _known(sid)
+    paths = glob.glob(os.path.join(PROJECTS, "*", sid + ".jsonl"))
+    if any(time.time() - os.path.getmtime(p) < 300 for p in paths):
+        raise ValueError("that session was used in the last 5 minutes; close it in Claude Code first")
+    bin_ = os.path.join(C.HOME, ".Trash")
+    moved = []
+    for p in paths + [d for d in glob.glob(os.path.join(PROJECTS, "*", sid)) if os.path.isdir(d)]:
+        dest = os.path.join(bin_, "%s %s" % (os.path.basename(os.path.dirname(p)), os.path.basename(p)))
+        if os.path.exists(dest):
+            dest += " %d" % int(time.time())
+        os.rename(p, dest)
+        moved.append(dest)
+    p = prefs()
+    p["hidden"] = [x for x in p.get("hidden") or [] if x != sid]
+    p["names"].pop(sid, None)
+    for f in list(p["folders"]):
+        p["folders"][f] = [x for x in p["folders"][f] if x != sid]
+        if not p["folders"][f]:
+            del p["folders"][f]
+    _save_prefs(p)
+    return {"id": sid, "moved_to_trash": moved}
+
+
+def _git(cwd, *args):
+    return C.run(["git", *args], cwd=cwd, timeout=30)
+
+
+def worktree_state(path):
+    """What would be lost by removing this worktree: uncommitted files and commits no remote has."""
+    if not os.path.isdir(path):
+        return {"path": path, "exists": False, "safe": False, "why": "already gone"}
+    top = _git(path, "rev-parse", "--show-toplevel").stdout.strip()
+    common = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    if not top or os.path.realpath(top) != os.path.realpath(path):
+        return {"path": path, "exists": True, "safe": False, "why": "not the top of a git worktree"}
+    if os.path.realpath(os.path.join(path, ".git")) == os.path.realpath(common):
+        return {"path": path, "exists": True, "safe": False, "why": "this is the main checkout, not a worktree"}
+    branch = _git(path, "branch", "--show-current").stdout.strip()
+    dirty = [ln for ln in _git(path, "status", "--porcelain").stdout.splitlines() if ln.strip()]
+    unpushed = [ln for ln in _git(path, "log", "--oneline", "HEAD", "--not", "--remotes").stdout.splitlines() if ln]
+    why = "; ".join(x for x in (
+        "%d uncommitted file(s)" % len(dirty) if dirty else "",
+        "%d commit(s) not pushed anywhere" % len(unpushed) if unpushed else "") if x)
+    return {"path": path, "exists": True, "branch": branch, "dirty": dirty[:20], "unpushed": unpushed[:20],
+            "safe": not why, "why": why}
+
+
+def remove_worktree(path):
+    """Remove a worktree only if nothing would be lost. Never forces; the branch is kept."""
+    st = worktree_state(path)
+    if not st["safe"]:
+        raise ValueError("kept %s: %s" % (path, st["why"]))
+    main = os.path.dirname(_git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+    cp = _git(main, "worktree", "remove", path)
+    if cp.returncode:
+        raise ValueError((cp.stderr or cp.stdout).strip())
+    return {"path": path, "branch": st["branch"]}
+
+
+def group_cleanup(repo, group):
+    """For "Done with this": the group's sessions and the worktrees they ran in, each with what removing it loses."""
+    rows = [r for r in listing(hidden=True)["sessions"] if r["repo"] == repo and r["group"] == group]
+    paths = sorted({r["cwd"] for r in rows if r["worktree"] and r["cwd"]})
+    return {"sessions": [r["id"] for r in rows if not r["hidden"]], "worktrees": [worktree_state(p) for p in paths]}
