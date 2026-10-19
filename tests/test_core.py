@@ -1031,6 +1031,61 @@ class RunSummaryTest(unittest.TestCase):
         self.assertEqual(dash._blocking({"findings": [{"blocking": True}, {"blocking": False}]}), 1)
 
 
+class SessionsTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from lfgcore import sessions as SS
+        self.SS = SS
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+        p = mock.patch.object(SS, "PROJECTS", self.dir)
+        p.start()
+        self.addCleanup(p.stop)
+        for f in (SS._index_path(), SS._prefs_path()):
+            if os.path.exists(f):
+                os.remove(f)
+
+    def write(self, sid, cwd, branch, prompt, title=None, entry="cli"):
+        d = os.path.join(self.dir, cwd.replace("/", "-"))
+        os.makedirs(d, exist_ok=True)
+        ev = [{"type": "user", "cwd": cwd, "gitBranch": branch, "entrypoint": entry,
+               "timestamp": "2026-10-19T10:00:00Z", "message": {"role": "user", "content": prompt}},
+              {"type": "user", "cwd": cwd, "gitBranch": branch, "entrypoint": entry, "isMeta": True,
+               "message": {"role": "user", "content": "<command-name>/x</command-name>"}}]
+        if title:
+            ev.append({"type": "custom-title", "customTitle": title})
+        with open(os.path.join(d, sid + ".jsonl"), "w") as f:
+            f.write("\n".join(json.dumps(e) for e in ev) + "\n")
+
+    def test_finds_every_folder_names_and_groups_by_ticket(self):
+        a, b, c = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2, 3))
+        self.write(a, "/nowhere/app", "lee/ato-12-fix-login", "fix the login bug")
+        self.write(b, "/nowhere/other", "main", "what does this do", title="my-own-title")
+        self.write(c, "/nowhere/app", "main", "review it", entry="sdk-cli")  # a script's session
+        rows = {r["id"]: r for r in self.SS.listing()["sessions"]}
+        self.assertEqual(set(rows), {a, b})
+        self.assertEqual((rows[a]["ticket"], rows[a]["group"], rows[a]["name"]),
+                         ("ATO-12", "ATO-12", "ATO-12 · fix the login bug"))
+        self.assertEqual(rows[b]["name"], "my-own-title")
+        self.assertEqual(rows[a]["resume"], "cd /nowhere/app && claude --resume " + a)
+        self.assertEqual(rows[a]["prompts"], 1)  # the meta line isn't a message you sent
+
+    def test_names_and_folders_are_yours_and_reversible(self):
+        a = "%08d-0000-0000-0000-000000000000" % 1
+        self.write(a, "/nowhere/app", "main", "hello")
+        self.SS.rename(a, "  Login   work ")
+        self.SS.file_into(a, "Q4")
+        r = self.SS.listing()["sessions"][0]
+        self.assertEqual((r["name"], r["folder"], r["group"]), ("Login work", "Q4", "Q4"))
+        self.SS.rename(a, "")
+        self.SS.file_into(a, "")
+        r = self.SS.listing()["sessions"][0]
+        self.assertEqual((r["name"], r["folder"]), ("hello", ""))
+        self.assertEqual(self.SS.prefs(), {"names": {}, "folders": {}})
+        with self.assertRaises(ValueError):
+            self.SS.rename("../../etc/passwd", "x")
+
+
 class ReviewTest(unittest.TestCase):
     META = {"title": "Add thing", "url": "https://github.com/o/r/pull/7", "author": "dev", "head_sha": "a" * 40,
             "base": "main", "branch": "dev/x", "state": "OPEN"}

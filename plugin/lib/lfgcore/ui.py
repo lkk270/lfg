@@ -116,6 +116,9 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "sessions":
+        from . import sessions as SS
+        return SS.listing()
     if view == "claude":
         from . import control as K
         return K.claude_view()
@@ -192,6 +195,14 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what in ("session_name", "session_folder"):
+        from . import sessions as SS
+        try:
+            if what == "session_name":
+                return SS.rename(body.get("id"), body.get("name"))
+            return SS.file_into(body.get("id"), body.get("folder"))
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
     if what.startswith("review_"):
         return review_action(what, body)
     from . import control as K

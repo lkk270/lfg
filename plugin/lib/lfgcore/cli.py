@@ -720,6 +720,31 @@ def _review_human(rec):
             print("  %-5s %-7s %-8s %s  %s" % (f["id"], f["status"], f["severity"], f["title"], where))
 
 
+def cmd_sessions(a):
+    from . import sessions as SS
+    try:
+        if a.action == "name":
+            _print(SS.rename(a.id, " ".join(a.value)))
+            return 0
+        if a.action == "folder":
+            _print(SS.file_into(a.id, " ".join(a.value)))
+            return 0
+    except ValueError as e:
+        C.die(str(e), 2)
+    d = SS.listing(days=a.days)
+    rows = [r for r in d["sessions"] if not a.find or a.find.lower() in " ".join(
+        str(r.get(k) or "") for k in ("name", "repo", "branch", "ticket", "folder", "first", "cwd")).lower()]
+
+    def human(rs):
+        if not rs:
+            print("no sessions match")
+        for r in rs[:a.limit]:
+            print("%s  %-22s %-12s %s\n    %s" % (r["modified"][:16].replace("T", " "), (r["repo"] + (
+                "/" + r["worktree"] if r["worktree"] else ""))[:22], r["group"][:12], r["name"][:70], r["resume"]))
+    C.emit(rows[:a.limit], a.json, human)
+    return 0
+
+
 def cmd_usage(a):
     p = C.lfg_path("usage.db")
     rows = []
@@ -953,6 +978,14 @@ def main(argv=None):
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--json", action="store_true")
+    ss = sp.add_parser("sessions", help="every Claude Code session on this machine, with the command that resumes it")
+    ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder"])
+    ss.add_argument("id", nargs="?", help="name/folder: the session id")
+    ss.add_argument("value", nargs="*", help="name: your name for it; folder: the folder (empty takes it out)")
+    ss.add_argument("--find", help="list: only sessions whose name, repo, branch, ticket or folder has this")
+    ss.add_argument("--days", type=int, help="list: only the last N days")
+    ss.add_argument("--limit", type=int, default=30)
+    ss.add_argument("--json", action="store_true")
     us = sp.add_parser("usage")
     us.add_argument("--json", action="store_true")
     ve = sp.add_parser("vendor")
@@ -1008,7 +1041,8 @@ def main(argv=None):
     return {"init": cmd_init, "graphs": cmd_graphs, "run": cmd_run, "rule": cmd_rule, "repo": cmd_repo,
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
-            "usage": cmd_usage, "vendor": cmd_vendor, "omnigraph": cmd_omnigraph, "headroom": cmd_headroom,
+            "usage": cmd_usage, "sessions": cmd_sessions, "vendor": cmd_vendor, "omnigraph": cmd_omnigraph,
+            "headroom": cmd_headroom,
             "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue,
             "worktree": cmd_worktree, "setup": cmd_setup, "enable": cmd_enable, "disable": cmd_disable,
             "packs": cmd_packs, "changes": cmd_changes, "uninstall": cmd_uninstall}[a.cmd](a)

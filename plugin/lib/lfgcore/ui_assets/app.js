@@ -801,7 +801,7 @@ async function showSkill(name) {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["home", "Home"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["home", "Home"], ["sessions", "Sessions"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1038,6 +1038,65 @@ PAGES.knowledge = async () => {
     <p class="muted small mt">To add something, tell Claude Code what to remember, or use <code>/lfg:note</code>.</p>`;
 };
 
+/* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
+PAGES.sessions = async () => {
+  const [d, unlocked] = await Promise.all([api("sessions"), isUnlocked()]);
+  state.sessions = d;
+  const q = (state.sessionFind || "").toLowerCase();
+  const hit = s => !q || [s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd].join(" ").toLowerCase().includes(q);
+  const rows = d.sessions.filter(hit);
+  const byRepo = new Map();
+  for (const s of rows) {
+    const repo = s.folder ? "Your folders" : s.repo || "Other";
+    if (!byRepo.has(repo)) byRepo.set(repo, new Map());
+    const g = byRepo.get(repo);
+    if (!g.has(s.group)) g.set(s.group, []);
+    g.get(s.group).push(s);
+  }
+  const line = s => `<li class="sess" data-sid="${esc(s.id)}"><div class="grow"><div class="title">${esc(s.name)}</div>
+      <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
+      <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
+      <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
+      <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"}>${s.folder ? "Move" : "Add to folder"}</button></li>`;
+  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span></summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
+  const lock = unlocked ? "" : `<div class="callout warn">Rename and folders are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
+  return `${head("Sessions", "Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up.")}
+    ${lock}
+    <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span></div>
+    ${rows.length ? groups.join("") : empty("No sessions match", q ? "Try a ticket number, a branch or a repo name." : "No Claude Code sessions found in " + esc(d.projects_dir))}`;
+};
+function wireSessions(root) {
+  const find = $("#sess-find", root);
+  if (find) {
+    let t;
+    find.oninput = () => { clearTimeout(t); t = setTimeout(() => { state.sessionFind = find.value; route().then(() => { const f = $("#sess-find"); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }); }, 250); };
+  }
+  $$("[data-copy]", root).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+    setTimeout(() => (b.textContent = "Copy resume command"), 1500);
+  });
+  const ask = (sid, kind) => {
+    const s = (state.sessions.sessions || []).find(x => x.id === sid) || {};
+    const folders = state.sessions.folders || [];
+    const isName = kind === "name";
+    openDrawer(isName ? "Rename session" : "Put in a folder", `<div class="readable">
+      ${isName ? `<p>Shown in LFG only. Leave it empty to go back to the automatic name: <i>${esc(s.auto_name || "")}</i>.</p>` : `<p>A session is in one folder at most. Leave it empty to take it out.${folders.length ? " Your folders: " + folders.map(f => `<a href="#" data-pick="${esc(f)}">${esc(f)}</a>`).join(", ") + "." : ""}</p>`}
+      <input type="text" id="sess-val" class="wide" value="${esc(isName ? (s.name !== s.auto_name ? s.name : "") : s.folder || "")}" placeholder="${isName ? esc(s.auto_name || "") : "e.g. ATO-4162 rollout"}">
+      <div class="set-actions"><button class="btn primary" id="sess-save">Save</button><span class="save-msg" id="sess-msg"></span></div></div>`);
+    $$("[data-pick]").forEach(a => a.onclick = e => { e.preventDefault(); $("#sess-val").value = a.dataset.pick; });
+    $("#sess-val").focus();
+    const go = async () => {
+      const v = $("#sess-val").value;
+      const r = await save(isName ? "session_name" : "session_folder", isName ? { id: sid, name: v } : { id: sid, folder: v });
+      saidMsg($("#sess-msg"), r, "Saved.");
+      if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 500);
+    };
+    $("#sess-save").onclick = go;
+    $("#sess-val").onkeydown = e => { if (e.key === "Enter") go(); };
+  };
+  $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
+  $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
+}
 PAGES.usage = async () => {
   const d = await api("usage");
   const t = (d.days || []).reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
@@ -1283,10 +1342,11 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
+  sessions: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
   runs: "M5 4l14 8-14 8z",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
@@ -1364,6 +1424,7 @@ async function route() {
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
   if (key === "prs") wirePrs(view);
+  if (key === "sessions") wireSessions(view);
   const rf = $("#refreshed");
   if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (!arg) window.scrollTo(0, 0);
@@ -1424,7 +1485,7 @@ async function loadBranches() {
 function refresh() { state.cache = {}; state.fresh = true; mapStatus(); route().finally(() => { state.fresh = false; }); }
 /* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
    drawer is open, so nothing you're in the middle of is thrown away. */
-const AUTO_REFRESH = ["home", "prs", "checks", "runs", "issues"];
+const AUTO_REFRESH = ["home", "sessions", "prs", "checks", "runs", "issues"];
 setInterval(() => {
   const page = (location.hash.slice(1) || "home").split("/")[0];
   const busy = document.hidden || document.querySelector("#drawer:not([hidden])") ||
