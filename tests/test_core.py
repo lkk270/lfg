@@ -21,6 +21,7 @@ from lfgcore import gate as G  # noqa: E402
 from lfgcore import guard  # noqa: E402
 from lfgcore import headroom as HR  # noqa: E402
 from lfgcore import omnigraph as OG  # noqa: E402
+from lfgcore import review as R  # noqa: E402
 from lfgcore import secure as S  # noqa: E402
 from lfgcore import shipcheck as SC  # noqa: E402
 from lfgcore import settings as ST  # noqa: E402
@@ -1028,3 +1029,144 @@ class RunSummaryTest(unittest.TestCase):
         self.assertEqual(dash._blocking({"blocking": 3}), 3)
         self.assertEqual(dash._blocking({"verdict": {"overall": "don't", "blocking": ["a", "b"]}}), 2)
         self.assertEqual(dash._blocking({"findings": [{"blocking": True}, {"blocking": False}]}), 1)
+
+
+class ReviewTest(unittest.TestCase):
+    META = {"title": "Add thing", "url": "https://github.com/o/r/pull/7", "author": "dev", "head_sha": "a" * 40,
+            "base": "main", "branch": "dev/x", "state": "OPEN"}
+
+    def finding(self, **kw):
+        f = {"title": "t", "severity": "major", "file": "app.py", "line": 3, "body": "This breaks on empty input."}
+        f.update(kw)
+        return f
+
+    def setUp(self):
+        import shutil
+        shutil.rmtree(R.reviews_dir(), ignore_errors=True)
+
+    def test_parse_pr_forms(self):
+        self.assertEqual(R.parse_pr("o/r#12"), ("o/r", 12))
+        self.assertEqual(R.parse_pr("https://github.com/o/r.js/pull/5/files"), ("o/r.js", 5))
+        with self.assertRaises(R.ReviewError):
+            R.parse_pr("ATO-12")
+
+    def test_save_numbers_findings_per_pass_and_keeps_history(self):
+        R.save("o/r", 7, {"findings": [self.finding(), self.finding(line=None)]}, ticket="ATO-1", meta=self.META)
+        rec = R.save("o/r", 7, {"findings": [self.finding(since="new")], "prior": [{"id": "1.1", "state": "fixed"}]},
+                     meta=dict(self.META, head_sha="b" * 40))
+        self.assertEqual([f["id"] for f in R.findings(rec)], ["1.1", "1.2", "2.1"])
+        self.assertEqual([p["head_sha"][0] for p in rec["passes"]], ["a", "b"])
+        self.assertEqual(rec["passes"][1]["kind"], "re-review")
+        self.assertEqual(rec["ticket"], "ATO-1")
+        self.assertEqual(R.load("o/r", 7)["passes"][1]["prior"][0]["state"], "fixed")
+
+    def test_save_rejects_bad_findings(self):
+        for bad in ({"severity": "huge"}, {"body": " "}, {"line": 0}, {"origin": "someone"}, {"since": "later"}):
+            with self.assertRaises(R.ReviewError, msg=bad):
+                R.save("o/r", 8, {"findings": [self.finding(**bad)]}, meta=self.META)
+        with self.assertRaises(R.ReviewError):
+            R.save("o/r", 8, {"findings": [], "prior": [{"id": "9.9", "state": "fixed"}]}, meta=self.META)
+        self.assertIsNone(R.load("o/r", 8))
+
+    def test_post_needs_every_finding_decided(self):
+        R.save("o/r", 7, {"findings": [self.finding(), self.finding()]}, meta=self.META)
+        R.mark("o/r", 7, ["1.1"], status="keep")
+        with self.assertRaisesRegex(R.ReviewError, "1.2"):
+            R.plan_post(R.load("o/r", 7), "comment", lines={})
+
+    def test_plan_puts_lines_outside_the_diff_in_the_body(self):
+        R.save("o/r", 7, {"findings": [self.finding(), self.finding(line=99), self.finding(file=None, line=None),
+                                       self.finding()]}, meta=self.META)
+        R.mark("o/r", 7, ["1.1", "1.2", "1.3"], status="keep")
+        R.mark("o/r", 7, ["1.4"], status="drop")
+        R.mark("o/r", 7, ["1.1"], body="Edited by the reviewer.")
+        plan = R.plan_post(R.load("o/r", 7), "request-changes", body="Two things.", lines={"app.py": {1, 2, 3}})
+        self.assertEqual([(c["id"], c["body"]) for c in plan["comments"]], [("1.1", "Edited by the reviewer.")])
+        self.assertEqual(plan["in_body"], ["1.2", "1.3"])
+        self.assertTrue(plan["body"].startswith("Two things.\n\n`app.py:99`: "))
+        self.assertEqual((plan["event"], plan["commit_id"]), ("REQUEST_CHANGES", "a" * 40))
+
+    def test_posted_findings_cannot_be_dropped_or_edited(self):
+        R.save("o/r", 7, {"findings": [self.finding()]}, meta=self.META)
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["comment_id"] = 55
+        R.store(rec)
+        with self.assertRaises(R.ReviewError):
+            R.mark("o/r", 7, ["1.1"], status="drop")
+
+    def test_commentable_lines_from_a_patch(self):
+        patch = "@@ -1,3 +1,4 @@\n a\n-b\n+c\n+d\n e\n@@ -20,2 +21,2 @@\n x\n+y\n\\ No newline at end of file"
+        self.assertEqual(R.commentable(patch), {1, 2, 3, 4, 21, 22})
+
+    def test_match_comments_falls_back_to_file_and_line(self):
+        sent = [{"id": "1.1", "path": "a.py", "line": 3, "body": "x "}, {"id": "1.2", "path": "a.py", "line": 9,
+                                                                       "body": "y"}]
+        got = [{"id": 2, "path": "a.py", "line": 9, "body": "y\r\n(edited)"}, {"id": 1, "path": "a.py", "line": 3,
+                                                                              "body": "x"}]
+        self.assertEqual([(c["id"], g["id"]) for c, g in R.match_comments(sent, got)], [("1.1", 1), ("1.2", 2)])
+
+    def test_sources_default_config_and_overrides(self):
+        self.assertEqual(R.sources()["files"], [os.path.join(R.default_dir(), "method.md")])
+        own = tempfile.mkdtemp()
+        with open(os.path.join(own, "SKILL.md"), "w") as f:
+            f.write("x")
+        C.ensure_dir(R.override_dir())
+        with open(os.path.join(R.override_dir(), "voice.md"), "w") as f:
+            f.write("y")
+        C.write_json(C.lfg_path("config.json"), {"review": {"sources": [own, "/nope/x.md"]}})
+        try:
+            s = R.sources()
+            self.assertEqual([os.path.basename(p) for p in s["files"]], ["SKILL.md", "voice.md"])
+            self.assertEqual(s["missing"], ["/nope/x.md"])
+        finally:
+            os.remove(C.lfg_path("config.json"))
+            os.remove(os.path.join(R.override_dir(), "voice.md"))
+
+    def test_agents_md_root_and_folders_above_changed_files(self):
+        tree = {"tree": [{"path": p} for p in ("AGENTS.md", "web/AGENTS.md", "api/AGENTS.md", "web/ui/CLAUDE.md",
+                                               "web/ui/x.ts")]}
+        with mock.patch.object(R, "gh_json", return_value=tree):
+            self.assertEqual(R.agents_md("o/r", "a", ["web/ui/x.ts"]), ["AGENTS.md", "web/AGENTS.md",
+                                                                        "web/ui/CLAUDE.md"])
+
+    def test_guard_keeps_posting_for_the_user(self):
+        self.assertIsNotNone(bash("lfg review post 7 --event approve"))
+        self.assertIsNotNone(bash("lfg review --event approve post 7"))
+        self.assertIsNone(bash("lfg review post 7 --event approve --dry-run"))
+        self.assertIsNone(bash("lfg review mark 7 1.1 --keep"))
+
+    def test_dashboard_marks_and_refuses_bad_input(self):
+        R.save("o/r", 7, {"findings": [self.finding()]}, meta=self.META)
+        self.assertEqual(ui.save("review_mark", {"pr": "o/r#7", "ids": ["1.1"], "status": "keep"}), {})
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["findings"][0]["status"], "keep")
+        for body in ({"pr": "o/r#7", "ids": "1.1", "status": "keep"}, {"pr": "nope", "ids": ["1.1"]},
+                     {"pr": "o/r#7", "ids": ["9.9"], "status": "keep"}):
+            with self.assertRaises(ST.Invalid, msg=body):
+                ui.save("review_mark", body)
+
+    def test_local_checkout_found_by_remote_among_siblings(self):
+        parent = tempfile.mkdtemp()
+        known, other = os.path.join(parent, "known"), os.path.join(parent, "other")
+        for d, url in ((known, "git@github.com:o/known.git"), (other, "https://github.com/O/Other")):
+            subprocess.run(["git", "init", "-q", d], check=True)
+            subprocess.run(["git", "-C", d, "remote", "add", "origin", url], check=True)
+        C.write_json(C.lfg_path("graphs", "known-1", "state.json"), {"repo_root": known})
+        try:
+            self.assertEqual(R.local_checkout("o/other"), other)
+            self.assertIsNone(R.local_checkout("o/missing"))
+        finally:
+            import shutil
+            shutil.rmtree(C.lfg_path("graphs", "known-1"))
+
+    def test_progress_reads_tool_calls_and_result(self):
+        log = os.path.join(tempfile.mkdtemp(), "x.log")
+        with open(log, "w") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "gh pr diff 7"}}]}}) + "\nnoise\n")
+            f.write(json.dumps({"type": "result", "result": "saved pass 1"}) + "\n")
+        C.write_json(R.job_path("o/r", 7), {"status": "done", "log": log, "pid": None})
+        self.assertEqual(R.progress("o/r", 7)["steps"], ["Bash gh pr diff 7", "finished: saved pass 1"])
+
+    def test_dead_running_job_reads_as_failed(self):
+        C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
+        self.assertEqual(R.job("o/r", 9)["status"], "failed")

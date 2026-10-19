@@ -125,6 +125,15 @@ def api(view, q):
     if view == "skilltext":
         from . import control as K
         return K.skill_text(_arg(q, "id"), _rid(q))
+    if view in ("prreviews", "prreview"):
+        from . import review as R
+        if view == "prreviews":
+            return R.dashboard()
+        try:
+            repo, number = R.parse_pr(_arg(q, "pr"))
+            return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number}
+        except R.ReviewError as e:
+            return {"available": False, "why": str(e)}
     rid = _rid(q)
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
@@ -183,6 +192,8 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what.startswith("review_"):
+        return review_action(what, body)
     from . import control as K
     actions = {
         "repo_on": lambda: K.repo_on(body.get("root")), "repo_off": lambda: K.repo_off(body.get("root")),
@@ -196,6 +207,28 @@ def save(what, body):
         res = actions[what]()
         return res if isinstance(res, dict) else {"result": res}
     raise S.Invalid("unknown setting")
+
+
+def review_action(what, body):
+    """The Reviews page's buttons. Posting is here because a person pressed it with the edit key; the guard keeps
+    `lfg review post` away from agents."""
+    from . import review as R
+    try:
+        repo, number = R.parse_pr(str(body.get("pr") or ""))
+        if what == "review_mark":
+            ids = body.get("ids") or []
+            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                raise S.Invalid("ids must be a list of finding ids")
+            R.mark(repo, number, ids, status=body.get("status"), body=body.get("body"))
+            return {}
+        if what == "review_post":
+            return R.post(repo, number, str(body.get("event") or ""), body=str(body.get("body") or ""),
+                          dry_run=bool(body.get("dry_run")))
+        if what == "review_run":
+            return R.start(repo, number, ticket=body.get("ticket") or None)
+    except R.ReviewError as e:
+        raise S.Invalid(str(e)) from None
+    raise S.Invalid("unknown action")
 
 
 def build_graphs(rid, what):

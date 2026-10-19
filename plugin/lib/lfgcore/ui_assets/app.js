@@ -801,7 +801,7 @@ async function showSkill(name) {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["home", "Home"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["home", "Home"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1113,13 +1113,166 @@ PAGES.help = async () => {
 };
 
 // ------------------------------------------------------------------ shell
-const NAV_GROUPS = [["Your work", ["home", "runs", "issues", "checks"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
+// ------------------------------------------------------------------ PR reviews (lfg review)
+/* Reviews of other people's PRs: the queue GitHub asks you to review, each saved review, and the buttons to run a
+   review, decide each finding and post. Every button needs the edit key; posting is only ever a person's click. */
+const prRef = r => `${r.repo}#${r.number}`;
+const prHash = r => `#prs/${r.repo}/${r.number}`;
+const PRIOR = { fixed: ["Fixed", "ok"], replied: ["Answered, still open", "warn"], withdrawn: ["Withdrawn", ""],
+  "resolved-unchanged": ["Resolved but not fixed", "bad"], ignored: ["Not addressed", "bad"], open: ["Still open", "warn"] };
+const SINCE = { new: "in the new commits", missed: "missed last time" };
+const ORIGIN = { exposed: "existing bug this PR now reaches", "pre-existing": "was already there" };
+function jobLine(j) {
+  if (!j) return "";
+  if (j.status === "running") return `<span class="st">${dot("on")}Reviewing… started ${ago(j.started)}</span>`;
+  if (j.status === "failed") return `<span class="st" title="${esc(j.log || "")}">${dot("bad")}${esc(j.why || "The last review failed")}</span>`;
+  return "";
+}
+function tallyLine(r) {
+  const t = r.tally || {};
+  if (r.posted) return `<span class="st">${dot("ok")}Posted: ${esc({ APPROVE: "approved", REQUEST_CHANGES: "changes requested", COMMENT: "comments" }[r.posted.event] || r.posted.event)}</span>`;
+  if (t.pending) return `<span class="st">${dot("warn")}${plural(t.pending, "finding")} to decide</span>`;
+  return `<span class="st">${dot("on")}Ready to post</span>`;
+}
+async function prStart(pr, btn) {
+  btn.disabled = true; btn.textContent = "Starting…";
+  const d = await save("review_run", { pr });
+  if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
+  btn.textContent = d.started ? "Started" : "Already running";
+  setTimeout(route, 1500);
+}
+PAGES.prs = async arg => {
+  if (arg) return prDetail(arg);
+  const [d, unlocked] = await Promise.all([api("prreviews"), isUnlocked()]);
+  const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
+  const qcols = [
+    { k: "title", label: "Pull request", html: x => `${esc(x.title)}${x.draft ? ' <span class="tag">draft</span>' : ""}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
+    { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
+    { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
+  ];
+  const rcols = [
+    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div>` },
+    { k: "state", label: "Where it is", html: x => `${tallyLine(x)}${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}`, sort: x => (x.posted ? 2 : (x.tally || {}).pending ? 0 : 1) },
+    { k: "score", label: "Score", num: true },
+    { k: "passes", label: "Reviews", num: true },
+    { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
+  ];
+  return `${head("PR reviews", "Pull requests waiting on your review, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login.")}
+    ${lock}
+    ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
+    ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}`;
+};
+function prFinding(f, pr, unlocked, live) {
+  const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
+  const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("");
+  const posted = f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">Posted ↗</a>` : "";
+  const can = unlocked && live && !f.comment_id;
+  const btn = (status, text) => `<button class="btn small${f.status === status ? " primary" : ""}" data-pr-mark='${esc(JSON.stringify([pr, f.id, status]))}' ${can ? "" : "disabled"}>${text}</button>`;
+  return `<div class="card pr-finding ${esc(f.status)}" id="f-${esc(f.id)}"><div class="row">${st(f.severity === "nitpick" ? "nit" : f.severity)}${tags}<span class="grow"></span><span class="muted small mono">${esc(f.id)}</span></div>
+    <div class="title">${txt(f.title || f.issue)}</div>
+    ${f.issue && f.title ? `<p>${txt(f.issue)}</p>` : ""}${f.fix ? `<p><b>Fix:</b> ${txt(f.fix)}</p>` : ""}
+    <div class="muted small mono">${esc(where)}</div>
+    ${f.detail ? `<details class="more"><summary>What the review checked</summary><div class="md">${md(f.detail)}</div></details>` : ""}
+    <div class="k">Comment the author will read</div>
+    <div class="pr-body md" data-pr-body="${esc(f.id)}">${md(f.body)}</div>
+    <div class="pr-edit" data-pr-editbox="${esc(f.id)}" hidden><textarea class="editor small">${esc(f.body)}</textarea>
+      <div class="set-actions"><button class="btn small primary" data-pr-editsave='${esc(JSON.stringify([pr, f.id]))}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>
+    <div class="row mt">${posted || `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}</div></div>`;
+}
+async function prDetail(arg) {
+  const m = /^([\w.-]+\/[\w.-]+)\/(\d+)$/.exec(arg);
+  if (!m) return unavailable({ why: "Not a PR address." });
+  const pr = `${m[1]}#${m[2]}`;
+  const [d, unlocked] = await Promise.all([api("prreview", { pr }), isUnlocked()]);
+  if (d.available === false) return unavailable(d);
+  const rec = d.record, j = d.job;
+  crumbs("prs", pr);
+  const running = j && j.status === "running";
+  if (running) setTimeout(() => { if (location.hash === `#prs/${arg}`) route(); }, 5000);
+  const back = '<a class="back" href="#prs">← All reviews</a>';
+  const jobBox = j && j.status !== "done" ? `<div class="callout ${running ? "" : "bad"}">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}</div>` : "";
+  const startBtn = `<button class="btn" data-pr-start="${esc(pr)}" ${unlocked && !running ? "" : "disabled"}>${rec ? "Re-review" : "Review"}</button>`;
+  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${jobBox}<div class="row">${startBtn}</div>`;
+  const last = rec.passes[rec.passes.length - 1];
+  const live = !last.posted;
+  const byId = Object.fromEntries(rec.passes.flatMap(p => p.findings).map(f => [f.id, f]));
+  const prior = (last.prior || []).length ? section("Earlier comments", `<div class="box items">${last.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
+  const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
+  const fs = [...last.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
+  const pending = last.findings.filter(f => f.status === "pending").length;
+  const kept = last.findings.filter(f => f.status === "keep").length;
+  const postBar = live ? `<div class="panel"><div class="k" style="margin-top:0">Post to GitHub</div>
+      <textarea class="editor small" id="pr-post-body" placeholder="Optional: a note above the comments"></textarea>
+      <div class="row mt">${[["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]].map(([e, l]) => `<button class="btn${e === "request-changes" ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
+      <span class="muted small">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}</span></div></div>`
+    : `<div class="callout ok">${dot("ok")}Posted ${ago(last.posted.ts)}. <a href="${esc(last.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a> Re-review once the author has pushed changes.</div>`;
+  const earlier = rec.passes.length > 1 ? section("Earlier reviews", rec.passes.slice(0, -1).reverse().map(p => `<details class="more"><summary>Review ${p.n}, ${ago(p.ts)}${p.score != null ? `, score ${p.score}` : ""}${p.posted ? ", posted" : ""}</summary>${p.summary ? `<p>${txt(p.summary)}</p>` : ""}${p.findings.map(f => prFinding(f, pr, false, false)).join("")}</details>`).join("")) : "";
+  return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
+    ${jobBox}
+    <div class="panel"><div class="row"><b>Review ${last.n}${last.kind === "re-review" ? " (re-review)" : ""}</b><span class="muted">${ago(last.ts)} · at commit <span class="mono">${esc(last.head_sha.slice(0, 8))}</span>${last.score != null ? ` · score ${esc(last.score)}` : ""}</span><span class="grow"></span>${startBtn}</div>
+      ${last.summary ? `<p>${txt(last.summary)}</p>` : ""}
+      ${(last.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${last.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}</div>
+    ${prior}
+    ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `${plural(last.findings.length, "finding")} · ${kept} kept · ${pending} to decide`)}
+    ${postBar}
+    ${earlier}`;
+}
+function wirePrs(root) {
+  $$("[data-pr-start]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prStart(b.dataset.prStart, b); });
+  $$("[data-pr-mark]", root).forEach(b => b.onclick = async () => {
+    const [pr, id, status] = JSON.parse(b.dataset.prMark);
+    b.disabled = true;
+    const d = await save("review_mark", { pr, ids: [id], status });
+    if (!d.ok) { b.disabled = false; b.title = d.why || ""; alertMsg(b, d); return; }
+    route();
+  });
+  $$("[data-pr-edit]", root).forEach(b => b.onclick = () => {
+    $(`[data-pr-editbox="${b.dataset.prEdit}"]`, root).hidden = false;
+    $(`[data-pr-body="${b.dataset.prEdit}"]`, root).hidden = true;
+  });
+  $$("[data-pr-editcancel]", root).forEach(b => b.onclick = () => {
+    $(`[data-pr-editbox="${b.dataset.prEditcancel}"]`, root).hidden = true;
+    $(`[data-pr-body="${b.dataset.prEditcancel}"]`, root).hidden = false;
+  });
+  $$("[data-pr-editsave]", root).forEach(b => b.onclick = async () => {
+    const [pr, id] = JSON.parse(b.dataset.prEditsave), box = b.closest(".pr-edit");
+    const d = await save("review_mark", { pr, ids: [id], body: $("textarea", box).value });
+    if (!d.ok) return saidMsg($(".save-msg", box), d);
+    route();
+  });
+  $$("[data-pr-preview]", root).forEach(b => b.onclick = async () => {
+    const [pr, event] = JSON.parse(b.dataset.prPreview), body = ($("#pr-post-body") || {}).value || "";
+    const d = await save("review_post", { pr, event, body, dry_run: true });
+    if (!d.ok) return alertMsg(b, d);
+    const verb = { APPROVE: "Approve", REQUEST_CHANGES: "Request changes", COMMENT: "Comment" }[d.event];
+    openDrawer(`${verb}: what will be posted`, `<div class="readable">
+      <p>${plural(d.comments.length, "comment")} on lines of code${d.in_body.length ? `, and ${plural(d.in_body.length, "finding")} in the review text because GitHub can't attach ${d.in_body.length === 1 ? "it" : "them"} to a changed line` : ""}.</p>
+      ${d.body ? `<div class="k">Review text</div><div class="box pad md">${md(d.body)}</div>` : ""}
+      ${d.comments.map(c => `<div class="card"><div class="muted small mono">${esc(c.path)}:${esc(c.line)}</div><div class="md">${md(c.body)}</div></div>`).join("")}
+      <div class="set-actions"><button class="btn primary" id="pr-post-go">${verb} on GitHub</button><span class="save-msg" id="pr-post-msg"></span></div></div>`);
+    $("#pr-post-go").onclick = async () => {
+      const go = $("#pr-post-go");
+      go.disabled = true; go.textContent = "Posting…";
+      const r = await save("review_post", { pr, event: event, body });
+      saidMsg($("#pr-post-msg"), r, "Posted.");
+      if (r.ok) { go.textContent = "Posted"; setTimeout(() => { closeDrawer(); route(); }, 900); } else { go.disabled = false; go.textContent = "Try again"; }
+    };
+  });
+}
+function alertMsg(el, d) {
+  let m = el.parentNode.querySelector(".save-msg");
+  if (!m) { m = document.createElement("span"); m.className = "save-msg"; el.parentNode.appendChild(m); }
+  saidMsg(m, d);
+}
+
+const NAV_GROUPS = [["Your work", ["home", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
   runs: "M5 4l14 8-14 8z",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
+  prs: "M6 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 7v10M6 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17V9a3 3 0 0 0-3-3h-4M13 3.5 10.5 6 13 8.5",
   code: "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
   knowledge: "M4 5.5C6.5 4 9.5 4 12 6c2.5-2 5.5-2 8-.5V19c-2.5-1.5-5.5-1.5-8 .5-2.5-2-5.5-2-8-.5zM12 6v13.5",
@@ -1192,6 +1345,7 @@ async function route() {
   mountTables(view); mountTabs(view); wire(view);
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
+  if (key === "prs") wirePrs(view);
   if (!arg) window.scrollTo(0, 0);
 }
 function wireDocs() {

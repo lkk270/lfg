@@ -587,6 +587,10 @@ def _lfg(argv):
             or (sub == "changes" and rest[:1] == ["undo"]) or (sub == "headroom" and rest[:1] in (["setup"], ["off"])) \
             or (sub == "claudemd" and rest[:1] == ["remove-legacy"]):
         raise Block("13", "`lfg %s` changes your setup; run it yourself (or use lfg ui)" % " ".join(args[:2]))
+    if sub == "review" and "post" in rest and "--dry-run" not in argv:
+        raise Block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
+    if sub == "review" and "run" in rest:
+        raise Block("13", "`lfg review run` starts another Claude Code session on your usage; start it yourself")
 
 
 def _strix(argv):
@@ -732,6 +736,11 @@ SELFTEST = [
     ("Bash", {"command": "lfg uninstall --yes"}, True),
     ("Bash", {"command": "cd x && lfg enable --everywhere"}, True),
     ("Bash", {"command": "lfg disable"}, True),
+    ("Bash", {"command": "lfg review post 12 --event approve"}, True),
+    ("Bash", {"command": "lfg review --event approve post 12"}, True),
+    ("Bash", {"command": "lfg review post 12 --event comment --dry-run"}, False),
+    ("Bash", {"command": "lfg review mark 12 1.1 --drop"}, False),
+    ("Bash", {"command": "lfg review run 12"}, True),
     ("Bash", {"command": "lfg changes undo 3"}, True),
     ("Bash", {"command": "lfg headroom setup --scope everywhere"}, True),
     ("Bash", {"command": "~/.local/bin/lfg add pentest -y"}, True),

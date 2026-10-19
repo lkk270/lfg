@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
     "linear": {"team": "", "workspace": ""},
     "headroom": {"port": 8787, "mode": "token", "scope": "off"},
     "guard": {"hardened": False, "allow_commit": False},
+    "review": {"sources": []},
     "omnigraph": {
         "cookbooks_repo": "https://github.com/ModernRelay/omnigraph-cookbooks.git",
         "cookbooks_ref": "f797c6841c264d6b135aa1523e7c3fc023bbf3cd",

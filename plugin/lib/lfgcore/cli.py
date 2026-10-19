@@ -629,6 +629,85 @@ def cmd_feedback(a):
     return 0
 
 
+def cmd_review(a):
+    from . import review as R
+    try:
+        return _review(R, a)
+    except R.ReviewError as e:
+        C.die(str(e), 1)
+
+
+def _review(R, a):
+    if a.action == "list":
+        recs = [r for r in R.all_records() if not a.ticket or r.get("ticket") == a.ticket]
+        rows = [{"pr": "%s#%d" % (r["repo"], r["number"]), "title": r.get("title"), "author": r.get("author"),
+                 "ticket": r.get("ticket"), "passes": len(r["passes"]), "score": r["passes"][-1].get("score"),
+                 "posted": bool(r["passes"][-1].get("posted")), "updated": r.get("updated")} for r in recs]
+        C.emit(rows, a.json, lambda rs: [print("%-40s pass %d  %-8s %s" % (x["pr"], x["passes"], "posted" if
+                                                x["posted"] else "draft", x["title"] or "")) for x in rs]
+               or (None if rs else print("no reviews saved")))
+        return 0
+    if not a.pr:
+        C.die("usage: lfg review %s <pr>" % a.action, 2)
+    repo, number = R.parse_pr(a.pr)
+    if a.action == "context":
+        _print(R.context(repo, number))
+    elif a.action == "save":
+        raw = C.read_text(a.file) if a.file else sys.stdin.read()
+        try:
+            data = json.loads(raw)
+        except ValueError as e:
+            C.die("findings are not valid JSON: %s" % e, 2)
+        if isinstance(data, dict) and not data.get("reviewer"):
+            data["reviewer"] = R.me()
+        rec = R.save(repo, number, data, ticket=a.ticket)
+        p = rec["passes"][-1]
+        print("saved pass %d of %s#%d: %d findings (%s) -> %s" % (
+            p["n"], repo, number, len(p["findings"]), ", ".join(f["id"] for f in p["findings"]) or "none",
+            R.record_path(repo, number)))
+    elif a.action == "show":
+        rec = R.need(repo, number)
+        C.emit(rec, a.json, _review_human)
+    elif a.action == "mark":
+        if not a.ids or (a.status is None and a.body is None and a.body_file is None):
+            C.die("usage: lfg review mark <pr> <id>... [--keep|--drop|--pending] [--body TEXT|--body-file F]", 2)
+        body = C.read_text(a.body_file) if a.body_file else a.body
+        R.mark(repo, number, a.ids, status=a.status, body=body)
+        print("%s: %s" % (", ".join(a.ids), a.status or "comment updated"))
+    elif a.action == "post":
+        if not a.event:
+            C.die("usage: lfg review post <pr> --event approve|request-changes|comment [--body TEXT] [--dry-run]", 2)
+        out = R.post(repo, number, a.event, body=a.body or "", dry_run=a.dry_run)
+        if a.json or a.dry_run:
+            _print(out)
+        else:
+            print("posted %s with %d inline comments: %s" % (out["event"], len(out["comments"]), out["posted"]["url"]))
+    elif a.action == "threads":
+        _print(R.threads(repo, number))
+    elif a.action == "run":
+        j = R.run(repo, number, ticket=a.ticket)
+        print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
+                                                  j["log"]))
+        return 0 if j["status"] == "done" else 1
+    return 0
+
+
+def _review_human(rec):
+    print("%s#%d  %s  (by %s)%s" % (rec["repo"], rec["number"], rec.get("title", ""), rec.get("author", ""),
+                                    "  ticket " + rec["ticket"] if rec.get("ticket") else ""))
+    for p in rec["passes"]:
+        print("\npass %d (%s) at %s, %s%s" % (p["n"], p["kind"], p["head_sha"][:8],
+                                            "score %s" % p["score"] if p.get("score") is not None else "no score",
+                                            ", posted " + p["posted"]["event"] if p.get("posted") else ""))
+        if p.get("summary"):
+            print("  " + p["summary"].replace("\n", "\n  "))
+        for x in p.get("prior") or []:
+            print("  earlier %-5s %-18s %s" % (x["id"], x["state"], x["note"]))
+        for f in p["findings"]:
+            where = "%s:%s" % (f["file"], f["line"] or "") if f["file"] else "(general)"
+            print("  %-5s %-7s %-8s %s  %s" % (f["id"], f["status"], f["severity"], f["title"], where))
+
+
 def cmd_usage(a):
     p = C.lfg_path("usage.db")
     rows = []
@@ -845,6 +924,20 @@ def main(argv=None):
     fb.add_argument("finding")
     fb.add_argument("verdict", choices=["accept", "reject"])
     fb.add_argument("--note")
+    rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
+    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "run"])
+    rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
+    rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")
+    st = rv.add_mutually_exclusive_group()
+    for s_ in ("keep", "drop", "pending"):
+        st.add_argument("--" + s_, dest="status", action="store_const", const=s_)
+    rv.add_argument("--body", help="mark: new comment text; post: text above the inline comments")
+    rv.add_argument("--body-file")
+    rv.add_argument("--file", help="save: findings JSON (default: stdin)")
+    rv.add_argument("--ticket", help="save/run: the Linear ticket the PR belongs to; list: only that ticket")
+    rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
+    rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
+    rv.add_argument("--json", action="store_true")
     us = sp.add_parser("usage")
     us.add_argument("--json", action="store_true")
     ve = sp.add_parser("vendor")
@@ -901,6 +994,6 @@ def main(argv=None):
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
             "usage": cmd_usage, "vendor": cmd_vendor, "omnigraph": cmd_omnigraph, "headroom": cmd_headroom,
-            "playbooks": cmd_playbooks, "issue": cmd_issue, "worktree": cmd_worktree, "setup": cmd_setup,
-            "enable": cmd_enable, "disable": cmd_disable, "packs": cmd_packs, "changes": cmd_changes,
-            "uninstall": cmd_uninstall}[a.cmd](a)
+            "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue,
+            "worktree": cmd_worktree, "setup": cmd_setup, "enable": cmd_enable, "disable": cmd_disable,
+            "packs": cmd_packs, "changes": cmd_changes, "uninstall": cmd_uninstall}[a.cmd](a)
