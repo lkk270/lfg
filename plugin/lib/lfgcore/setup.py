@@ -541,8 +541,9 @@ def _marketplace_known():
     return "lfg" in d
 
 
-def plan(packs=("core",), here=None, everywhere=False, legacy=True):
-    """The steps `apply` would run, each with what it changes. Read-only."""
+def plan(packs=("core",), here=None, everywhere=False, legacy=False):
+    """The steps `apply` would run, each with what it changes. Read-only. Cleaning up an older install is opt-in
+    (`legacy`, `lfg setup --migrate`): what it removes may be setup you chose to keep."""
     steps = []
     if _install_files_needed() or not os.path.isdir(C.lfg_path("plugin")):
         steps.append({"id": "files", "title": "Install LFG %s into %s" % (C.VERSION, C.LFG_HOME),

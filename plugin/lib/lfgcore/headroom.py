@@ -72,7 +72,13 @@ def valid_upstream(url):
 
 
 def scope():
+    """Where Claude Code goes through Headroom. Read from ~/.claude/settings.json as well as config.json, so routing
+    LFG didn't record (an older install, or set by hand) shows as "everywhere" rather than "off"."""
     sc = cfg().get("scope") or "off"
+    if sc == "off":
+        env = (C.read_json(_settings_path(), {}) or {}).get("env") or {}
+        if isinstance(env, dict) and str(env.get("ANTHROPIC_BASE_URL") or "").rstrip("/") == local_url():
+            return "everywhere"
     return sc if sc in SCOPES else "off"
 
 

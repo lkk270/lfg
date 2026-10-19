@@ -239,7 +239,7 @@ class SetupFlowTest(Sandbox):
         def no_launchctl(cmd, *a, **kw):  # never touch this machine's real login agents
             return subprocess.CompletedProcess(cmd, 0, "", "") if cmd[0] == "launchctl" else real_run(cmd, *a, **kw)
         with mock.patch.object(C, "run", side_effect=no_launchctl):
-            self.assertTrue(self.quiet(SU.apply, SU.plan(["core"]))["ok"])
+            self.assertTrue(self.quiet(SU.apply, SU.plan(["core"], legacy=True))["ok"])
         s = self.settings()
         self.assertEqual(s["permissions"]["deny"], ["Read(./mine)"])
         self.assertEqual(s["enabledPlugins"], {"other@x": True})
@@ -247,6 +247,15 @@ class SetupFlowTest(Sandbox):
         self.assertEqual(list(C.read_json(os.path.join(self.home, ".claude.json"))["mcpServers"]), ["mine"])
         self.assertTrue(C.is_enabled(self.repo))
         self.assertEqual(SU.legacy_items(), [])
+
+    def test_plain_setup_leaves_an_older_install_alone(self):
+        from lfgcore import headroom as HR
+        self.settings({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        self.assertIn("headroom-everywhere", {i["id"] for i in SU.legacy_items()})
+        self.assertEqual([s for s in SU.plan(["core"]) if s["where"] == "migrate"], [])
+        self.assertEqual(HR.scope(), "everywhere")  # routing set outside LFG's ledger still shows as on
+        self.settings({})
+        self.assertEqual(HR.scope(), "off")
 
     def test_hooks_do_nothing_where_lfg_is_off(self):
         data = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}, "cwd": self.repo})

@@ -83,7 +83,7 @@ def doctor(selftest=False):
     row("plugin hooks", os.path.exists(os.path.join(plugin_dir(), "hooks", "hooks.json")), plugin_dir())
     legacy = SU.legacy_items()
     row("no machine-wide leftovers from older LFG", not legacy,
-        "" if not legacy else "%d found - run `lfg setup` to clean up: %s" % (
+        "" if not legacy else "%d found - `lfg setup --migrate` would undo: %s" % (
             len(legacy), "; ".join(i["title"] for i in legacy)), False)
     row("change ledger", True, "%d change(s) outside ~/.lfg, all undoable (`lfg changes`)" % len(CC.entries()))
     for line in rows:
@@ -117,7 +117,7 @@ def cmd_setup(a):
         C.die("unknown pack(s): %s (choose from %s)" % (", ".join(unknown), ", ".join(SU.PACKS)), 2)
     here = os.getcwd() if a.here else None
     sc = SU.scan()
-    steps = SU.plan(packs, here=here, everywhere=a.everywhere, legacy=not a.no_migrate)
+    steps = SU.plan(packs, here=here, everywhere=a.everywhere, legacy=a.migrate)
     if a.json and a.dry_run:
         _print({"scan": sc, "plan": steps})
         return 0
@@ -822,7 +822,9 @@ def main(argv=None):
     su.add_argument("--packs", help="comma list of extra packs: security,shipcheck,pentest,knowledge,linear,headroom")
     su.add_argument("--here", action="store_true", help="also turn LFG on in the current repo")
     su.add_argument("--everywhere", action="store_true", help="turn LFG on in every repo (not recommended)")
-    su.add_argument("--no-migrate", action="store_true", help="don't offer to clean up an older LFG install")
+    su.add_argument("--migrate", action="store_true",
+                    help="also undo what an older LFG changed machine-wide (CLAUDE.md block, MCP servers, Headroom)")
+    su.add_argument("--no-migrate", action="store_true", help=argparse.SUPPRESS)  # now the default
     su.add_argument("--dry-run", action="store_true", help="only show the plan")
     su.add_argument("--yes", "-y", action="store_true", help="apply without asking")
     su.add_argument("--json", action="store_true")

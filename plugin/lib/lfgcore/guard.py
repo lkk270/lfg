@@ -750,9 +750,15 @@ SELFTEST = [
 
 
 def selftest():
+    """The default rules, so it also passes on a machine with guard.allow_commit on."""
+    global _commit_allowed
+    real, _commit_allowed = _commit_allowed, lambda: False
     failures = []
-    for tool, ti, want in SELFTEST:
-        got = check(tool, ti) is not None
-        if got != want:
-            failures.append((tool, ti, want))
+    try:
+        for tool, ti, want in SELFTEST:
+            got = check(tool, ti) is not None
+            if got != want:
+                failures.append((tool, ti, want))
+    finally:
+        _commit_allowed = real
     return failures

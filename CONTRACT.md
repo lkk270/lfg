@@ -59,13 +59,13 @@ Only through `claudecfg.py` (backup, compare-and-swap, ledger entry), only after
 | user-scope MCP `linear` (only if you have none) | Linear pack | `claude mcp remove` |
 | `claude plugin install lfg@lfg --scope user` | `lfg enable --everywhere` | `uninstall --scope user` |
 
-Revert restores a value only while it still equals what LFG wrote. Homebrew/uv installs are listed (`state/packs.json`), never removed. Older versions' machine-wide changes (global deny rules, the `~/.claude/CLAUDE.md` block, user-scope MCP servers, global Headroom routing, the plugin on everywhere) are detected exactly by `setup.legacy_items()` and offered for clean-up by `lfg setup`, the dashboard and `lfg uninstall`.
+Revert restores a value only while it still equals what LFG wrote. Homebrew/uv installs are listed (`state/packs.json`), never removed. Older versions' machine-wide changes (global deny rules, the `~/.claude/CLAUDE.md` block, user-scope MCP servers, global Headroom routing, the plugin on everywhere) are detected exactly by `setup.legacy_items()` and offered for clean-up by `lfg setup --migrate`, the dashboard and `lfg uninstall`.
 
 ## CLI (`lfg <command>`). Every command: exit 0 = ok, 1 = failed check, 2 = usage/env error. `--json` where noted.
 
 | Command | Does |
 |---|---|
-| `lfg setup [--packs a,b] [--here] [--everywhere] [--no-migrate] [--dry-run] [--yes] [--json]` | Install or update: read-only scan → plan → apply after a yes; a failed step rolls back this run's changes. `install.sh` runs it |
+| `lfg setup [--packs a,b] [--here] [--everywhere] [--migrate] [--dry-run] [--yes] [--json]` | Install or update: read-only scan → plan → apply after a yes; a failed step rolls back this run's changes. `install.sh` runs it |
 | `lfg enable [path] [--hardened] [--everywhere]` / `lfg disable [path] [--everywhere]` | LFG on/off for one repo (or machine-wide); `disable` undoes exactly what `enable` changed, keeps graphs and runs |
 | `lfg packs [list\|add\|remove] [<name>] [--yes] [--no-scripts]`, `lfg add <pack>`, `lfg remove <pack>` | Optional packs: security, shipcheck, pentest, knowledge, linear, headroom. Core is always on |
 | `lfg changes [list\|undo <id>] [--json]` | The change ledger; `undo` reverts one entry if it is still LFG's |
