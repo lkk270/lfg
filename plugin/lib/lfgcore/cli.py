@@ -689,6 +689,18 @@ def _review(R, a):
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
                                                   j["log"]))
         return 0 if j["status"] == "done" else 1
+    elif a.action == "sessions":
+        rows = R.sessions_for(repo, number)
+        C.emit(rows, a.json, lambda rs: [print("%s  %s  %-50s %s" % (x["modified"][:16], "json" if x["has_json"]
+                                                else "    ", x["title"][:50], x["path"])) for x in rs]
+               or (None if rs else print("no sessions in the last 30 days mention %s#%d" % (repo, number))))
+    elif a.action == "import":
+        if not a.file:
+            C.die("usage: lfg review import <pr> --file <session .jsonl or review .log>  (`lfg review sessions <pr>` "
+                  "lists them)", 2)
+        rec = R.import_session(repo, number, os.path.expanduser(a.file), ticket=a.ticket)
+        p = rec["passes"][-1]
+        print("imported pass %d of %s#%d: %d findings" % (p["n"], repo, number, len(p["findings"])))
     return 0
 
 
@@ -927,7 +939,8 @@ def main(argv=None):
     fb.add_argument("verdict", choices=["accept", "reject"])
     fb.add_argument("--note")
     rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
-    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "run"])
+    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "run", "sessions",
+                                       "import"])
     rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
     rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")
     st = rv.add_mutually_exclusive_group()
@@ -935,7 +948,7 @@ def main(argv=None):
         st.add_argument("--" + s_, dest="status", action="store_const", const=s_)
     rv.add_argument("--body", help="mark: new comment text; post: text above the inline comments")
     rv.add_argument("--body-file")
-    rv.add_argument("--file", help="save: findings JSON (default: stdin)")
+    rv.add_argument("--file", help="save: findings JSON (default: stdin); import: the session or log to import")
     rv.add_argument("--ticket", help="save/run: the Linear ticket the PR belongs to; list: only that ticket")
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")

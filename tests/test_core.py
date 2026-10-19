@@ -1044,6 +1044,36 @@ class ReviewTest(unittest.TestCase):
         import shutil
         shutil.rmtree(R.reviews_dir(), ignore_errors=True)
 
+    def test_finds_the_review_json_however_the_session_left_it(self):
+        j = {"summary": "ok", "findings": [self.finding()]}
+        fence = "Done.\n\n```json\n%s\n```" % json.dumps(j)
+        heredoc = "lfg review save 7 --ticket X <<'EOF'\n%s\nEOF" % json.dumps(j)
+        for text in (fence, heredoc, json.dumps(j)):
+            self.assertEqual(R.find_review_json(text)["summary"], "ok")
+        self.assertIsNone(R.find_review_json('no review here {"a": 1}'))
+
+    def test_a_blocked_save_is_rescued_from_the_run_log(self):
+        j = {"summary": "s", "score": 90, "findings": [self.finding()]}
+        log = os.path.join(self.tmp_dir(), "run.log")
+        events = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {
+            "command": "lfg review save 7 <<'EOF'\n%s\nEOF" % json.dumps(j)}}]}},
+                  {"type": "result", "result": "the save was blocked"}]
+        with open(log, "w") as f:
+            f.write("\n".join(json.dumps(e) for e in events))
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"):
+            self.assertEqual(R._save_from_log("o/r", 7, log, None), "")
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["score"], 90)
+
+    def test_import_only_reads_sessions_and_review_logs(self):
+        with self.assertRaises(R.ReviewError):
+            R.import_session("o/r", 7, "/etc/hosts")
+
+    def tmp_dir(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        return d
+
     def test_parse_pr_forms(self):
         self.assertEqual(R.parse_pr("o/r#12"), ("o/r", 12))
         self.assertEqual(R.parse_pr("https://github.com/o/r.js/pull/5/files"), ("o/r.js", 5))

@@ -128,7 +128,7 @@ def api(view, q):
     if view in ("prreviews", "prreview"):
         from . import review as R
         if view == "prreviews":
-            return R.dashboard()
+            return R.dashboard(fresh=_arg(q, "fresh") == "1")
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number}
@@ -226,6 +226,14 @@ def review_action(what, body):
                           dry_run=bool(body.get("dry_run")))
         if what == "review_run":
             return R.start(repo, number, ticket=body.get("ticket") or None)
+        if what == "review_sessions":
+            return {"sessions": R.sessions_for(repo, number)}
+        if what == "review_import":
+            path = str(body.get("path") or "")
+            if path == "log":
+                path = (R.job(repo, number) or {}).get("log") or ""
+            rec = R.import_session(repo, number, path, ticket=body.get("ticket") or None)
+            return {"findings": len(rec["passes"][-1]["findings"])}
     except R.ReviewError as e:
         raise S.Invalid(str(e)) from None
     raise S.Invalid("unknown action")

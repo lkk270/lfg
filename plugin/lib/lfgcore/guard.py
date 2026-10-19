@@ -589,8 +589,9 @@ def _lfg(argv):
         raise Block("13", "`lfg %s` changes your setup; run it yourself (or use lfg ui)" % " ".join(args[:2]))
     if sub == "review" and "post" in rest and "--dry-run" not in argv:
         raise Block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
-    if sub == "review" and "run" in rest:
-        raise Block("13", "`lfg review run` starts another Claude Code session on your usage; start it yourself")
+    if sub == "review" and ("run" in rest or "import" in rest):
+        raise Block("13", "`lfg review %s` can start another Claude Code session on your usage; start it yourself"
+                    % ("run" if "run" in rest else "import"))
 
 
 def _strix(argv):

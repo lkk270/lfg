@@ -36,7 +36,7 @@ const state = { repo: localStorage.getItem("lfg.repo") || "", branch: "", repos:
 const branchPref = () => "lfg.branch." + state.repo;
 
 async function api(view, params = {}) {
-  const q = new URLSearchParams({ repo: state.repo, ...(state.branch ? { branch: state.branch } : {}), ...params });
+  const q = new URLSearchParams({ repo: state.repo, ...(state.branch ? { branch: state.branch } : {}), ...(state.fresh ? { fresh: "1" } : {}), ...params });
   const r = await fetch(`/api/${view}?${q}`, { headers: { "X-LFG": "1" } });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
@@ -1125,7 +1125,7 @@ const ORIGIN = { exposed: "existing bug this PR now reaches", "pre-existing": "w
 function jobLine(j) {
   if (!j) return "";
   if (j.status === "running") return `<span class="st">${dot("on")}Reviewing… started ${ago(j.started)}</span>`;
-  if (j.status === "failed") return `<span class="st" title="${esc(j.log || "")}">${dot("bad")}${esc(j.why || "The last review failed")}</span>`;
+  if (j.status === "failed") return `<span class="st" title="${esc(j.log || "")}">${dot("bad")}${esc(j.why || "The last review failed")}</span> <button class="btn small" data-pr-import='${esc(JSON.stringify([`${j.repo}#${j.number}`, "log"]))}' title="Look in that run's log for a review and save it">Save from log</button>`;
   return "";
 }
 function tallyLine(r) {
@@ -1148,7 +1148,7 @@ PAGES.prs = async arg => {
   const qcols = [
     { k: "title", label: "Pull request", html: x => `${esc(x.title)}${x.draft ? ' <span class="tag">draft</span>' : ""}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
-    { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
+    { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button> <button class="btn small" data-pr-sessions="${esc(prRef(x))}" ${unlocked ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
   ];
   const rcols = [
     { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div>` },
@@ -1191,7 +1191,7 @@ async function prDetail(arg) {
   if (running) setTimeout(() => { if (location.hash === `#prs/${arg}`) route(); }, 5000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const jobBox = j && j.status !== "done" ? `<div class="callout ${running ? "" : "bad"}">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}</div>` : "";
-  const startBtn = `<button class="btn" data-pr-start="${esc(pr)}" ${unlocked && !running ? "" : "disabled"}>${rec ? "Re-review" : "Review"}</button>`;
+  const startBtn = `<button class="btn" data-pr-start="${esc(pr)}" ${unlocked && !running ? "" : "disabled"}>${rec ? "Re-review" : "Review"}</button> <button class="btn" data-pr-sessions="${esc(pr)}" ${unlocked && !running ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>`;
   if (!rec) return `${head(pr, "Not reviewed yet.", back)}${jobBox}<div class="row">${startBtn}</div>`;
   const last = rec.passes[rec.passes.length - 1];
   const live = !last.posted;
@@ -1217,8 +1217,26 @@ async function prDetail(arg) {
     ${postBar}
     ${earlier}`;
 }
+async function prImport(pr, path, btn) {
+  btn.disabled = true; btn.textContent = path === "log" ? "Saving…" : "Importing…";
+  const d = await save("review_import", { pr, path });
+  if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; alertMsg(btn, d); return; }
+  btn.textContent = `Saved ${plural(d.findings, "finding")}`;
+  setTimeout(() => { closeDrawer(); location.hash = `#prs/${pr.replace("#", "/")}`; route(); }, 900);
+}
+async function prSessions(pr) {
+  openDrawer(`Import a review of ${pr}`, '<div class="skeleton"></div>');
+  const d = await save("review_sessions", { pr });
+  const ss = (d.ok && d.sessions) || [];
+  const rows = ss.map(s => `<li><div class="grow"><div class="title">${esc(s.title)}</div><div class="meta">${ago(s.modified)} · ${esc(s.cwd || "")}${s.has_json ? " · review ready to import" : " · Claude turns the review into findings (one short call)"}</div></div><button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, s.path]))}'>Import</button></li>`).join("");
+  openDrawer(`Import a review of ${pr}`, `<div class="readable"><p>Your Claude Code sessions from the last 30 days that mention this PR, newest first. Importing adds it as a new review you can keep, drop and post like any other.</p>
+    ${!d.ok ? unavailable(d) : ss.length ? `<ul class="items box">${rows}</ul>` : empty("No sessions found", "None of your sessions in the last 30 days mention this PR.")}</div>`);
+  $$("[data-pr-importpath]").forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
+}
 function wirePrs(root) {
   $$("[data-pr-start]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prStart(b.dataset.prStart, b); });
+  $$("[data-pr-sessions]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prSessions(b.dataset.prSessions); });
+  $$("[data-pr-import]", root).forEach(b => b.onclick = e => { e.stopPropagation(); const [pr, path] = JSON.parse(b.dataset.prImport); prImport(pr, path, b); });
   $$("[data-pr-mark]", root).forEach(b => b.onclick = async () => {
     const [pr, id, status] = JSON.parse(b.dataset.prMark);
     b.disabled = true;
@@ -1346,6 +1364,8 @@ async function route() {
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
   if (key === "prs") wirePrs(view);
+  const rf = $("#refreshed");
+  if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (!arg) window.scrollTo(0, 0);
 }
 function wireDocs() {
@@ -1379,6 +1399,7 @@ async function init() {
   if (!state.repos.some(x => x.id === state.repo)) state.repo = state.repos[0] ? state.repos[0].id : "";
   $("#repo").innerHTML = state.repos.map(x => `<option value="${esc(x.id)}" title="${esc(x.root || x.id)}" ${x.id === state.repo ? "selected" : ""}>${esc(x.name || x.id)}</option>`).join("") || "<option>no projects yet</option>";
   $("#repo").onchange = async () => { state.repo = $("#repo").value; localStorage.setItem("lfg.repo", state.repo); await loadBranches(); refresh(); };
+  $("#refresh").onclick = refresh;
   $("#branch").onchange = () => { state.branch = $("#branch").value; localStorage.setItem(branchPref(), state.branch); refresh(); };
   window.onhashchange = route;
   await loadBranches();
@@ -1400,5 +1421,14 @@ async function loadBranches() {
   sel.hidden = !B.branches.length && !B.unrecorded;
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
-function refresh() { state.cache = {}; mapStatus(); route(); }
+function refresh() { state.cache = {}; state.fresh = true; mapStatus(); route().finally(() => { state.fresh = false; }); }
+/* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
+   drawer is open, so nothing you're in the middle of is thrown away. */
+const AUTO_REFRESH = ["home", "prs", "checks", "runs", "issues"];
+setInterval(() => {
+  const page = (location.hash.slice(1) || "home").split("/")[0];
+  const busy = document.hidden || document.querySelector("#drawer:not([hidden])") ||
+    ["TEXTAREA", "INPUT", "SELECT"].includes((document.activeElement || {}).tagName);
+  if (AUTO_REFRESH.includes(page) && !busy) refresh();
+}, 10 * 60 * 1000);
 init();

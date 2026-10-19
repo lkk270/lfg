@@ -9,6 +9,7 @@ import glob
 import json
 import os
 import re
+import time
 
 from . import common as C
 
@@ -525,9 +526,10 @@ def run(repo, number, ticket=None):
     C.write_json(job_path(repo, number), j)
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     prompt = ("Read %s and follow it to review %s#%d%s. You are running unattended from the LFG dashboard: nobody "
-              "can answer questions, so do every step through `lfg review save` and stop there. Put anything you "
-              "would have asked in the summary. You can't write files: pass the findings JSON to `lfg review save` "
-              "on stdin with a heredoc. Skip the steps after saving (showing the table, triage, the post command)."
+              "can answer questions, so put anything you would have asked in the summary. Run each shell command on "
+              "its own, never chained with ; or &&. Don't run `lfg review save` and don't write files: end your last "
+              "message with the Output JSON in one ```json block, and LFG saves it. Skip the steps after saving "
+              "(showing the table, triage, the post command)."
               % (skill, repo, number, " (Linear ticket %s)" % ticket if ticket else ""))
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
            "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)]
@@ -536,12 +538,164 @@ def run(repo, number, ticket=None):
         # this code's own `lfg` first on PATH, so the session saves with the same version that started it
         env = dict(os.environ, PATH=os.path.join(C.PLUGIN_ROOT, "bin") + os.pathsep + os.environ.get("PATH", ""))
         cp = subprocess.run(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    why = ""
+    if len((load(repo, number) or {}).get("passes") or []) == before:
+        why = _save_from_log(repo, number, log, ticket)
     after = len((load(repo, number) or {}).get("passes") or [])
     j.update(status="done" if after > before else "failed", exit=cp.returncode, ended=C.now_iso(),
-             why="" if after > before else "Claude finished without saving a review; see the log")
+             why="" if after > before else why)
     C.write_json(job_path(repo, number), j)
     C.audit("review_run", {"pr": "%s#%d" % (repo, number), "status": j["status"]})
     return j
+
+
+# ---------------------------------------------------------------- getting a review's JSON out of a session
+
+def find_review_json(text):
+    """The last review JSON ({..."findings": [...]}) in some text: a ```json block, a heredoc given to
+    `lfg review save`, or a bare object. None if there is none."""
+    dec, best = json.JSONDecoder(), None
+    for m in re.finditer(r"\{", text or ""):
+        try:
+            obj, _ = dec.raw_decode(text, m.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("findings"), list):
+            best = obj
+    return best
+
+
+def _session_texts(path):
+    """What an agent said and the commands it ran, newest last, from a Claude Code transcript or a stream-json
+    log (same event shapes)."""
+    out = []
+    for ln in C.read_text(path).splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "result" and isinstance(ev.get("result"), str):
+            out.append(ev["result"])
+        if ev.get("type") != "assistant":
+            continue
+        for part in (ev.get("message") or {}).get("content") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                out.append(part.get("text") or "")
+            elif part.get("type") == "tool_use":
+                inp = part.get("input") or {}
+                out.append(str(inp.get("command") or inp.get("content") or ""))
+    return out
+
+
+def json_from_session(path):
+    for t in reversed(_session_texts(path)):
+        found = find_review_json(t)
+        if found:
+            return found
+    return None
+
+
+def _save_from_log(repo, number, log, ticket):
+    """After an unattended run: save the JSON it ended with (or tried to save). Returns why not, or ""."""
+    data = json_from_session(log)
+    if not data:
+        return "Claude finished without a review to save; see the log"
+    data.setdefault("reviewer", me())
+    try:
+        save(repo, number, data, ticket=ticket)
+    except ReviewError as e:
+        return "The review Claude wrote didn't fit the format (%s); see the log" % e
+    return ""
+
+
+SESSION_DIR = os.path.join(C.HOME, ".claude", "projects")
+
+
+def _mentions(repo, number):
+    name = repo.split("/")[-1]
+    return [s.encode() for s in ("%s#%d" % (repo, number), "%s/pull/%d" % (repo, number), "%s#%d" % (name, number),
+                                 "pr diff %d -R %s" % (number, repo), "pr view %d -R %s" % (number, repo),
+                                 "review %d" % number)]
+
+
+def sessions_for(repo, number, days=30):
+    """Your Claude Code sessions from the last `days` that mention this PR, newest first."""
+    cut, keys, out = time.time() - days * 86400, _mentions(repo, number), []
+    name = repo.split("/")[-1].encode()
+    for p in glob.glob(os.path.join(SESSION_DIR, "*", "*.jsonl")):
+        try:
+            if os.path.getmtime(p) < cut:
+                continue
+            with open(p, "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        hits = [k for k in keys if k in raw]
+        if not hits or (hits == [keys[-1]] and name not in raw):  # "review 12" alone is too loose
+            continue
+        title, cwd, first = "", "", ""
+        for ln in raw.splitlines():
+            if b'"custom-title"' in ln or b'"cwd"' in ln or (not first and b'"type":"user"' in ln):
+                try:
+                    ev = json.loads(ln)
+                except ValueError:
+                    continue
+                if ev.get("type") == "custom-title":
+                    title = ev.get("customTitle") or title
+                cwd = cwd or ev.get("cwd") or ""
+                c = (ev.get("message") or {}).get("content") if ev.get("type") == "user" else None
+                if not first and isinstance(c, str) and not c.startswith("<"):
+                    first = c
+        out.append({"path": p, "id": os.path.basename(p)[:-6], "title": title or first[:80] or "(untitled)",
+                    "cwd": cwd, "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(p))),
+                    "has_json": bool(json_from_session(p))})
+    return sorted(out, key=lambda s: s["modified"], reverse=True)
+
+
+CONVERT = ("Below is a code review someone did in a Claude Code session. Turn it into this JSON and reply with only "
+           "the JSON in one ```json block. Keep every finding the review settled on, with its wording; leave out "
+           "ones it dropped or withdrew. Use null where the review doesn't say.\n\n%s\n\nThe review:\n\n%s")
+SHAPE = ('{"summary": "...", "score": 0-100 or null, "approach_notes": [], "findings": [{"title": "...", '
+         '"severity": "blocker|major|minor|nitpick|note", "file": "path or null", "line": int or null, '
+         '"issue": "one line", "fix": "one line", "detail": "evidence, not posted", "body": "the comment the author '
+         'reads", "origin": "introduced|exposed|pre-existing", "since": "first"}]}')
+
+
+def import_session(repo, number, path, ticket=None, convert=True):
+    """Save a review you did in an ordinary Claude Code session. Uses the JSON if the session has one; otherwise
+    asks Claude, with no tools, to turn the session's review into it (one short call on your login)."""
+    import subprocess
+    if not (os.path.isfile(path) and os.path.realpath(path).startswith(os.path.realpath(SESSION_DIR) + os.sep)
+            or path.endswith(".log") and os.path.realpath(path).startswith(os.path.realpath(reviews_dir()))):
+        raise ReviewError("not a Claude Code session or a review log: %s" % path)
+    data = json_from_session(path)
+    if not data:
+        if not convert:
+            raise ReviewError("that session has no review JSON")
+        if not C.which("claude"):
+            raise ReviewError("Claude Code (`claude`) is not on PATH")
+        said = "\n\n".join(t for t in _session_texts(path) if t.strip())[-60000:]
+        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk"],
+                            input=CONVERT % (SHAPE, said), capture_output=True, text=True, timeout=600)
+        try:
+            data = find_review_json(json.loads(cp.stdout).get("result") or "")
+        except ValueError:
+            data = None
+        if not data:
+            raise ReviewError("couldn't find a review in that session")
+    data.setdefault("reviewer", me())
+    rec = save(repo, number, data, ticket=ticket)
+    rec["passes"][-1]["imported_from"] = path
+    store(rec)
+    j = job(repo, number)
+    if j and j.get("status") == "failed":  # the run's review is saved now, so stop showing it as failed
+        j.update(status="done", why="")
+        C.write_json(job_path(repo, number), j)
+    return rec
 
 
 def progress(repo, number, lines=8):
@@ -565,10 +719,10 @@ def progress(repo, number, lines=8):
     return dict(j, steps=steps[-lines:])
 
 
-def dashboard():
+def dashboard(fresh=False):
     """Everything the Reviews page shows: the request queue, saved reviews, and running jobs."""
     try:
-        q, qwhy = queue(), ""
+        q, qwhy = queue(max_age=0 if fresh else 120), ""
     except ReviewError as e:
         q, qwhy = [], str(e)
     recs = all_records()

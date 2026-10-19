@@ -399,3 +399,5 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 .editor.small { min-height: 90px; }
 .pr-steps { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); }
 .row.mt { margin-top: 10px; }
+
+.topbar #refreshed { margin-right: 10px; }
