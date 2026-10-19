@@ -1,11 +1,13 @@
 """Unit tests for lfgcore. Stdlib only: `python3 -m unittest discover -s tests` from the lfg folder.
 
 Tests run with LFG_HOME pointed at a temp dir so they never touch ~/.lfg."""
+import glob
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -1069,6 +1071,21 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(rows[b]["name"], "my-own-title")
         self.assertEqual(rows[a]["resume"], "cd /nowhere/app && claude --resume " + a)
         self.assertEqual(rows[a]["prompts"], 1)  # the meta line isn't a message you sent
+
+    def test_usage_counts_each_reply_once_and_prices_it(self):
+        a = "%08d-0000-0000-0000-000000000000" % 1
+        self.write(a, "/nowhere/app", "main", "hello")
+        u = {"input_tokens": 1000000, "output_tokens": 100000, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 0}
+        reply = {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                 "message": {"id": "msg_1", "model": "claude-opus-5-5", "usage": u}}
+        p = glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0]
+        with open(p, "a") as f:  # one reply, logged twice (two content blocks)
+            f.write(json.dumps(reply) + "\n" + json.dumps(reply) + "\n")
+        with mock.patch.object(self.SS, "_usage_index_path", lambda: os.path.join(self.dir, "idx.json")):
+            d = self.SS.usage()
+        self.assertEqual(d["models"][0]["input"], 1000000)
+        self.assertEqual(d["spend"]["today"], 6.0)  # 1M in at $4 + 0.1M out at $20
 
     def test_names_and_folders_are_yours_and_reversible(self):
         a = "%08d-0000-0000-0000-000000000000" % 1

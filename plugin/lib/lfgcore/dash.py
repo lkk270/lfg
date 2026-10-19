@@ -714,9 +714,27 @@ def _spend():
     return out
 
 
+def _all_usage():
+    from . import sessions as SS
+    d = SS.usage()
+    d["available"] = True
+    return d
+
+
 def usage(rid):
+    """Per day, per model and dollars from every Claude Code session's own log (whether or not LFG is on there);
+    per-run and per-project rows from LFG's usage.db, which only records repos where LFG is on."""
     p = C.lfg_path("usage.db")
     out = {"rows": [], "days": [], "models": [], "headroom": headroom(), "spend": spend()}
+    every = in_background("all_usage", 120, _all_usage, "adding up usage")
+    if every.get("available"):
+        out["days"], out["models"] = every["days"], every["models"]
+        out["spend"] = {"available": True, "today": every["spend"]["today"], "7d": every["spend"]["7d"],
+                        "30d": every["spend"]["30d"], "source": "lfg",
+                        "models": [{"model": m["model"], "usd": round(m["usd"], 2)} for m in every["models"]
+                                   if m["usd"] >= 0.01]}
+    elif every.get("pending"):
+        out["spend"] = dict(out["spend"], pending=True) if not out["spend"].get("available") else out["spend"]
     if not os.path.exists(p):
         return out
     db = sqlite3.connect("file:%s?mode=ro" % p, uri=True)
@@ -725,11 +743,13 @@ def usage(rid):
         out["rows"] = [dict(zip(cols, r)) for r in db.execute(
             "SELECT substr(ts,1,10), model, sum(input), sum(output), sum(cache_read), sum(cache_write) FROM usage "
             "WHERE repo=? GROUP BY 1,2 ORDER BY 1 DESC LIMIT 400", (rid,))]
-        out["days"] = [dict(zip(["day", "input", "output", "cache_read", "cache_write"], r)) for r in db.execute(
+        days = [dict(zip(["day", "input", "output", "cache_read", "cache_write"], r)) for r in db.execute(
             "SELECT substr(ts,1,10), sum(input), sum(output), sum(cache_read), sum(cache_write) FROM usage "
             "WHERE ts >= date('now','-30 day') GROUP BY 1 ORDER BY 1")]
-        out["models"] = [dict(zip(["model", "input", "output", "cache_read"], r)) for r in db.execute(
+        models = [dict(zip(["model", "input", "output", "cache_read"], r)) for r in db.execute(
             "SELECT model, sum(input), sum(output), sum(cache_read) FROM usage GROUP BY 1 ORDER BY 2 DESC")]
+        if not every.get("available"):
+            out["days"], out["models"] = days, models
         out["runs"] = [dict(zip(["run", "input", "output", "cache_read"], r)) for r in db.execute(
             "SELECT COALESCE(run,'(no run)'), sum(input), sum(output), sum(cache_read) FROM usage WHERE repo=? "
             "GROUP BY 1 ORDER BY 2 DESC LIMIT 30", (rid,))]
