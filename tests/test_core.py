@@ -86,8 +86,11 @@ class CommonTest(unittest.TestCase):
         self.assertEqual(C.current_run(root), path)
         self.assertEqual(C.read_json(os.path.join(path, "run.json"))["branch"], "main")
         ignored = C.read_text(os.path.join(root, ".lfg", ".gitignore"))
-        for line in ("runs/CURRENT", "runs/*/patches/", "runs/*/05-pentest.json"):
+        for line in ("runs/CURRENT", "runs/**/patches/", "runs/**/05-pentest.json"):
             self.assertIn(line, ignored)
+        nested = os.path.join(".lfg", "runs", os.path.basename(path), "loop0", "05-pentest.json")
+        C.write_text(os.path.join(root, nested), "{}")
+        self.assertEqual(subprocess.run(["git", "check-ignore", "-q", nested], cwd=root).returncode, 0)
 
     def test_repo_id_is_stored_and_survives_a_new_remote(self):
         root, rid = git_repo()

@@ -267,6 +267,19 @@ def _shared_records(nodes, edges):
     return graph
 
 
+def _usable(rec, present):
+    """The record as the graph can hold it: a link to a node that isn't on the branch (a Decision that emerged from a
+    Linear issue nobody mirrored here yet) can't be loaded, so it is compared as absent but kept in the file."""
+    return dict(rec, links=[x for x in rec["links"] if x[1] in present])
+
+
+def _with_pending(rec, old):
+    """An agent's version of a node, keeping the old file's links the graph couldn't hold."""
+    if not old:
+        return rec
+    return dict(rec, links=sorted(rec["links"] + [x for x in old["links"] if x not in rec["links"]]))
+
+
 def sync(root):
     """Bring the files and this checkout's branch level: agents' additions into files, then the files into the graph.
     """
@@ -276,12 +289,16 @@ def sync(root):
     created = ensure_branch(name)
     nodes, edges = export(name)
     graph = _shared_records(nodes, edges)
+    present = {r["slug"] for r in nodes.values()} | {r["slug"] for r in files.values()}
+
+    def fdigest(rec):
+        return digest(_usable(rec, present))
     loaded = {} if created else (C.read_json(_state_path(root), {}) or {}).get("loaded", {})
     keep = {}  # in the graph but with no usable file: loaded again as they are, never deleted
     written, conflicts = [], []
     for k, rec in sorted(graph.items()):
         g, seen, f = digest(rec), loaded.get(k), files.get(k)
-        fd = digest(f) if f else None
+        fd = fdigest(f) if f else None
         if k in unreadable:  # a bad merge or a hand edit: leave the node until the file is fixed
             keep[k] = rec
             continue
@@ -290,6 +307,7 @@ def sync(root):
         if f is not None and fd != seen:
             conflicts.append(k)  # changed on both sides: the file wins
             continue
+        rec = _with_pending(rec, f)
         try:  # new from an agent, or edited by one while the file stayed as loaded
             write_file(root, rec)
         except ValueError as e:
@@ -300,10 +318,10 @@ def sync(root):
         written.append(k)
     level = dict(files, **keep)
     changed = sorted((set(level) ^ set(graph)) |
-                     {k for k in level if k in graph and digest(level[k]) != digest(graph[k])})
+                     {k for k in level if k in graph and fdigest(level[k]) != digest(graph[k])})
     if changed:
         _rebuild(name, level, nodes, edges, graph)
-    C.write_json(_state_path(root), {"loaded": dict({k: digest(r) for k, r in files.items()},
+    C.write_json(_state_path(root), {"loaded": dict({k: fdigest(r) for k, r in files.items()},
                                                     **{k: loaded[k] for k in keep if k in loaded}),
                                      "synced_at": C.now_iso(), "root": root, "branch": name})
     return {"branch": name, "files": len(files), "written": written, "conflicts": conflicts, "bad": bad,

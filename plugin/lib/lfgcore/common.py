@@ -210,9 +210,10 @@ def main_root(root):
 REPO_ID_RX = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{8}$")
 # Committed with the repo's knowledge so every clone and teammate files it under one id; ignored lines are the
 # parts of a run that only make sense on one machine, plus security findings, which never go into the repo.
-KNOWLEDGE_IGNORE = ["runs/CURRENT", "runs/*/patches/", "runs/*/gate-logs/", "runs/*/ready.json",
-                    "runs/*/05-secure.*", "runs/*/05-pentest.json", "runs/*/security-audit/", "runs/*/COMMIT_MSG.md",
-                    "runs/*/PR_BODY.md"]
+# `runs/**/` matches at any depth: skills keep earlier loops' copies in subfolders (runs/<id>/loop0/05-pentest.json).
+KNOWLEDGE_IGNORE = ["runs/CURRENT", "runs/**/patches/", "runs/**/gate-logs/", "runs/**/ready.json",
+                    "runs/**/05-secure.*", "runs/**/05-pentest.json", "runs/**/security-audit/",
+                    "runs/**/COMMIT_MSG.md", "runs/**/PR_BODY.md"]
 
 
 def _name_hash(root, key):

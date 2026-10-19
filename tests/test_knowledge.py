@@ -199,7 +199,7 @@ class TakeOverTest(unittest.TestCase):
         C.knowledge_dir(root)
         lines = C.read_text(os.path.join(root, ".lfg", ".gitignore")).splitlines()
         self.assertEqual(lines[:2], ["runs/CURRENT", "mine/"])
-        self.assertIn("runs/*/security-audit/", lines)
+        self.assertIn("runs/**/security-audit/", lines)
         self.assertEqual(len(lines), len(set(lines)))
 
 
@@ -268,6 +268,23 @@ class SyncTest(unittest.TestCase):
         res = K.sync(self.root)
         self.assertEqual((res["rebuilt"], res["written"], res["conflicts"]), (False, [], []))
         self.assertEqual(len(self.graph()[1]), 3)
+
+    def test_a_link_to_a_node_not_on_the_branch_stays_in_the_file(self):
+        rec = dec("dec-a", links=[("DecisionEmergedFromIssue", "lee-56")])  # a Linear issue not mirrored here
+        K.write_file(self.root, rec)
+        path = os.path.join(self.root, ".lfg", "nodes", "Decision", "dec-a.md")
+        for _ in range(3):
+            res = K.sync(self.root)
+            self.assertEqual(res["written"], [])
+            self.assertIn("- DecisionEmergedFromIssue lee-56", C.read_text(path))
+        self.agent_writes([{"type": "Decision", "data": dict(rec["data"], title="agent edit")}])
+        K.sync(self.root)  # an agent's edit keeps the link the graph couldn't hold
+        self.assertIn("agent edit", C.read_text(path))
+        self.assertIn("- DecisionEmergedFromIssue lee-56", C.read_text(path))
+        self.agent_writes([{"type": "Issue", "data": {"slug": "lee-56", "title": "from Linear"}}])
+        K.sync(self.root)  # once the issue is on the branch, the edge is loaded
+        self.assertIn(["DecisionEmergedFromIssue", "dec-a", "lee-56"], self.graph()[1])
+        self.assertEqual(K.sync(self.root)["written"], [])
 
     def test_deleted_file_removes_the_node(self):
         K.write_file(self.root, dec("dec-a"))
