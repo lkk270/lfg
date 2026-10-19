@@ -90,9 +90,9 @@ def api(view, q):
     if view == "tools":
         return dash.tools()
     if view == "issues":
-        return dash.issues()
+        return dash.issues(_rid(q))
     if view == "knowledge":
-        return dash.knowledge()
+        return dash.knowledge(_rid(q))
     if view == "brain":
         return dash.brain()
     if view == "guide":

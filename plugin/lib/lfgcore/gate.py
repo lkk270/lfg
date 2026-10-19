@@ -155,13 +155,13 @@ def detect_commands(root):
 
 
 def commands(root, rid):
-    path = C.lfg_path("repos", rid, "commands.json")
+    path = C.repo_file(root, "commands.json")
     saved = C.read_json(path, None)
     if isinstance(saved, dict) and saved:
         return saved, path, False
     cmds = detect_commands(root)
     if cmds:
-        C.write_json(path, cmds)
+        C.write_json(C.repo_file(root, "commands.json", create=True), cmds)
     return cmds, path, True
 
 
@@ -222,7 +222,7 @@ def suppression_scan(diff):
 
 def gate(root, rid, fix=False, affected=False, only=None):
     cmds, path, detected = commands(root, rid)
-    run = C.current_run(rid)
+    run = C.current_run(root)
     logdir = os.path.join(run, "gate-logs") if run else None
     checks = []
     if fix and cmds.get("lint_fix"):

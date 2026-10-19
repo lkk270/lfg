@@ -15,7 +15,7 @@ it as method guidance. The two validators are plain Node scripts that only read 
 |---|---|
 | Guidance mode | `/secure` diff review of security-sensitive code: core principles, severity anchors, `needs_validation`, and the domain companions the diff touches |
 | Full audit mode | `/secure audit [quick\|standard\|deep] [paths]`, only when the user types it, after an agreed agent budget |
-| Output directory outside the target | `<run>/security-audit/` (the run folder is under `~/.lfg/runs/`, never in the repo) |
+| Output directory outside the target | `<scratch>/security-audit/` (`lfg run scratch`: under `~/.lfg/runs/`, never in the repo; the run folder itself is in the repo and committed) |
 | OS-enforced sandbox for target code | LFG provides none, so target code is never executed. Leads stay `needs_validation`; `/pentest` (Strix, offline, local Ollama) is the route to dynamic confirmation |
 | `confirmed` findings | Mapped into `05-secure.json` and dev-graph `Issue` (type `risk`); human decisions at checkpoint 3 |
 

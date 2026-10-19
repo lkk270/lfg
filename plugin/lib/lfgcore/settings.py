@@ -382,9 +382,9 @@ def _name(rid):
 
 
 def _candidates():
-    """What can be deleted safely, with the exact paths. Never the current run, a checked-out branch's runs, or
-    anything outside ~/.lfg except a repo's own graph data dirs. Recomputed on every cleanup, so the browser only
-    ever names candidate ids."""
+    """What can be deleted safely, with the exact paths. Never the current run, a checked-out branch's runs, runs
+    kept in a repo's .lfg/, or anything outside ~/.lfg except a repo's own graph data dirs. Recomputed on every
+    cleanup, so the browser only ever names candidate ids."""
     from . import dash
     cfg = C.config()["storage"]
     idle = cfg["idle_graph_days"] * 86400
@@ -396,12 +396,13 @@ def _candidates():
             out.append({"id": "repo:" + rid, "kind": "repo", "repo": rid, "label": "Everything for %s" % _name(rid),
                         "reason": "its folder %s no longer exists" % (root or "(unknown)"), "paths": paths})
             continue
-        current = os.path.basename(C.current_run(rid) or "")
+        current = dash._current_runs(rid)
         gb = dash.git_branches(root) or {}
         by_branch = {}
-        for d in dash._run_files(rid, ""):
+        home_runs = C.lfg_path("runs", rid) + os.sep
+        for d in dash._run_files(rid, ""):  # runs in a checkout are the repo's knowledge, committed: never offered
             b = dash.run_branch(d)
-            if b and os.path.basename(d) != current:
+            if b and d.startswith(home_runs) and os.path.basename(d) not in current:
                 by_branch.setdefault(b, []).append(d)
         for b, dirs in sorted(by_branch.items()):
             if b == gb.get("current") or b == gb.get("default"):

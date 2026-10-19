@@ -17,7 +17,7 @@ Read only the run-folder files you are given: `01-brief.md` (acceptance criteria
 ## Work
 
 1. Build the **criteria-to-test matrix**: every acceptance criterion → at least one test id. Missing → flag (Express docs-only criteria are waived).
-2. Run, in order, using the repo's own commands (from `~/.lfg/repos/<repo-id>/commands.json` if present): lint with autofix → type-check → tests for affected nodes → full suite → build.
+2. Run, in order, using the repo's own commands (from the repo's `.lfg/commands.json` if present): lint with autofix → type-check → tests for affected nodes → full suite → build.
 3. Run `lfg gate` for the authoritative result: one line per check, output only for failures, full logs in `<run>/gate-logs/`. It writes `ready.json`.
 4. If a flow you didn't expect is affected, or a changed node has no test, **raise** the lane and say why.
 5. For UI changes, exercise the flow in a local browser preview if one is available; record what you saw.

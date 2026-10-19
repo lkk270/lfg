@@ -95,13 +95,46 @@ def _branch_ok(d, branch):
     return not branch or (run_branch(d) or UNRECORDED) == branch
 
 
+def checkouts(rid):
+    """The repo's checkouts: the main one (from graphs/<rid>/state.json) and its linked worktrees. Cached briefly:
+    every runs view asks several times."""
+    def find():
+        root = repo_root(rid)
+        if not root or not os.path.isdir(root):
+            return []
+        cp = C.run(["git", "worktree", "list", "--porcelain"], cwd=root, timeout=15)
+        found = [ln[9:] for ln in cp.stdout.splitlines() if ln.startswith("worktree ")] if cp.returncode == 0 else []
+        return [root] + [w for w in found if os.path.realpath(w) != os.path.realpath(root) and os.path.isdir(w)]
+    return cached("checkouts:" + rid, 5, find)
+
+
+def _run_dirs(rid):
+    """{run id: folder}: <checkout>/.lfg/runs/* across every checkout, plus runs still under ~/.lfg/runs/<rid> from
+    before they moved into the repo. A run on several branches shows its most recently updated copy."""
+    found = {}
+    bases = [C.runs_dir(r, create=False) for r in checkouts(rid)] + [C.lfg_path("runs", rid)]
+    for base in bases:
+        for d in glob.glob(os.path.join(base, "*")):
+            meta = os.path.join(d, "run.json")
+            if not os.path.isfile(meta):  # ~/.lfg/runs/<rid>/<run> holding only /build's scratch worktrees
+                continue
+            old = found.get(os.path.basename(d))
+            if not old or os.path.getmtime(meta) > os.path.getmtime(os.path.join(old, "run.json")):
+                found[os.path.basename(d)] = d
+    return found
+
+
+def _current_runs(rid):
+    return {C.read_text(os.path.join(C.runs_dir(r, create=False), "CURRENT")).strip() for r in checkouts(rid)} | \
+        {C.read_text(C.lfg_path("runs", rid, "CURRENT")).strip()}
+
+
 def _run_files(rid, name, branch=None):
-    """Newest first: runs/<rid>/*/<name> for runs on `branch` (None or "" = every branch, "-" = not recorded)."""
+    """Newest first: <run>/<name> for runs on `branch` (None or "" = every branch, "-" = not recorded)."""
+    dirs = [d for _n, d in sorted(_run_dirs(rid).items(), reverse=True) if _branch_ok(d, branch)]
     if not name:  # the run folders themselves
-        return [d for d in sorted(glob.glob(C.lfg_path("runs", rid, "*")), reverse=True)
-                if os.path.isdir(d) and _branch_ok(d, branch)]
-    return [p for p in sorted(glob.glob(C.lfg_path("runs", rid, "*", name)), reverse=True)
-            if _branch_ok(os.path.dirname(p), branch)]
+        return dirs
+    return [p for d in dirs for p in sorted(glob.glob(os.path.join(d, name)), reverse=True)]
 
 
 def git_branches(root):
@@ -202,19 +235,19 @@ def _run_summary(d):
 
 
 def runs(rid, branch=None):
-    cur = C.read_text(C.lfg_path("runs", rid, "CURRENT")).strip()
+    cur = _current_runs(rid) - {""}
     out = []
     for d in _run_files(rid, "", branch)[:100]:
         if os.path.isdir(d):
             r = _run_summary(d)
-            r["current"] = r["run"] == cur
+            r["current"] = r["run"] in cur
             out.append(r)
     return {"runs": out, "stages": [[k, label] for k, label, _ in STAGES]}
 
 
 def run_detail(rid, run):
-    d = C.lfg_path("runs", rid, run)
-    if not os.path.isdir(d):
+    d = _run_dirs(rid).get(run)
+    if not d:
         return _na("run not found")
     files = []
     for root, _dirs, fs in os.walk(d):
@@ -231,9 +264,10 @@ def run_detail(rid, run):
 
 
 def run_file(rid, run, name):
-    base = os.path.realpath(C.lfg_path("runs", rid, run))
-    p = os.path.realpath(os.path.join(base, name))
-    if not p.startswith(base + os.sep) or not os.path.isfile(p):
+    d = _run_dirs(rid).get(run)
+    base = os.path.realpath(d) if d else None
+    p = os.path.realpath(os.path.join(base, name)) if base else ""
+    if not base or not p.startswith(base + os.sep) or not os.path.isfile(p):
         return {"text": "not found"}
     with open(p, errors="replace") as fh:
         return {"text": fh.read(400000), "name": name}
@@ -501,60 +535,70 @@ def og_access(name):
     return cached("og-access:" + name, 30, check)
 
 
-def _list(name, node, fields, order=None, limit=200):
+def _list(name, node, fields, order=None, limit=200, branch=None):
     var = "$x"
     q = "query l() { match { %s: %s } return { %s }%s limit %d }" % (
         var, node, ", ".join("%s.%s" % (var, f) for f in fields),
         " order { %s.%s desc }" % (var, order) if order else "", limit)
-    return _og(lambda OG: OG.read(name, q, "l"))
+    return _og(lambda OG: OG.read(name, q, "l", branch=branch))
 
 
-def _inv(name, stored, params=None):
-    return _og(lambda OG: OG.invoke(name, stored, params))
+def _inv(name, stored, params=None, branch=None):
+    return _og(lambda OG: OG.invoke(name, stored, params, branch=branch))
+
+
+def _dev_branch(rid):
+    """A repo's dev-graph knowledge is on its own branch (knowledge.py); with no repo picked, main."""
+    from . import knowledge as K
+    return K.branch(rid) if rid else None
 
 
 def _rows(v):
     return v if isinstance(v, list) else []
 
 
-def issues():
+def issues(rid=None):
     why = og_access("dev-graph")
     if why:
         return _na(why)
+    br = _dev_branch(rid)
     ws = C.config()["linear"].get("workspace") or ""
     allq = _list("dev-graph", "Issue", ["slug", "title", "description", "acceptanceCriteria", "status", "priority",
-                                        "issueType", "legacyRef", "updatedAt"], "updatedAt", 300)
+                                        "issueType", "legacyRef", "updatedAt"], "updatedAt", 300, br)
     out = {"available": True, "linear_workspace": ws,
            "issues": _rows(allq), "error": allq.get("error") if isinstance(allq, dict) else None,
-           "ready": _rows(_inv("dev-graph", "ready")), "blocked": _rows(_inv("dev-graph", "blocked")),
-           "stale": _rows(_inv("dev-graph", "stale_candidates")), "epics": _rows(_inv("dev-graph", "open_epics")),
+           "ready": _rows(_inv("dev-graph", "ready", branch=br)),
+           "blocked": _rows(_inv("dev-graph", "blocked", branch=br)),
+           "stale": _rows(_inv("dev-graph", "stale_candidates", branch=br)),
+           "epics": _rows(_inv("dev-graph", "open_epics", branch=br)),
            "prs": _rows(_list("dev-graph", "PR", ["slug", "title", "status", "githubRef", "updatedAt"],
-                              "updatedAt", 100))}
+                              "updatedAt", 100, br))}
     out["by_status"] = dict(collections.Counter(i.get("status") or "?" for i in out["issues"]))
     return out
 
 
-def knowledge():
+def knowledge(rid=None):
     why = og_access("dev-graph")
     if why:
         return _na(why)
+    br = _dev_branch(rid)
     return {
         "available": True,
         "decisions": _rows(_list("dev-graph", "Decision", ["slug", "title", "status", "decision", "createdAt"],
-                                 "createdAt")),
+                                 "createdAt", branch=br)),
         "principles": _rows(_list("dev-graph", "Principle", ["slug", "statement", "polarity", "status",
-                                                             "rationale"], "updatedAt")),
+                                                             "rationale"], "updatedAt", branch=br)),
         "invariants": _rows(_list("dev-graph", "Invariant", ["slug", "statement", "status", "guardRef"],
-                                  "updatedAt")),
-        "unheld": _rows(_inv("dev-graph", "unheld_invariants")),
+                                  "updatedAt", branch=br)),
+        "unheld": _rows(_inv("dev-graph", "unheld_invariants", branch=br)),
         "gaps": _rows(_list("dev-graph", "Gap", ["slug", "title", "state", "currentBehavior", "targetBehavior"],
-                            "updatedAt")),
+                            "updatedAt", branch=br)),
         "learnings": _rows(_list("dev-graph", "Learning", ["slug", "title", "learningKind", "body", "createdAt"],
-                                 "createdAt")),
+                                 "createdAt", branch=br)),
         "incidents": _rows(_list("dev-graph", "Incident", ["slug", "title", "severity", "status", "startedAt"],
-                                 "startedAt")),
+                                 "startedAt", branch=br)),
         "components": _rows(_list("dev-graph", "Component", ["slug", "name", "criticality", "summary"],
-                                  "updatedAt")),
+                                  "updatedAt", branch=br)),
     }
 
 

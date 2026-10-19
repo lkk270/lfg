@@ -23,10 +23,9 @@ After install (`~/.lfg`, mode 700):
 ├── config.json             # user config, mode 600 (models, lanes, shipcheck, pentest, ports, linear, graphs.docs,
 │                           # headroom.port/mode/scope, guard.hardened)
 ├── overrides/{skills,rules}/  defaults/skills/  backups/   # your dashboard edits, pristine copies, backups
-├── graphs/<repo-id>/{state.json,docs.json,.lock,sync.log}  # graph bookkeeping only; the graphs are in the repo (below)
-├── repos/<repo-id>/{docs/GLOSSARY.md,docs/adr/,commands.json,shipcheck.json}
-├── runs/<repo-id>/<run-id>/   # 01-brief.md … 07-shipcheck.json, tasks.json, progress.md, COMMIT_MSG.md, PR_BODY.md,
-│                              # ready.json, gate-logs/, shipcheck-routes.json (optional)
+├── graphs/<repo-id>/{state.json,docs.json,knowledge.json,.lock,sync.log,knowledge.log}  # bookkeeping only
+├── repos/<repo-id>/shipcheck-history.json   # this machine's image sizes; everything else moved into the repo
+├── runs/<repo-id>/<run-id>/wt/   # /build's ticket worktrees and /spike prototypes (`lfg run scratch`), never committed
 ├── omnigraph/{tokens.json (600),src/,dev-graph/,second-brain/}  # local graph clusters + server.log
 ├── headroom/{state.json,proxy.log}  # proxy upstream + previous ANTHROPIC_BASE_URL (launchd dev.lfg.headroom)
 ├── ui/static/              # generated viewer pages (e.g. arch-health/<repo-id>.html from /lfg:health)
@@ -34,8 +33,29 @@ After install (`~/.lfg`, mode 700):
 ├── secintel/cache/  strix/<repo-id>/  feedback/<repo-id>.json  usage.db (600)  audit.log
 ```
 
-`<repo-id>` = `<repo-dir-name>-<first 8 hex of sha1(git remote origin url, or the absolute repo path)>`.
-`<run-id>` = `YYYYMMDD-HHMM-<slug>`. The **current run** for a repo is in `~/.lfg/runs/<repo-id>/CURRENT`.
+The repo's own knowledge lives in the repo, committed with the code on the branch it was written on:
+
+```
+<checkout>/.lfg/
+├── repo-id                 # written once, so every clone and teammate files the repo under one id
+├── .gitignore              # keeps out what belongs to one machine (below)
+├── docs/{GLOSSARY.md,adr/}  commands.json  shipcheck.json
+├── runs/<run-id>/          # 01-brief.md … 07-shipcheck.json, tasks.json, progress.md, run.json
+│                           # ignored: CURRENT, patches/, gate-logs/, ready.json, 05-secure.*, 05-pentest.json,
+│                           # COMMIT_MSG.md, PR_BODY.md
+└── nodes/<Type>/<slug>.md  # shared dev-graph nodes, the master copy (lfgcore/knowledge.py)
+```
+
+`<repo-id>` = the id in `.lfg/repo-id`; before that file exists, `<repo-dir-name>-<first 8 hex of sha1(git remote
+origin url, or the absolute repo path)>`. `<run-id>` = `YYYYMMDD-HHMM-<slug>`. The **current run** is in the
+checkout's `.lfg/runs/CURRENT` (per checkout, never committed).
+
+dev-graph keeps each repo on its own branch, `repo/<repo-id>`; the MCP server is pinned to it
+(`OMNIGRAPH_DEFAULT_BRANCH`). `lfg knowledge sync` copies nodes agents added or changed there into `.lfg/nodes/`, then
+rebuilds the branch from the files; the files win when both sides changed. Shared: Decision, Learning, Invariant,
+Principle, Gap, Assumption, ExternalBlocker, Component, Capability, SpecFile, Incident and free-text Issues (`iss-…`).
+Never shared: Linear-mirrored Issues, PR, Commit, Release, Deployment, Actor (emails), Comment. second-brain is personal
+and never synced.
 
 Tests: `python3 -m unittest discover -s tests` (stdlib, temp `LFG_HOME` and `HOME`, a fake `claude`) + `lfg doctor --selftest`. Lint: `uvx ruff check plugin/lib plugin/bin/lfg tests`, `shellcheck install.sh bootstrap.sh`, `claude plugin validate plugin`.
 
@@ -77,11 +97,15 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg run new <slug>` | Creates a run folder, sets CURRENT, prints its path |
 | `lfg run path [<file>]` | Prints the current run folder (or a file inside it). Exit 1 if no current run |
 | `lfg run list` | Recent runs for this repo |
+| `lfg run use <run-id>` | Makes a run in `.lfg/runs/` current, e.g. a teammate's on this branch |
+| `lfg run scratch` | Prints this machine's folder for the current run (`~/.lfg/runs/<repo-id>/<run-id>`), for /build worktrees and /spike prototypes |
+| `lfg knowledge sync` / `status` | Brings `.lfg/nodes/` and the repo's dev-graph branch level (SessionStart and Stop run it in the background with the Knowledge pack on); `status` shows the folder, branch, file count and leftovers in `~/.lfg` |
+| `lfg knowledge migrate [--dry-run] [--take-main-nodes]` | Moves runs, glossary, ADRs and commands kept in `~/.lfg` under any id this repo had into `.lfg/`, merging a run found under two ids; originals go to `~/.lfg/backups/`. `--take-main-nodes` also copies the shared nodes on dev-graph `main` (where older versions kept every repo's) into this repo's files |
 | `lfg run set [lane=…] [stage=…] [issue=<ID or title>] [--force]` | Records lane, stage and issue in the current run's `run.json` (what the dashboard shows). A stage moves the linked dev-graph Issue (plan → todo, build/fix/check/secure → in_progress, expert/ship → needs_review, done → done). Refuses to lower the lane without `--force` |
-| `lfg issue sync <ID\|title> [--title] [--type] [--status] [--priority 0-4] [--description] \| show <ID> [--json]` | Creates or updates the Issue in dev-graph as the writer role (`ACME-4225` → slug `acme-4225`, `legacyRef` kept; an idea → `iss-<kebab>`). The Issues page lists these; skills call it at intake |
+| `lfg issue sync <ID\|title> [--title] [--type] [--status] [--priority 0-4] [--description] \| show <ID> [--json]` | Creates or updates the Issue in dev-graph as the writer role (`ACME-4225` → slug `acme-4225`, `legacyRef` kept; an idea → `iss-<kebab>-<4 hex>`, or the existing issue with that title). The Issues page lists these; skills call it at intake |
 | `lfg rule <name>` | Prints a hidden rule module (`tdd-rules`, `slice-rules`, `domain-docs`, `module-design`, `bug-loop`, `agent-writing`, `git-guard`, `graph-first`, `remember`, `worktrees`), or the user's own version from `~/.lfg/overrides/rules/<name>.md` (changed or added in the dashboard). SessionStart lists rules the user added |
-| `lfg repo docs` | Prints the per-repo docs dir (glossary, ADRs), never inside the repo |
-| `lfg repo id` | Prints `<repo-id>` (the same in every worktree of a repo) |
+| `lfg repo docs` | Prints the repo's docs dir (glossary, ADRs): `<checkout>/.lfg/docs` |
+| `lfg repo id` | Prints `<repo-id>` (the same in every worktree and clone of a repo) |
 | `lfg repo root` / `lfg repo graph` | Prints the main checkout / its `graphify-out/graph.json` (also from a linked worktree) |
 | `lfg worktree new <branch> [--from <ref>]` / `list` / `remove <name\|branch>` | Checks a branch out in `<parent>/<repo>.worktrees/<branch-slug>` (an existing branch, or a new one from `--from`, default HEAD) without touching the user's checkout, and records it in the current run's `run.json` `worktrees`. `remove` only takes worktrees it made, refuses any with uncommitted or untracked changes, never forces and keeps the branch. Agents run it on their own (rule module `lfg rule worktrees`); SessionStart removes LFG worktrees that are clean and unused for 24 h |
 | `lfg lane [--json]` | Suggests a lane from the diff + code-review-graph impact (`express`/`standard`/`full`/`hotfix`) with reasons |

@@ -28,6 +28,17 @@ from lfgcore import tracker as T  # noqa: E402
 from lfgcore import ui  # noqa: E402
 
 
+def git_repo(prefix="lfg-repo-"):
+    """A throwaway git repo the dashboard can find (graphs/<rid>/state.json names it). Returns (root, rid)."""
+    import shutil
+    root = os.path.realpath(tempfile.mkdtemp(prefix=prefix))
+    subprocess.run(["git", "init", "-q", "-b", "main", root], check=True)
+    rid = C.repo_id(root)
+    C.write_json(C.lfg_path("graphs", rid, "state.json"), {"repo_root": root})
+    unittest.addModuleCleanup(shutil.rmtree, root, True)
+    return root, rid
+
+
 def bash(cmd):
     return guard.check("Bash", {"command": cmd})
 
@@ -65,11 +76,29 @@ class CommonTest(unittest.TestCase):
         self.assertRegex(rid, r"^[A-Za-z0-9_.-]+-[0-9a-f]{8}$")
         self.assertEqual(rid, C.repo_id(d))
 
-    def test_new_run_sets_current(self):
-        path = C.new_run("unit-rid", "Hello World!")
-        self.assertTrue(path.startswith(_TMP_HOME))
+    def test_new_run_lives_in_the_checkout_and_sets_current(self):
+        root, rid = git_repo()
+        self.assertIsNone(C.current_run(root))
+        self.assertFalse(os.path.exists(os.path.join(root, ".lfg")))  # looking never creates the folder
+        path = C.new_run(root, "Hello World!")
+        self.assertTrue(path.startswith(os.path.join(root, ".lfg", "runs") + os.sep))
         self.assertRegex(os.path.basename(path), r"^\d{8}-\d{4}-hello-world$")
-        self.assertEqual(C.current_run("unit-rid"), path)
+        self.assertEqual(C.current_run(root), path)
+        self.assertEqual(C.read_json(os.path.join(path, "run.json"))["branch"], "main")
+        ignored = C.read_text(os.path.join(root, ".lfg", ".gitignore"))
+        for line in ("runs/CURRENT", "runs/*/patches/", "runs/*/05-pentest.json"):
+            self.assertIn(line, ignored)
+
+    def test_repo_id_is_stored_and_survives_a_new_remote(self):
+        root, rid = git_repo()
+        C.knowledge_dir(root)
+        self.assertEqual(C.read_text(os.path.join(root, ".lfg", "repo-id")).strip(), rid)
+        subprocess.run(["git", "remote", "add", "origin", "https://example.com/x.git"], cwd=root, check=True)
+        self.assertNotEqual(C.derived_repo_id(root), rid)
+        self.assertEqual(C.repo_id(root), rid)
+        self.assertIn(rid, C.legacy_repo_ids(root))
+        C.write_text(os.path.join(root, ".lfg", "repo-id"), "../../etc\n")  # never a path
+        self.assertEqual(C.repo_id(root), C.derived_repo_id(root))
 
 
 class GateTest(unittest.TestCase):
@@ -242,9 +271,9 @@ class UiTest(unittest.TestCase):
         self.assertIsNone(ui._rid({}))
 
     def test_file_readers_stay_inside_their_folders(self):
-        rid, run = "ui-test-0001", "20260101-0000-x"
-        rd = C.lfg_path("runs", rid, run)
-        os.makedirs(rd, exist_ok=True)
+        root, rid = git_repo()
+        rd = C.new_run(root, "x")
+        run = os.path.basename(rd)
         with open(os.path.join(rd, "01-brief.md"), "w") as fh:
             fh.write("brief")
         with open(C.lfg_path("config.json"), "a"):
@@ -409,9 +438,21 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(T.slug_for("Make billing-service logs useful!"), "iss-make-billing-service-logs-useful")
         self.assertEqual(T.slug_for("iss-x"), "iss-x")
 
+    def test_a_new_title_gets_its_own_key_and_a_used_title_finds_it(self):
+        og = mock.Mock(read=mock.Mock(return_value=[]))
+        with mock.patch.object(T, "_og", return_value=og), mock.patch.object(T, "_branch", return_value="repo/x"):
+            a, b = T.resolve("Fix login"), T.resolve("Fix login")
+            self.assertRegex(a, r"^iss-fix-login-[0-9a-f]{4}$")
+            self.assertNotEqual(a, b)  # two people, two issues
+            og.read.return_value = [{"slug": "acme-3"}, {"slug": a}]
+            self.assertEqual(T.resolve("Fix login"), a)
+            self.assertEqual(og.read.call_args.kwargs["branch"], "repo/x")
+            self.assertEqual(T.resolve(a), a)  # run.json keeps the slug: it maps to itself
+            self.assertEqual(T.resolve("ACME-3"), "acme-3")
+
     def test_sync_creates_then_updates_only_given_fields(self):
         calls = []
-        og = mock.Mock(read=mock.Mock(return_value=[]), mutate=lambda g, q, n, p: calls.append((q, p)))
+        og = mock.Mock(read=mock.Mock(return_value=[]), mutate=lambda g, q, n, p, **kw: calls.append((q, p)))
         with mock.patch.object(T, "_og", return_value=og):
             out = T.sync("ACME-1", title="Alert", issue_type="bug", priority=1)
             self.assertEqual(out["action"], "created")
@@ -429,9 +470,9 @@ class TrackerTest(unittest.TestCase):
 
     def test_run_set_records_lane_stage_issue_and_never_lowers_lane(self):
         from lfgcore import cli
-        rid = "tracker-test-0001"
-        run = C.new_run(rid, "x")
-        with mock.patch.object(C, "need_repo", return_value=("/r", rid)), \
+        root, rid = git_repo()
+        run = C.new_run(root, "x")
+        with mock.patch.object(C, "need_repo", return_value=(root, rid)), \
                 mock.patch.object(T, "set_status", return_value={"slug": "acme-9", "status": "in_progress"}) as st:
             self.assertEqual(cli.main(["run", "set", "lane=standard", "stage=build", "issue=ACME-9"]), 0)
             st.assert_called_with("acme-9", "in_progress")
@@ -648,12 +689,15 @@ class BranchAndStorageTest(unittest.TestCase):
         self._git("checkout", "-q", "-b", "feat-live")
         self._git("commit", "-q", "--allow-empty", "-m", "live")
         self._git("checkout", "-q", "main")
-        self.rid = "branchy-" + os.path.basename(self.root)[-6:]
+        self.root = os.path.realpath(self.root)
+        self.rid = C.repo_id(self.root)
         self.addCleanup(lambda: [shutil.rmtree(C.lfg_path(d, self.rid), True) for d in ("runs", "graphs")])
         C.write_json(C.lfg_path("graphs", self.rid, "state.json"), {"repo_root": self.root})
-        self.runs = {b: C.new_run(self.rid, "r-" + (b or "none"), branch=b)
-                     for b in ("feat-merged", "gone", "feat-live", "main", "")}
-        os.remove(C.lfg_path("runs", self.rid, "CURRENT"))
+        self.runs = {}
+        for b in ("feat-merged", "gone", "feat-live", "main", ""):  # runs from before they moved into the repo
+            d = C.lfg_path("runs", self.rid, "20260101-0000-r-" + (b or "none"))
+            C.write_json(os.path.join(d, "run.json"), {"run_id": os.path.basename(d), "branch": b})
+            self.runs[b] = d
 
     def _mine(self):
         return {c["id"]: c for c in ST._candidates() if c["repo"] == self.rid}
@@ -664,6 +708,8 @@ class BranchAndStorageTest(unittest.TestCase):
         self.assertEqual([r["branch"] for r in dash.runs(self.rid, "feat-live")["runs"]], ["feat-live"])
         self.assertEqual(len(dash.runs(self.rid, dash.UNRECORDED)["runs"]), 1)
         self.assertEqual(len(dash.runs(self.rid)["runs"]), 5)
+        C.new_run(self.root, "in-repo", branch="feat-live")  # the checkout's runs show beside the old ones
+        self.assertEqual(len(dash.runs(self.rid, "feat-live")["runs"]), 2)
         b = dash.branches(self.rid)
         states = {x["name"]: x["state"] for x in b["branches"]}
         self.assertEqual(states, {"feat-merged": "merged", "gone": "deleted", "feat-live": "local", "main": "current"})
@@ -679,6 +725,11 @@ class BranchAndStorageTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.runs["gone"]))
         for b in ("feat-merged", "feat-live", "main", ""):
             self.assertTrue(os.path.isdir(self.runs[b]), b)
+
+    def test_runs_in_the_repo_are_never_offered(self):
+        kept = C.new_run(self.root, "in-repo", branch="gone")
+        self.assertIn(os.path.basename(kept), dash._run_dirs(self.rid))
+        self.assertNotIn(kept, self._mine()["runs:%s:gone" % self.rid]["paths"])
 
     def test_current_run_is_never_offered(self):
         C.write_text(C.lfg_path("runs", self.rid, "CURRENT"), os.path.basename(self.runs["gone"]) + "\n")
@@ -750,7 +801,7 @@ class SecurityAuditVendorTest(unittest.TestCase):
         skill = C.read_text(os.path.join(self.PLUGIN, "skills", "secure", "SKILL.md"))
         for s in ("vendor/cloudflare-security-audit", "guidance mode", "/secure audit", "Agree the budget first",
                   "No target code is executed", "validate-findings.cjs", "validate-coverage-ledger.cjs",
-                  "<run>/security-audit/"):
+                  "<scratch>/security-audit/"):
             self.assertIn(s, skill)
         agent = C.read_text(os.path.join(self.PLUGIN, "agents", "security-analyst.md"))
         self.assertIn("cloudflare-security-audit", agent)
@@ -980,18 +1031,19 @@ class RunSummaryTest(unittest.TestCase):
         items = dash.shipcheck_items(s)
         self.assertEqual([i["ok"] for i in items], [True, None, None, True, None, None, False])
         self.assertEqual([i["check"] for i in items if i.get("manual")], ["Rollback plan"])
-        rid = "ship-rid"
-        C.new_run(rid, "x")
-        C.write_json(C.run_file(rid, "07-shipcheck.json"), s)
+        root, rid = git_repo()
+        C.new_run(root, "x")
+        C.write_json(C.run_file(root, "07-shipcheck.json"), s)
         sc = dash.security(rid)["shipcheck"][0]
         self.assertEqual((sc["ok"], sc["total"], sc["failed"], sc["manual"]), (2, 3, ["Docs"], ["Rollback plan"]))
 
     def test_review_feedback_only_marks_the_run_it_was_given_on(self):
-        rid = "fb-rid"
-        a = C.new_run(rid, "first")
+        root, rid = git_repo()
+        a = C.new_run(root, "first")
         C.write_json(os.path.join(a, "06-review.json"), {"verdict": "approve", "findings": [{"id": "R-1"}]})
-        b = os.path.join(C.runs_dir(rid), "20991231-0000-second")
-        os.makedirs(b)
+        b = C.new_run(root, "second")
+        os.rename(b, os.path.join(C.runs_dir(root), "20991231-0000-second"))
+        b = os.path.join(C.runs_dir(root), "20991231-0000-second")
         C.write_json(os.path.join(b, "06-review.json"), {"verdict": "changes", "findings": [{"id": "R-1"}]})
         C.write_json(C.lfg_path("feedback", rid + ".json"), {"R-1": {"verdict": "accept", "run": os.path.basename(a)}})
         got = {f["run"]: f["feedback"] for f in dash.reviews(rid)["findings"]}

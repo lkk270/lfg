@@ -24,7 +24,7 @@ Read only the run-folder files you are given: `01-brief.md` (declared new depend
 
 - `<run>/05-secure.json` (written by `lfg secure`; you add reachability and fix fields).
 - `<run>/05-pentest.json` (written by `lfg pentest`).
-- In a `/secure audit` assignment: only the hunter or verifier output file the parent named under `<run>/security-audit/`, in the upstream format. The parent owns the shared run files.
+- In a `/secure audit` assignment: only the hunter or verifier output file the parent named under `<scratch>/security-audit/`, in the upstream format. The parent owns the shared run files.
 - A short `<run>/05-secure.md`: inventory table, findings by severity with evidence, reachability, fix, and which are **blocking** (checkpoint 3).
 
 ## Rules

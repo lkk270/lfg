@@ -30,10 +30,10 @@ adapted-from: mattpocock/skills/prototype (MIT, © 2026 Matt Pocock)
    - *Does library/API X behave like Y* → the smallest script that calls it and prints the result.
    If ambiguous, pick by the surrounding code (backend → logic, page → UI) and state the assumption.
 3. **Find the context** with the graphs, not by browsing: `get_minimal_context_tool` and `graphify query` for the module the spike is for.
-4. **Build in `<run>/scratch/spike-<slug>/`**, never in the repo. Trivial to run (one command or a double-click). In-memory state. No tests, no polish, no abstractions. Print or render the full state after each action.
+4. **Build in `SCRATCH/spike-<slug>/`** (`lfg run scratch`, this machine only), never in the repo or the run folder, which is committed. Trivial to run (one command or a double-click). In-memory state. No tests, no polish, no abstractions. Print or render the full state after each action.
 5. **Run it** and record what happened. If the user is around, let them drive it; their "wait, that shouldn't happen" moments are the findings.
 6. **Conclude** in `spike-<slug>.md`: verdict, evidence, and the lift-out (the pure logic or snippet worth keeping, quoted inline, short).
-7. **Delete** `<run>/scratch/spike-<slug>/` (only that folder) and confirm it's gone.
+7. **Delete** `SCRATCH/spike-<slug>/` (only that folder) and confirm it's gone.
 
 ## Output
 

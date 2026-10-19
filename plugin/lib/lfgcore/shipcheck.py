@@ -124,10 +124,10 @@ def env_example(root):
 
 def smoke_spec(root, rid, info):
     """Routes to smoke-test: run folder shipcheck-routes.json (written by /ship from acceptance criteria) or
-    ~/.lfg/repos/<id>/shipcheck.json; otherwise health + /."""
-    run = C.current_run(rid)
+    <checkout>/.lfg/shipcheck.json; otherwise health + /."""
+    run = C.current_run(root)
     spec = (C.read_json(os.path.join(run, "shipcheck-routes.json"), None) if run else None) or \
-        C.read_json(C.lfg_path("repos", rid, "shipcheck.json"), None) or {}
+        C.read_json(C.repo_file(root, "shipcheck.json"), None) or {}
     port = str(spec.get("port") or (info["expose"][0] if info["expose"] else "8080"))
     routes = spec.get("routes") or [{"path": spec.get("health", "/health"), "status": [200, 204], "optional": True},
                                      {"path": "/", "status": [200, 204, 301, 302, 401, 403, 404]}]
@@ -269,7 +269,7 @@ def run_and_smoke(root, rid, run_id, tag, info):
 # ---------------------------------------------------------------- checklist
 
 def checklist(root, rid, part_a_ok, part_a_na):
-    run = C.current_run(rid)
+    run = C.current_run(root)
     rd = C.read_json(os.path.join(run, "ready.json"), {}) if run else {}
     items = []
 
@@ -342,7 +342,7 @@ def checklist(root, rid, part_a_ok, part_a_na):
 # ---------------------------------------------------------------- main
 
 def shipcheck(root, rid):
-    run = C.current_run(rid)
+    run = C.current_run(root)
     run_id = os.path.basename(run) if run else "adhoc-%s" % time.strftime("%Y%m%d-%H%M%S")
     run_id = re.sub(r"[^a-z0-9_.-]", "-", run_id.lower())
     result = {"ts": C.now_iso(), "run_id": run_id, "part_a": {"applicable": False, "checks": []}}

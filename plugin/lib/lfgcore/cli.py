@@ -328,7 +328,7 @@ def cmd_init(a):
     from . import gate as GT
     from . import graphs as G
     root, rid = C.need_repo()
-    docs = C.repo_docs_dir(rid)
+    docs = C.repo_docs_dir(root)
     cmds, path, _ = GT.commands(root, rid)
     res = G.ensure(root, rid, force_full=a.rebuild)
     _docs_after_sync(root, rid, res)
@@ -342,29 +342,51 @@ def cmd_run(a):
     if a.action == "new":
         if not a.arg:
             C.die("usage: lfg run new <slug>", 2)
-        print(C.new_run(rid, a.arg, branch=C.git_branch(root)))
+        print(C.new_run(root, a.arg))
         return 0
     if a.action == "path":
-        r = C.current_run(rid)
+        r = C.current_run(root)
         if not r:
+            from . import knowledge as K
+            old = K.legacy_current(root)
+            if old:
+                sys.stderr.write("the current run %s is still in ~/.lfg from before runs moved into the repo: run "
+                                 "`lfg knowledge migrate` (or --dry-run first), don't start a new one\n" % old)
+                return 1
             sys.stderr.write("no current run for %s - start one with `lfg run new <slug>`\n" % rid)
             return 1
         print(os.path.join(r, a.arg) if a.arg else r)
         return 0
+    if a.action == "scratch":
+        r = C.current_run(root)
+        if not r:
+            sys.stderr.write("no current run for %s - start one with `lfg run new <slug>`\n" % rid)
+            return 1
+        print(C.scratch_dir(root, r))
+        return 0
     if a.action == "set":
-        return _run_set(rid, a)
-    cur = os.path.basename(C.current_run(rid) or "")
-    for d in sorted(os.listdir(C.runs_dir(rid)), reverse=True)[:20]:
-        if os.path.isdir(os.path.join(C.runs_dir(rid), d)):
+        return _run_set(root, rid, a)
+    if a.action == "use":
+        runs = C.runs_dir(root, create=False)
+        name = os.path.basename(a.arg or "")
+        if not name or not os.path.isfile(os.path.join(runs, name, "run.json")):
+            C.die("usage: lfg run use <run-id> (one of `lfg run list`)", 2)
+        C.write_text(os.path.join(runs, "CURRENT"), name + "\n")
+        print("current run: %s" % os.path.join(runs, name))
+        return 0
+    cur = os.path.basename(C.current_run(root) or "")
+    runs = C.runs_dir(root, create=False)
+    for d in sorted(os.listdir(runs) if os.path.isdir(runs) else [], reverse=True)[:20]:
+        if os.path.isdir(os.path.join(runs, d)):
             print(("* " if d == cur else "  ") + d)
     return 0
 
 
-def _run_set(rid, a):
+def _run_set(root, rid, a):
     """`lfg run set lane=standard stage=plan issue=ACME-4225`: record them in run.json; a stage moves the linked
     Issue in dev-graph. Lanes only go up unless --force (checkpoint 6: only the user lowers a lane)."""
     from . import tracker as T
-    r = C.current_run(rid)
+    r = C.current_run(root)
     if not r:
         C.die("no current run for %s - start one with `lfg run new <slug>`" % rid)
     pairs = ([a.arg] if a.arg else []) + list(a.more or [])
@@ -384,7 +406,7 @@ def _run_set(rid, a):
         C.die("lane %s -> %s would lower it; only the user can (re-run with --force once they said so)" % (old, new))
     meta.update(kv)
     if "issue" in kv:
-        meta["issue"] = T.slug_for(kv["issue"])
+        meta["issue"] = T.resolve(kv["issue"])
     meta["updated"] = C.now_iso()
     C.write_json(p, meta)
     print("run.json: %s" % ", ".join("%s=%s" % (k, meta[k]) for k in ("lane", "stage", "issue") if meta.get(k)))
@@ -394,6 +416,62 @@ def _run_set(rid, a):
             print("dev-graph: %s -> %s" % (res["slug"], res["status"]))
         except Exception as e:  # bookkeeping must not stop the pipeline; say so instead
             print("dev-graph: NOT updated (%s)" % (getattr(e, "reason", None) or e))
+    return 0
+
+
+def cmd_knowledge(a):
+    """`lfg knowledge sync | status | migrate [--dry-run] [--take-main-nodes]`: see knowledge.py."""
+    from . import knowledge as K
+    root, rid = C.need_repo()
+    if a.action == "status":
+        last = K.last_sync(root)
+        files, bad = K.read_files(root)
+        out = {"folder": C.knowledge_dir(root, create=False), "repo_id": rid, "branch": K.branch_for(root),
+               "node_files": len(files), "bad_files": bad, "last_sync": last.get("synced_at"),
+               "from_before": {k: {x: len(v) for x, v in w.items()} for k, w in K.legacy(root).items()},
+               "hidden_from_git": K.hidden_by_exclude(root)}
+        C.emit(out, a.json, lambda o: print("\n".join("%s: %s" % kv for kv in o.items())))
+        return 0
+    if a.action == "migrate":
+        res = K.migrate(root, dry_run=a.dry_run)
+        if a.take_main_nodes and not a.dry_run:
+            res["took_from_main"] = K.take_main_nodes(root)
+
+        def human(r):
+            if not r["from"]:
+                print("nothing in ~/.lfg to move for this repo")
+                return
+            print("%s %d run(s) from %s into %s" % ("would move" if r["dry_run"] else "moved", len(r["runs"]),
+                                                   ", ".join(r["from"]), r["to"]))
+            for p in r["kept_both"]:
+                print("  kept both, merge by hand: %s" % p)
+            for p in r["left"]:
+                print("  left in place (live /build worktrees): %s" % p)
+            if r.get("backup"):
+                print("originals: %s" % r["backup"])
+            if r.get("unhidden"):
+                print(".lfg/ is visible to git again (took back the line an older `lfg enable` put in "
+                      ".git/info/exclude)")
+            if r.get("took_from_main") is not None:
+                print("copied %d node(s) from dev-graph main" % len(r["took_from_main"]))
+            if not r["dry_run"]:
+                print("The files are unstaged in .lfg/: review and commit them with your work.")
+        C.emit(res, a.json, human)
+        return 0
+    try:
+        res = K.sync_locked(root)
+    except RuntimeError as e:
+        if a.quiet:
+            return 1
+        C.die("dev-graph: %s" % e)
+    if not a.quiet:
+        C.emit(res, a.json, lambda r: print(
+            "knowledge: %s" % r["skipped"] if r.get("skipped") else
+            "knowledge: %d node file(s) on %s%s%s%s" % (
+                r["files"], r["branch"], ", rebuilt" if r["rebuilt"] else "",
+                "".join("\n  from the graph: %s" % k for k in r["written"]),
+                "".join("\n  changed on both sides, kept the file: %s" % k for k in r["conflicts"]) +
+                "".join("\n  unreadable: %s" % b for b in r["bad"]))))
     return 0
 
 
@@ -415,7 +493,7 @@ def cmd_worktree(a):
             res = W.remove(root, a.name)
     except (ValueError, RuntimeError) as e:
         C.die(str(e))
-    r = C.current_run(rid)
+    r = C.current_run(root)
     if r:
         p = os.path.join(r, "run.json")
         meta = C.read_json(p, {}) or {}
@@ -438,7 +516,8 @@ def cmd_issue(a):
     from . import tracker as T
     try:
         if a.action == "show":
-            out = T.lookup(T.slug_for(a.key)) or {"slug": T.slug_for(a.key), "found": False}
+            slug = T.resolve(a.key, new=False)  # never make up a key just to say it isn't there
+            out = (T.lookup(slug) if slug else None) or {"slug": slug or T.slug_for(a.key), "found": False}
         else:
             out = T.sync(a.key, title=a.title, issue_type=a.type, status=a.status, priority=a.priority,
                          description=a.description)
@@ -468,7 +547,7 @@ def cmd_repo(a):
     elif a.action == "graph":
         print(os.path.join(C.main_root(root), "graphify-out", "graph.json"))
     else:
-        print(C.repo_docs_dir(rid) if a.action == "docs" else rid)
+        print(C.repo_docs_dir(root) if a.action == "docs" else rid)
     return 0
 
 
@@ -623,7 +702,7 @@ def cmd_feedback(a):
     p = C.lfg_path("feedback", rid + ".json")
     fb = C.read_json(p, {}) or {}
     fb[a.finding] = {"verdict": a.verdict, "note": a.note or "", "ts": C.now_iso(),
-                     "run": os.path.basename(C.current_run(rid) or "")}
+                     "run": os.path.basename(C.current_run(root) or "")}
     C.write_json(p, fb)
     print("recorded %s: %s" % (a.finding, a.verdict))
     return 0
@@ -786,10 +865,19 @@ def main(argv=None):
     for f in ("--background", "--allow-stale", "--json", "--quiet", "--rebuild"):
         g.add_argument(f, action="store_true")
     r = sp.add_parser("run")
-    r.add_argument("action", choices=["new", "path", "list", "set"])
+    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use"],
+                   help="scratch: this machine's folder for the current run (/build's ticket worktrees); "
+                        "use: make a run current (taking over a teammate's)")
     r.add_argument("arg", nargs="?")
     r.add_argument("more", nargs="*", help="set: more key=value pairs")
     r.add_argument("--force", action="store_true", help="set: allow lowering the lane (only on the user's word)")
+    kn = sp.add_parser("knowledge", help="the repo's shared knowledge in .lfg/ (sync with dev-graph, migrate)")
+    kn.add_argument("action", choices=["sync", "status", "migrate"])
+    kn.add_argument("--dry-run", action="store_true", help="migrate: only say what would move")
+    kn.add_argument("--take-main-nodes", action="store_true",
+                    help="migrate: also copy every Decision, Learning, ... on dev-graph's main into this repo's files")
+    kn.add_argument("--json", action="store_true")
+    kn.add_argument("--quiet", action="store_true")
     wt = sp.add_parser("worktree", help="work on another branch in its own folder (shares this repo's graphs)")
     wt.add_argument("action", choices=["new", "list", "remove"])
     wt.add_argument("name", nargs="?", help="new: branch; remove: folder name or branch")
@@ -901,6 +989,7 @@ def main(argv=None):
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
             "usage": cmd_usage, "vendor": cmd_vendor, "omnigraph": cmd_omnigraph, "headroom": cmd_headroom,
-            "playbooks": cmd_playbooks, "issue": cmd_issue, "worktree": cmd_worktree, "setup": cmd_setup,
+            "playbooks": cmd_playbooks, "issue": cmd_issue, "worktree": cmd_worktree, "knowledge": cmd_knowledge,
+            "setup": cmd_setup,
             "enable": cmd_enable, "disable": cmd_disable, "packs": cmd_packs, "changes": cmd_changes,
             "uninstall": cmd_uninstall}[a.cmd](a)

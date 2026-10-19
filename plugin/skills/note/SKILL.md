@@ -32,7 +32,7 @@ No graph preflight: `/note` never touches code. `lfg rule remember` for the item
 
 ## Output
 
-The approved nodes, plus a one-line confirmation per item in chat. Nothing in the repo or the run folder (except "To remember" in `progress.md` when the graph is down).
+The approved nodes, plus a one-line confirmation per item in chat. dev-graph nodes reach the repo's `.lfg/nodes/` at the next `lfg knowledge sync`, to be committed with the work; second-brain notes never do. Nothing in the run folder (except "To remember" in `progress.md` when the graph is down).
 
 ## Rules
 

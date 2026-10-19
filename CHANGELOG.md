@@ -2,6 +2,30 @@
 
 All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.json`.
 
+## Unreleased
+
+A repo's LFG knowledge now lives in the repo, in `.lfg/`, committed with the work, so a teammate who checks out a branch gets the same context and their additions flow back. See `docs/team-knowledge.md`.
+
+### Added
+- `.lfg/` in each repo: runs (`runs/<run-id>/`), glossary and ADRs (`docs/`), `commands.json`, `shipcheck.json`, and the shared dev-graph nodes as one markdown file each (`nodes/<Type>/<slug>.md`). `.lfg/.gitignore` keeps machine-only files and all security reports out of git.
+- `.lfg/repo-id`: the repo id is stored once, so adding or changing a remote no longer orphans runs and docs.
+- dev-graph keeps each checkout on its own branch (`repo/<repo-id>`, `repo/<repo-id>--wt-<hash>` for worktrees); the MCP server is pinned to it.
+- `lfg knowledge sync | status | migrate [--dry-run] [--take-main-nodes]`. Sync runs in the background at session start and after every turn.
+- `lfg run use <run-id>` to pick up a teammate's run; session start offers unfinished runs on the checked-out branch.
+- `lfg run scratch`: this machine's folder for `/build` worktrees, `/spike` prototypes and `/secure audit` reports.
+
+### Changed
+- `lfg enable` no longer hides `.lfg/` from git; `lfg knowledge migrate` takes back the line older versions added.
+- New free-text issues get a short random suffix (`iss-fix-login-3f2a`) so two people's issues never merge.
+- The guard protects `.lfg/repo-id` and `.lfg/.gitignore` and blocks a recursive delete of a repo's `.lfg/`.
+- CI installs the Omnigraph CLI so the knowledge-sync tests run.
+
+### Fixed
+- Runs started in a repo with no commits recorded their branch as `detached@`.
+
+### Upgrading
+Install this version first, then run `lfg knowledge migrate --dry-run` in each repo, then without `--dry-run`. Until a repo is migrated, its old runs stay in `~/.lfg` and session start says so.
+
 ## 0.2.0 (2026-10-14)
 
 LFG no longer changes Claude Code for every session on the machine. It is now installed off, turned on per repo, and every change it makes outside `~/.lfg` is recorded and reversible.

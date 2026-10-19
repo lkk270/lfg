@@ -28,7 +28,7 @@ adapted-from: mattpocock/skills/code-review (MIT, © 2026 Matt Pocock)
 1. **Pin the base.** Default: `git merge-base HEAD origin/main`; use the user's ref if given. The change is `git diff <base>` (working tree, since nothing is committed) plus untracked files from `git status --porcelain`. Empty change or bad ref → stop here.
 2. **Shape the change.** `get_minimal_context_tool`, then `detect_changes_tool` (risk-scored changed nodes) and `get_review_context_tool` for scoped snippets. These are the review set; read other files only if a finding needs them.
 3. **Gather each axis's sources.**
-   - **Standards:** the repo's `CODING_STANDARDS.md` / `CONTRIBUTING.md` / lint docs, `~/.lfg/repos/<repo-id>/docs/`, plus the smell baseline below.
+   - **Standards:** the repo's `CODING_STANDARDS.md` / `CONTRIBUTING.md` / lint docs, the repo's `.lfg/docs/`, plus the smell baseline below.
    - **Spec:** `01-brief.md` acceptance criteria, `02-design.md`, `tasks.json` steps and `verification`, and the Linear issue (read only). No spec anywhere → ask once; if there is none, the Spec axis reports "no spec available".
    - **Blast radius:** `get_impact_radius_tool` and `get_affected_flows_tool` on the changed nodes; the dev-graph `Component`s they map to and their `Principle`, `Invariant`, `Gap` and `Decision` nodes; `04-qa.md` (untested nodes), `05-secure.json`, `05-pentest.json`.
 4. **Review the three axes in parallel subagents** (use the `expert-review` agent; Opus in Hotfix, Sonnet diff-only in Express). Each gets the base ref, the review set and only its own sources, and returns findings in the schema below, under 400 words of prose.
