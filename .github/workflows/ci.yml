@@ -10,11 +10,14 @@ permissions:
 
 jobs:
   test:
-    name: tests (macOS, Python ${{ matrix.python }})
-    runs-on: macos-latest
+    # Linux, because GitHub's macOS runners sit queued for so long they get cancelled (no runner within the
+    # timeout), which reads as a failure. macos.yml runs the same tests on macOS weekly and on demand.
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -24,10 +27,13 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Omnigraph CLI (the Knowledge pack's; the knowledge-sync tests run it against a throwaway store)
-        run: brew install ModernRelay/tap/omnigraph && omnigraph version
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"; fi
+          brew install ModernRelay/tap/omnigraph && omnigraph version
       - name: Unit and install-flow tests (sandboxed HOME, fake claude)
         run: python -m unittest discover -s tests -v
       - name: Installer dry run changes nothing
+        if: runner.os == 'macOS'  # the installer refuses Linux; macos.yml runs this step
         run: |
           export HOME="$(mktemp -d)"
           ./install.sh --dry-run
