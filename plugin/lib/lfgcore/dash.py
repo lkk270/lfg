@@ -189,16 +189,107 @@ def _run_summary(d):
     tl = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", []) if isinstance(tasks, dict) else []
     stages = _stage_state(d)
     title, about = _about(d, rv)
+    ready = None if rd is None else ("green" if rd.get("green") else "red")
+    if ready and _newer_work(d, os.path.join(d, "ready.json")):
+        ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
     return {"run": os.path.basename(d), "slug": meta.get("slug"), "created": meta.get("created"),
             "title": title, "about": about,
             "branch": meta.get("branch") or "",
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()),
-            "ready": None if rd is None else ("green" if rd.get("green") else "red"),
+            "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),
             "review": (rv or {}).get("verdict"), "secure": _verdict((se or {}).get("verdict")),
             "pentest": (pt or {}).get("status") if isinstance(pt, dict) else None,
             "shipcheck": None if sc is None else ("pass" if sc.get("pass") else "fail"),
             "tasks": {"total": len(tl), "done": sum(1 for t in tl if isinstance(t, dict) and t.get("passes"))}}
+
+
+def checks_running(d):
+    """When `lfg gate` started from the dashboard is still running for run dir `d`: its start time, else None."""
+    m = C.read_json(os.path.join(d, "gate-running.json"), None)
+    if not isinstance(m, dict):
+        return None
+    try:
+        os.kill(int(m.get("pid")), 0)
+    except (OSError, TypeError, ValueError):
+        return None
+    return m.get("started") or True
+
+
+def _newer_work(d, since):
+    """Did the run's work (build notes, patches, task list) change after the file `since` was written?"""
+    try:
+        t = os.path.getmtime(since)
+    except OSError:
+        return False
+    work = glob.glob(os.path.join(d, "03-*.md")) + glob.glob(os.path.join(d, "patches", "*")) + \
+        [os.path.join(d, "tasks.json")]
+    return any(os.path.getmtime(p) > t + 1 for p in work if os.path.isfile(p))
+
+
+def _for_repo(summary, mine, d=None, rid=None):
+    """A shared run as seen from one of the other repos it has tasks for: the brief, design and task list are
+    shared; build counts once all of this repo's tasks pass; the checks, review and ship files after that are
+    about the owner's work, so they neither count nor show here."""
+    every = bool(mine) and all(t.get("passes") for t in mine)
+    st = summary["stages"]
+    stages = {k: (bool(st.get(k)) if k in ("brief", "design") else k == "tasks" or (k == "build" and every))
+              for k, _, _ in STAGES}
+    part = {}  # this repo's own stage results in the shared run (04-qa-portal.md, 05-secure-portal.json, ...)
+    for key, _, pat in STAGES:
+        if d and rid and "*" not in pat and key not in ("brief", "design", "tasks"):
+            hit = next((p for label, p in _part_files(d, pat).items() if repo_matches(rid, label)), None)
+            if hit:
+                stages[key], part[key] = True, hit
+    se = C.read_json(part["secure"], {}) if "secure" in part else {}
+    rv = C.read_json(part["review"], {}) if "review" in part else {}
+    sc = C.read_json(part["ship"], None) if "ship" in part else None
+    rd = C.read_json(part["gate"], None) if "gate" in part else None
+    return dict(summary, stages=stages, progress=sum(stages.values()),
+                ready=None if rd is None else ("green" if rd.get("green") else "red"),
+                review=(rv or {}).get("verdict"), secure=_verdict((se or {}).get("verdict")), pentest=None,
+                shipcheck=None if sc is None else ("pass" if sc.get("pass") else "fail"),
+                tasks={"total": len(mine), "done": sum(bool(t.get("passes")) for t in mine)})
+
+
+def _repo_name(rid):
+    root = repo_root(rid)
+    return (os.path.basename(root.rstrip("/")) if root else re.sub(r"-[0-9a-f]{8}$", "", rid)).lower()
+
+
+def repo_matches(rid, value):
+    """Does a free-text repo label (a task's "repo", an issue's "Repo:") mean repo `rid`? Exact folder name, or its
+    last part(s): "portal" and "compliance-portal" both mean aegis-compliance-portal."""
+    v, name = str(value or "").strip().lower().rstrip("/").rsplit("/", 1)[-1], _repo_name(rid)
+    return bool(v) and (v == name or name.endswith("-" + v))
+
+
+def _tasks(d):
+    t = C.read_json(os.path.join(d, "tasks.json"), []) or []
+    t = t.get("tasks", []) if isinstance(t, dict) else t
+    return [x for x in t if isinstance(x, dict)]
+
+
+def shared_runs(rid):
+    """Runs filed under another repo whose tasks.json has tasks for this one (one run can span several repos):
+    [(owner rid, run dir, [this repo's tasks])], newest first."""
+    out = []
+    for other in repo_ids():
+        if other == rid:
+            continue
+        for d in _run_files(other, ""):
+            mine = [t for t in _tasks(d) if repo_matches(rid, t.get("repo"))]
+            if mine:
+                out.append((other, d, mine))
+    return sorted(out, key=lambda x: os.path.basename(x[1]), reverse=True)
+
+
+def _run_dir(rid, run):
+    """A run of this repo, or one filed under another repo that has tasks for this one."""
+    d = C.lfg_path("runs", rid, run)
+    if os.path.isdir(d):
+        return d
+    return next((d for _, d, _ in shared_runs(rid) if os.path.basename(d) == run), None)
 
 
 def runs(rid, branch=None):
@@ -209,12 +300,19 @@ def runs(rid, branch=None):
             r = _run_summary(d)
             r["current"] = r["run"] == cur
             out.append(r)
+    if not branch:  # a shared run's branch is the other repo's, so it only shows under all branches
+        for owner, d, mine in shared_runs(rid):
+            r = _for_repo(_run_summary(d), mine, d, rid)
+            r.update(current=False, owner=owner, owner_name=_repo_name(owner), tasks_here=len(mine),
+                     tasks_here_done=sum(bool(t.get("passes")) for t in mine))
+            out.append(r)
+        out.sort(key=lambda r: r["run"], reverse=True)
     return {"runs": out, "stages": [[k, label] for k, label, _ in STAGES]}
 
 
 def run_detail(rid, run):
-    d = C.lfg_path("runs", rid, run)
-    if not os.path.isdir(d):
+    d = _run_dir(rid, run)
+    if not d:
         return _na("run not found")
     files = []
     for root, _dirs, fs in os.walk(d):
@@ -225,13 +323,20 @@ def run_detail(rid, run):
     tasks = C.read_json(os.path.join(d, "tasks.json"), None)
     tl = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", []) if isinstance(tasks, dict) else []
     ready = C.read_json(os.path.join(d, "ready.json"), None) or {}
-    return dict(_run_summary(d), files=files, tasks_list=tl,
+    owner = os.path.basename(os.path.dirname(d))
+    summary = _run_summary(d)
+    if owner != rid:  # opened from another repo it has tasks for: that repo's part of it
+        tl = [t for t in _tasks(d) if repo_matches(rid, t.get("repo"))]
+        summary = _for_repo(summary, tl, d, rid)
+        ready = {}  # its checks ran in the owner's repo, on the owner's code
+    summary["current"] = owner == rid and C.read_text(C.lfg_path("runs", rid, "CURRENT")).strip() == run
+    return dict(summary, files=files, tasks_list=tl, owner_name=_repo_name(owner) if owner != rid else "",
                 checks=[dict({k: c.get(k) for k in ("name", "cmd", "exit", "seconds")},
                              tail=str(c.get("tail") or "")[-2000:]) for c in ready.get("checks", [])])
 
 
 def run_file(rid, run, name):
-    base = os.path.realpath(C.lfg_path("runs", rid, run))
+    base = os.path.realpath(_run_dir(rid, run) or C.lfg_path("runs", rid, run))
     p = os.path.realpath(os.path.join(base, name))
     if not p.startswith(base + os.sep) or not os.path.isfile(p):
         return {"text": "not found"}
@@ -517,20 +622,128 @@ def _rows(v):
     return v if isinstance(v, list) else []
 
 
-def issues():
+STALE_DAYS = 14
+TERMINAL = {"done", "canceled", "duplicate"}
+STUB = re.compile(r"^\s*(?:Repo:\s*\S+\s+Run\s+\S+?\.?(?:\s+Brief ACs:\s*[\d,\s]+)?)?\s*$")  # empty or a bare pointer
+REPO_LINE = re.compile(r"^Repo:\s*([\w.-]+?)\.?(?:\s|$)", re.M)
+REF_SLUG = re.compile(r"^[a-z][a-z0-9]+-\d+$")  # a tracker key as LFG stores it: ATO-4225 -> ato-4225
+
+
+def _issue_key(key):
+    """Compare issues by key: `ATO-4225`, `ato-4225`, `aeginv-001` and `iss-aeginv-001` are told apart only by the
+    iss- prefix and case, which differ with how each was filed."""
+    from . import tracker as T
+    try:
+        slug = T.slug_for(str(key))
+    except SystemExit:
+        return ""
+    return slug[4:] if slug.startswith("iss-") else slug
+
+
+def _run_links(rid):
+    """What this repo's runs say about issues: [(branch, issue keys they name, {task issue key: passed}, text)]."""
+    out = []
+    for d in _run_files(rid, ""):
+        meta = C.read_json(os.path.join(d, "run.json"), {}) or {}
+        tasks = C.read_json(os.path.join(d, "tasks.json"), []) or []
+        tasks = tasks.get("tasks", []) if isinstance(tasks, dict) else tasks
+        tasks = {_issue_key(t.get("id")): t for t in tasks if isinstance(t, dict) and t.get("id")}
+        done = {k: bool(t.get("passes")) for k, t in tasks.items()}
+        named = {_issue_key(meta["issue"])} if meta.get("issue") else set()
+        text = " ".join(C.read_text(os.path.join(d, f)) for f in ("01-brief.md", "02-design.md")).lower()
+        out.append({"branch": meta.get("branch") or "", "named": (named | set(done)) - {""}, "done": done,
+                    "text": text, "tasks": tasks, "run": os.path.basename(d), "dir": d, "own": named})
+    for _, d, mine in shared_runs(rid):  # another repo's run, only its tasks for this repo; no branch here
+        tasks = {_issue_key(t.get("id")): t for t in mine if t.get("id")}
+        out.append({"branch": "", "named": set(tasks) - {""}, "done": {k: bool(t.get("passes")) for k, t in
+                                                                     tasks.items()},
+                    "text": "", "tasks": tasks, "run": os.path.basename(d), "dir": d, "own": set()})
+    return out
+
+
+def issue_links(rid, issues):
+    """Which of `issues` belong to repo `rid`, and on which branches. dev-graph issues carry no repo, so this comes
+    from local evidence: a run of this repo names the issue (run.json, a task in tasks.json, its brief or design;
+    the issue is on that run's branch), or a local branch's name holds its tracker key (ato-4232 in
+    keshav/ato-4232-...). An issue whose description says `Repo: <name>` belongs to that repo only.
+    Returns ({slug: set(branches)}, {slug: True when a run's task for it passed},
+    {slug: (run, description, done-when) from the run's tasks.json or brief})."""
+    from . import tracker as T
+    links, passed, text_for = collections.defaultdict(set), {}, {}
+    for r in _run_links(rid):
+        branch, named, done, text = r["branch"], r["named"], r["done"], r["text"]
+        for i in issues:
+            slug = i.get("slug") or ""
+            key = _issue_key(slug)
+            if key in done:
+                passed[slug] = passed.get(slug, False) or done[key]
+            if key in r["tasks"] and slug not in text_for:
+                text_for[slug] = (r["run"],) + T.task_text(r["tasks"][key])
+            elif key in r["own"] and slug not in text_for:
+                text_for[slug] = (r["run"], _about(r["dir"])[1], T.brief_section(r["dir"], "Acceptance criteria"))
+            if key in named or (len(key) > 5 and re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(key), text)):
+                links[slug].add(branch)
+    root = repo_root(rid)
+    for i in issues:  # an issue that names its repo ("Repo: aegis-agent.") goes there, whichever run filed it
+        m = REPO_LINE.search(i.get("description") or "")
+        if m and repo_matches(rid, m.group(1)):
+            links.setdefault(i["slug"], set())
+        elif m:
+            links.pop(i.get("slug"), None)
+    gb = git_branches(root) or {}
+    for i in issues:
+        keys = {k.lower() for k in (i.get("slug"), i.get("legacyRef")) if k and REF_SLUG.match(k.lower())}
+        for b in gb.get("local", []):
+            if any(re.search(r"(?<![a-z0-9])%s(?![0-9])" % re.escape(k), b.lower()) for k in keys):
+                links[i["slug"]].add(b)
+    return links, passed, text_for
+
+
+def issues(rid=None, branch=None):
     why = og_access("dev-graph")
     if why:
         return _na(why)
     ws = C.config()["linear"].get("workspace") or ""
     allq = _list("dev-graph", "Issue", ["slug", "title", "description", "acceptanceCriteria", "status", "priority",
                                         "issueType", "legacyRef", "updatedAt"], "updatedAt", 300)
-    out = {"available": True, "linear_workspace": ws,
-           "issues": _rows(allq), "error": allq.get("error") if isinstance(allq, dict) else None,
-           "ready": _rows(_inv("dev-graph", "ready")), "blocked": _rows(_inv("dev-graph", "blocked")),
-           "stale": _rows(_inv("dev-graph", "stale_candidates")), "epics": _rows(_inv("dev-graph", "open_epics")),
+    every = _rows(allq)
+    links, passed, text_for = issue_links(rid, every) if rid else ({}, {}, {})
+    keep = []
+    for i in every:
+        on = links.get(i.get("slug"))
+        if rid and on is None:
+            continue
+        if branch and (branch == UNRECORDED and "" not in on or branch != UNRECORDED and branch not in on):
+            continue
+        i = dict(i, branches=sorted(b for b in on or () if b))
+        if passed.get(i["slug"]) and i.get("status") not in TERMINAL:  # the run finished it; dev-graph lags
+            i.update(graph_status=i.get("status"), status="done")
+        run, desc, done_when = text_for.get(i["slug"], ("", "", ""))
+        if run and (desc and STUB.match(i.get("description") or "") or done_when and not i.get("acceptanceCriteria")):
+            if desc and STUB.match(i.get("description") or ""):  # filed without its text: show the run's
+                i["description"] = desc
+            i["acceptanceCriteria"] = i.get("acceptanceCriteria") or done_when
+            i["text_from"] = run
+        keep.append(i)
+    open_ = {i["slug"] for i in keep if i.get("status") not in TERMINAL}
+
+    def only(rows):
+        seen, out = set(), []
+        for r in rows:  # one row per blocker comes back: list each issue once
+            if r.get("slug") in open_ and r["slug"] not in seen:
+                seen.add(r["slug"])
+                out.append(r)
+        return out
+    cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - STALE_DAYS * 86400))
+    out = {"available": True, "linear_workspace": ws, "issues": keep,
+           "error": allq.get("error") if isinstance(allq, dict) else None,
+           "ready": only(_rows(_inv("dev-graph", "ready"))), "blocked": only(_rows(_inv("dev-graph", "blocked"))),
+           "stale": [i for i in keep if i["slug"] in open_ and str(i.get("updatedAt") or "") < cutoff],
+           "stale_days": STALE_DAYS, "hidden": len(every) - len(keep),
+           "epics": _rows(_inv("dev-graph", "open_epics")),
            "prs": _rows(_list("dev-graph", "PR", ["slug", "title", "status", "githubRef", "updatedAt"],
                               "updatedAt", 100))}
-    out["by_status"] = dict(collections.Counter(i.get("status") or "?" for i in out["issues"]))
+    out["by_status"] = dict(collections.Counter(i.get("status") or "?" for i in keep))
     return out
 
 
@@ -540,15 +753,16 @@ def knowledge():
         return _na(why)
     return {
         "available": True,
-        "decisions": _rows(_list("dev-graph", "Decision", ["slug", "title", "status", "decision", "createdAt"],
-                                 "createdAt")),
+        "decisions": _rows(_list("dev-graph", "Decision", ["slug", "title", "status", "context", "decision",
+                                                           "consequences", "createdAt"], "createdAt")),
         "principles": _rows(_list("dev-graph", "Principle", ["slug", "statement", "polarity", "status",
-                                                             "rationale"], "updatedAt")),
-        "invariants": _rows(_list("dev-graph", "Invariant", ["slug", "statement", "status", "guardRef"],
+                                                             "rationale", "correctAlternative", "specRef"],
+                                  "updatedAt")),
+        "invariants": _rows(_list("dev-graph", "Invariant", ["slug", "statement", "status", "guardRef", "specRef"],
                                   "updatedAt")),
         "unheld": _rows(_inv("dev-graph", "unheld_invariants")),
-        "gaps": _rows(_list("dev-graph", "Gap", ["slug", "title", "state", "currentBehavior", "targetBehavior"],
-                            "updatedAt")),
+        "gaps": _rows(_list("dev-graph", "Gap", ["slug", "title", "state", "currentBehavior", "targetBehavior",
+                                                 "updatedAt"], "updatedAt")),
         "learnings": _rows(_list("dev-graph", "Learning", ["slug", "title", "learningKind", "body", "createdAt"],
                                  "createdAt")),
         "incidents": _rows(_list("dev-graph", "Incident", ["slug", "title", "severity", "status", "startedAt"],
@@ -562,7 +776,7 @@ def brain():
     why = og_access("second-brain")
     if why:
         return _na(why)
-    notes = _rows(_inv("second-brain", "notes_recent"))
+    notes = _rows(_list("second-brain", "Note", ["slug", "name", "kind", "content", "when", "tags"], "when", 100))
     return {"available": True, "notes": notes,
             "kinds": dict(collections.Counter(n.get("kind") or "?" for n in notes)),
             "preferences": _rows(_inv("second-brain", "notes_by_kind", {"kind": "preference"})),
@@ -575,10 +789,39 @@ def brain():
 
 # ---------------------------------------------------------------- reviews + security
 
+def _mtime_iso(p):
+    """When a file was written, for results that don't record it themselves."""
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(os.path.getmtime(p)))
+    except OSError:
+        return None
+
+
+def _part_files(d, name):
+    """{repo label: path} for `<stem>-<label><ext>` beside `name` in run dir `d`: a stage's result for one repo's
+    part of a run that spans repos (05-secure-portal.json is the portal's security check)."""
+    stem, ext = os.path.splitext(name)
+    out = {}
+    for p in glob.glob(os.path.join(d, "%s-*%s" % (stem, ext))):
+        out[os.path.basename(p)[len(stem) + 1:-len(ext) or None]] = p
+    return out
+
+
+def stage_files(rid, name, branch=None):
+    """Newest first: this repo's `name` (e.g. 05-secure.json) from its own runs, plus the per-repo variants
+    (05-secure-<repo>.json) meant for it, from its own runs and, under all branches, from runs filed under other
+    repos that have tasks for it. Variants for other repos are left to those repos."""
+    out = list(_run_files(rid, name, branch))
+    dirs = list(_run_files(rid, "", branch)) + ([d for _, d, _ in shared_runs(rid)] if not branch else [])
+    for d in dirs:
+        out += [p for label, p in _part_files(d, name).items() if repo_matches(rid, label)]
+    return sorted(set(out), key=lambda p: (os.path.basename(os.path.dirname(p)), os.path.getmtime(p)), reverse=True)
+
+
 def reviews(rid, branch=None):
     findings, blocked, verdicts = [], [], []
     fb = C.read_json(C.lfg_path("feedback", rid + ".json"), {}) or {}
-    for p in _run_files(rid, "06-review.json", branch):
+    for p in stage_files(rid, "06-review.json", branch):
         rv = C.read_json(p, {}) or {}
         run = os.path.basename(os.path.dirname(p))
         verdicts.append({"run": run, "verdict": rv.get("verdict"), "findings": len(rv.get("findings", []))})
@@ -595,27 +838,28 @@ def reviews(rid, branch=None):
 
 def security(rid, branch=None):
     sec, pen = [], []
-    for p in _run_files(rid, "05-secure.json", branch):
+    for p in stage_files(rid, "05-secure.json", branch):
         s = C.read_json(p, {}) or {}
         inv = s.get("inventory") or {}
-        sec.append({"run": os.path.basename(os.path.dirname(p)), "ts": s.get("ts"),
+        sec.append({"run": os.path.basename(os.path.dirname(p)), "ts": s.get("ts") or _mtime_iso(p),
                     "verdict": _verdict(s.get("verdict")),
                     "blocking": _blocking(s), "mode": s.get("mode"), "scope": s.get("scope"),
                     "inventory": {k: len(v) for k, v in inv.items() if isinstance(v, list)},
                     "scanners": [{"tool": x.get("tool"), "exit": x.get("exit"), "note": x.get("note")}
                                  for x in s.get("scanners", [])],
                     "findings": s.get("findings", [])[:200]})
-    for p in _run_files(rid, "05-pentest.json", branch):
+    for p in stage_files(rid, "05-pentest.json", branch):
         s = C.read_json(p, {}) or {}
         keep = ("mode", "model", "status", "next_steps", "preflight_failures")
         pen.append({"run": os.path.basename(os.path.dirname(p)), **{k: s.get(k) for k in keep},
                     "summary": s.get("summary") or s.get("conclusion")})
     ships = []
-    for p in _run_files(rid, "07-shipcheck.json", branch)[:10]:
+    for p in stage_files(rid, "07-shipcheck.json", branch)[:10]:
         s = C.read_json(p, {}) or {}
         checks = shipcheck_items(s)
         counted = [c for c in checks if c["ok"] is not None]
-        ships.append({"run": os.path.basename(os.path.dirname(p)), "pass": s.get("pass"), "ts": s.get("ts"),
+        ships.append({"run": os.path.basename(os.path.dirname(p)), "pass": s.get("pass"),
+                      "ts": s.get("ts") or _mtime_iso(p),
                       "ok": sum(1 for c in counted if c["ok"]), "total": len(counted),
                       "manual": [c["check"] for c in checks if c.get("manual")],
                       "failed": [c["check"] for c in checks if c["ok"] is False],
@@ -881,9 +1125,11 @@ def overview(rid, branch=None):
     u = usage(rid)
     week = [d for d in u["days"] if d["day"] >= time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 86400))]
     why = og_access("dev-graph")
-    work = {"why": why} if why else {"ready": len(_rows(_inv("dev-graph", "ready"))),
-                                     "blocked": len(_rows(_inv("dev-graph", "blocked"))),
-                                     "epics": len(_rows(_inv("dev-graph", "open_epics")))}
+    if why:
+        work = {"why": why}
+    else:
+        iss = issues(rid, branch)
+        work = {"ready": len(iss["ready"]), "blocked": len(iss["blocked"]), "epics": len(iss["epics"])}
     sec = security(rid, branch)
     return {
         "graphs": graph_state(rid), "code": code(rid, full=False), "architecture": architecture(rid, full=False),
