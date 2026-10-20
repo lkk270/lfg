@@ -18,7 +18,7 @@
   --c-gray: #f1f1ef; --c-green: #edf3ec; --c-yellow: #fbf3db; --c-red: #fdebec; --c-blue: #e7f3f8;
   --code-bg: rgba(135, 131, 120, .15); --code-tx: #eb5757;
   --shadow: rgba(15, 15, 15, .05) 0 0 0 1px, rgba(15, 15, 15, .1) 0 3px 6px, rgba(15, 15, 15, .2) 0 9px 24px;
-  --chart-1: #2383e2; --chart-2: #a9cdef;
+  --chart-1: #2383e2; --chart-2: #a9cdef; --series-1: #2a78d6; --series-2: #1baf7a; --series-3: #eb6834;
   --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica,
     "Apple Color Emoji", Arial, sans-serif;
   --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
@@ -40,7 +40,7 @@
     --c-gray: #252525; --c-green: #222b26; --c-yellow: #38311e; --c-red: #362422; --c-blue: #1d282e;
     --code-tx: #ff7369;
     --shadow: rgba(15, 15, 15, .2) 0 0 0 1px, rgba(15, 15, 15, .3) 0 3px 6px, rgba(15, 15, 15, .45) 0 9px 24px;
-    --chart-1: #3d8fe0; --chart-2: #24537d;
+    --chart-1: #3d8fe0; --chart-2: #24537d; --series-1: #3987e5; --series-2: #199e70; --series-3: #d95926;
   }
 }
 
@@ -390,3 +390,34 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+/* Usage: range controls and interactive charts */
+.seg { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.seg label { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13.5px; }
+.seg label.on { background: var(--blue-bg, var(--c-blue)); border-color: transparent; font-weight: 500; }
+.seg input { display: none; }
+.cols { margin-bottom: 14px; }
+.cols .box.stat { min-height: 92px; }
+.filters { margin: 6px 0 4px; gap: 14px; }
+.seg.inline { margin: 0; }
+.chart { position: relative; }
+.chart .axis.faint { stroke-dasharray: 2 4; opacity: .6; }
+.chart g.bar .hit { fill: transparent; }
+.chart g.bar { cursor: pointer; outline: none; }
+.chart g.bar:hover rect:not(.hit), .chart g.bar:focus rect:not(.hit) { filter: brightness(1.18); }
+.chart g.bar.on rect:not(.hit) { stroke: var(--text); stroke-width: 1.5; }
+.ic-tip { position: absolute; pointer-events: none; background: var(--bg, #191919); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.25); white-space: nowrap; z-index: 5; }
+.ic-tip .ic-t { color: var(--muted); margin-bottom: 3px; }
+.ic-tip .ic-r { display: flex; align-items: center; gap: 6px; }
+.ic-tip .ic-r i { width: 10px; height: 2px; display: inline-block; }
+.ic-tip .ic-r b { font-weight: 600; color: var(--text); }
+.ic-tip .ic-r span, .ic-tip .ic-h { color: var(--muted); }
+.ic-tip .ic-h { margin-top: 4px; font-size: 11.5px; }
+.legend .lkey { background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; padding: 2px 4px; }
+.legend .lkey.off { opacity: .45; text-decoration: line-through; }
+#usage-detail:not(:empty) { margin-top: 14px; }
+.chart rect.ghost { fill: none; stroke-width: 1.5; stroke-dasharray: 3 2; }
+.legend i.ghost { background: none; border: 1.5px dashed; width: 9px; height: 9px; }
+#usage-main { position: relative; transition: opacity .15s; }
+#usage-main.is-loading { pointer-events: none; }
+#usage-main.is-loading > * { opacity: .4; }
+#usage-main.is-loading::after { content: "Loading…"; position: absolute; top: 12px; right: 16px; font-size: 13px; color: var(--text); background: var(--soft); padding: 3px 10px; border-radius: 6px; opacity: 1; }

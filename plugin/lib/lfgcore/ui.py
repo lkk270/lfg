@@ -114,6 +114,8 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "headroom":
+        return dash.headroom_detail(int(_arg(q, "days") or 30) if (_arg(q, "days") or "").isdigit() else 30)
     if view == "claude":
         from . import control as K
         return K.claude_view()
@@ -154,7 +156,7 @@ def api(view, q):
     if view == "branches":
         return dash.branches(rid)
     if view == "usage":
-        return dash.usage(rid)
+        return dash.usage(rid, int(_arg(q, "days")) if (_arg(q, "days") or "").isdigit() else 30)
     if view == "graphs":
         return dash.graph_state(rid)
     return {"available": False, "why": "unknown view"}

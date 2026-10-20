@@ -180,6 +180,86 @@ function mountTabs(root = document) {
   });
 }
 
+/* Interactive bars: hover or focus a day for its numbers, click it to pin it (onPick), click a legend key to hide a
+   series. data: [{label, values: [..], raw}], series: [[name, color, fmt]]. The y-axis gutter fits its labels. */
+const ICHARTS = {};
+let ICID = 0;
+function iChart(data, series, opts = {}) {
+  const id = "ic" + ++ICID;
+  ICHARTS[id] = { data, series, opts, hidden: new Set(opts.hidden || []), pick: opts.pick ?? null };
+  return `<div class="ichart" id="${id}">${iChartBody(id)}</div>`;
+}
+function iChartBody(id) {
+  const C = ICHARTS[id], { data, series, opts } = C, h = opts.h || 180;
+  if (!data.length) return '<div class="muted small">Nothing recorded in this period.</div>';
+  const fmt = series[0][2] || compact;
+  const shown = series.map((_, j) => !C.hidden.has(j));
+  const tot = d => d.values.reduce((a, v, j) => a + (shown[j] ? v || 0 : 0), 0);
+  const max = Math.max(...data.map(tot), 1);
+  const P = Math.max(34, 8 + 7 * fmt(max).length), W = 760, top = 14, base = h - 22;
+  const step = (W - P - 8) / data.length, bw = Math.max(3, Math.min(28, step - Math.max(2, step * 0.18)));
+  const x = i => P + 4 + i * step + (step - bw) / 2;
+  const every = Math.ceil(data.length / 9);
+  let bars = "";
+  data.forEach((d, i) => {
+    let y = base;
+    const segs = d.values.map((v, j) => {
+      if (!shown[j] || !v) return "";
+      const bh = Math.max(1, (v / max) * (base - top));
+      y -= bh;
+      const ghost = series[j][3] && series[j][3].ghost;
+      return ghost ? `<rect class="ghost" x="${x(i) + 0.75}" y="${y + 0.75}" width="${bw - 1.5}" height="${Math.max(0, bh - 1.5)}" rx="2" style="stroke:${series[j][1]}"></rect>`
+        : `<rect x="${x(i)}" y="${y}" width="${bw}" height="${bh}" rx="2" style="fill:${series[j][1]}"></rect>`;
+    }).join("");
+    bars += `<g class="bar ${C.pick === i ? "on" : ""}" data-i="${i}" tabindex="0" role="button" aria-label="${esc(d.label)}: ${esc(series.map((sr, j) => shown[j] ? sr[0] + " " + (sr[2] || compact)(d.values[j] || 0) : "").filter(Boolean).join(", "))}"><rect class="hit" x="${P + 4 + i * step}" y="${top}" width="${step}" height="${base - top}"></rect>${segs}</g>`;
+    if (i % every === 0 || data.length <= 10) bars += `<text x="${x(i) + bw / 2}" y="${h - 6}" text-anchor="middle">${esc(d.short || d.label.slice(5))}</text>`;
+  });
+  const grid = [0, 0.5, 1].map(t => `<line class="axis${t ? " faint" : ""}" x1="${P}" x2="${W}" y1="${base - t * (base - top)}" y2="${base - t * (base - top)}"/><text x="${P - 6}" y="${base - t * (base - top) + 4}" text-anchor="end">${esc(fmt(max * t))}</text>`).join("");
+  const legend = series.length > 1 ? `<div class="legend">${series.map(([nm, c, , o], j) => `<button class="lkey ${shown[j] ? "" : "off"}" data-ic-key="${j}" title="Show or hide ${esc(nm)}"><i class="${o && o.ghost ? "ghost" : ""}" style="${o && o.ghost ? "border-color" : "background"}:${c}"></i>${esc(nm)}</button>`).join("")}</div>` : "";
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${h}" role="img" aria-label="${esc(opts.title || "")}">${grid}${bars}</svg><div class="ic-tip" hidden></div></div>${legend}`;
+}
+function wireIChart(id) {
+  const el = document.getElementById(id), C = ICHARTS[id];
+  if (!el || !C) return;
+  const tip = $(".ic-tip", el), svg = $("svg", el);
+  const show = (g, ev) => {
+    const i = +g.dataset.i, d = C.data[i];
+    tip.textContent = "";
+    const t = document.createElement("div"); t.className = "ic-t"; t.textContent = d.label; tip.appendChild(t);
+    C.series.forEach(([nm, c, f], j) => {
+      if (C.hidden.has(j)) return;
+      const r = document.createElement("div"); r.className = "ic-r";
+      const k = document.createElement("i"); k.style.background = c;
+      const v = document.createElement("b"); v.textContent = (f || compact)(d.values[j] || 0);
+      const l = document.createElement("span"); l.textContent = nm;
+      r.append(k, v, l); tip.appendChild(r);
+    });
+    if (C.opts.total) {
+      const tt = C.opts.total(d, C.hidden);
+      if (tt) { const r = document.createElement("div"); r.className = "ic-h"; r.textContent = tt; tip.appendChild(r); }
+    }
+    if (C.opts.onPick) { const h = document.createElement("div"); h.className = "ic-h"; h.textContent = "Click for the breakdown"; tip.appendChild(h); }
+    tip.hidden = false;
+    const box = el.querySelector(".chart").getBoundingClientRect(), gr = g.getBoundingClientRect();
+    const left = Math.min(Math.max(gr.left - box.left + gr.width / 2 - tip.offsetWidth / 2, 0), box.width - tip.offsetWidth);
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(0, gr.top - box.top - tip.offsetHeight - 6) + "px";
+  };
+  $$("g.bar", svg).forEach(g => {
+    g.onpointerenter = e => show(g, e);
+    g.onfocus = e => show(g, e);
+    g.onpointerleave = g.onblur = () => (tip.hidden = true);
+    const pick = () => { if (!C.opts.onPick) return; C.pick = C.pick === +g.dataset.i ? null : +g.dataset.i; el.innerHTML = iChartBody(id); wireIChart(id); C.opts.onPick(C.pick); };
+    g.onclick = pick;
+    g.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+  });
+  $$("[data-ic-key]", el).forEach(b => b.onclick = () => {
+    const j = +b.dataset.icKey;
+    if (C.hidden.has(j)) C.hidden.delete(j); else if (C.hidden.size < C.series.length - 1) C.hidden.add(j);
+    el.innerHTML = iChartBody(id); wireIChart(id);
+  });
+}
+function wireICharts(root) { $$(".ichart", root).forEach(el => wireIChart(el.id)); }
 /* simple bar chart: data=[{label, values:[...]}], series=[[name,color]] */
 function barChart(data, series, h = 160) {
   if (!data.length) return '<div class="muted small">Nothing recorded in this period.</div>';
@@ -1078,20 +1158,94 @@ PAGES.knowledge = async () => {
     <p class="muted small mt">To add something, tell Claude Code what to remember, or use <code>/lfg:note</code>.</p>`;
 };
 
+/* Usage: range and measure in one row above everything they scope; each chart says what it counts. */
+const UR = { days: 30, by: "day", measure: "usd" };
+function weekOf(day) { const d = new Date(day + "T00:00"); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
+function bucket(rows, by, sum) {
+  if (by === "day") return rows.map(r => ({ ...r, key: r.day, label: r.day, short: r.day.slice(5) }));
+  const m = new Map();
+  for (const r of rows) { const k = weekOf(r.day); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+  return [...m].map(([k, rs]) => ({ ...sum(rs), key: k, days: rs, label: "Week of " + k, short: k.slice(5) }));
+}
+function addRows(rs, keys) {
+  const o = {};
+  for (const k of keys) o[k] = rs.reduce((a, r) => a + (r[k] || 0), 0);
+  const models = {};
+  for (const r of rs) for (const [m, v] of Object.entries(r.models || {})) { const t = models[m] || (models[m] = {}); for (const [k2, x] of Object.entries(v)) t[k2] = (t[k2] || 0) + x; }
+  return { ...o, models };
+}
 PAGES.usage = async () => {
-  const d = await api("usage");
-  const t = (d.days || []).reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
+  const [d, H] = await Promise.all([api("usage", { days: UR.days > 30 ? 90 : 30 }), api("headroom", { days: UR.days > 30 ? 90 : 30 })]);
+  const hrDay = Object.fromEntries((((H || {}).when || {}).days || []).map(x => [x.day, x]));
+  const since = new Date(Date.now() - (UR.days - 1) * 864e5).toISOString().slice(0, 10);
+  const days = (d.days || []).filter(x => x.day >= since).map(x => ({ ...x, hr_saved: (hrDay[x.day] || {}).saved || 0, hr_usd: (hrDay[x.day] || {}).usd || 0 }));
+  const hrPending = H && H.pending;
+  const rangeUsd = days.reduce((a, x) => a + (x.usd || 0), 0), hrUsd = days.reduce((a, x) => a + (x.hr_usd || 0), 0);
+  const hrTokens = days.reduce((a, x) => a + (x.hr_saved || 0), 0);
+  const t = days.reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
   const hit = pct(t.cache_read, t.cache_read + t.input + t.cache_write);
   const hr = d.headroom || {}, life = hr.lifetime || {}, sp = d.spend || {};
-  return `${head("Usage", "What Claude Code used and cost, across all your projects, over the last 30 days.")}
-    ${sp.available ? `<div class="cols">${stat("Spent today", usd(sp.today))}${stat("Last 7 days", usd(sp["7d"]))}${stat("Last 30 days", usd(sp["30d"]), "at API prices, worked out by tokensave from Claude Code's logs")}</div>`
-      : sp.pending ? `<p class="muted small" data-spend-pending>Working out costs…</p>` : `<p class="muted small">Cost isn't shown: ${fmtWhy(sp.why || "not available")}.</p>`}
-    <div class="cols">${stat("Tokens sent", compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs less`)}${stat("Tokens written", compact(t.output), "the AI's replies")}${stat("Saved by compression", hr.available && life.calls ? compact(life.tokens_saved) : "—", hr.available && life.calls ? `${life.savings_percent || 0}% smaller before sending${life.cost_usd ? ` · about ${usd(life.cost_usd)} saved, by Headroom's count` : ""}` : hr.pending ? `<span data-spend-pending>checking…</span>` : "not active yet")}</div>
-    ${section("Per day", `<div class="box pad">${barChart((d.days || []).map(x => ({ label: x.day, values: [(x.input || 0) + (x.cache_write || 0), x.output] })), [["Sent (not cached)", "var(--chart-1)"], ["Written", "var(--chart-2)"]])}</div>`)}
-    ${(d.models || []).length ? section("By model", `<div class="box">${table(d.models, [{ k: "model", label: "Model" }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }], { filter: false })}</div>`) : ""}
-    ${sp.available && (sp.models || []).length ? section("Cost by model, last 30 days", `<div class="box">${table(sp.models, [{ k: "model", label: "Model" }, { k: "usd", label: "Cost", num: true, html: r => usd(r.usd) }], { filter: false })}</div>`) : ""}
+  const seg = (key, opts) => `<div class="seg inline">${opts.map(([v, l]) => `<label class="${UR[key] === v ? "on" : ""}"><input type="radio" name="ur-${key}" data-ur="${key}" value="${v}" ${UR[key] === v ? "checked" : ""}>${l}</label>`).join("")}</div>`;
+  const rows = bucket(days, UR.by, rs => addRows(rs, ["input", "output", "cache_read", "cache_write", "usd", "hr_saved", "hr_usd"]));
+  const usdFmt = v => usd(v || 0);
+  const filters_row = `<div class="row filters">${seg("days", [[7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"]])}${seg("by", [["day", "By day"], ["week", "By week"]])}${seg("measure", [["usd", "Dollars"], ["tokens", "Tokens"]])}</div>`;
+  const ghost = { ghost: true };
+  if (hrPending) setTimeout(() => { if ((location.hash.slice(1) || "").startsWith("usage")) softRoute(); }, 2500);
+  const chart = UR.measure === "usd"
+    ? iChart(rows.map(r => ({ label: r.label, short: r.short, values: [r.usd, r.hr_usd], raw: r })), [["Actual cost", "var(--series-1)", usdFmt], ["Saved by Headroom", "var(--series-1)", usdFmt, ghost]],
+        { title: "Cost per " + UR.by, onPick: i => usageDetail(rows, i), total: (x, hid) => hid.has(1) ? "" : `Without Headroom: ${usd((x.values[0] || 0) + (x.values[1] || 0))}` })
+    : iChart(rows.map(r => ({ label: r.label, short: r.short, values: [(r.input || 0) + (r.cache_write || 0), r.cache_read || 0, r.output || 0, r.hr_saved || 0], raw: r })), [["Sent new", "var(--series-1)"], ["Reused from cache", "var(--series-2)"], ["Written by Claude", "var(--series-3)"], ["Removed by Headroom", "var(--series-1)", compact, ghost]],
+        { title: "Tokens per " + UR.by, hidden: [1], onPick: i => usageDetail(rows, i), total: (x, hid) => hid.has(3) ? "" : `Without Headroom: ${compact(x.values.reduce((a, v, j) => a + (hid.has(j) ? 0 : v || 0), 0))} tokens` });
+  state.usageRows = rows;
+  return `${head("Usage", "What Claude Code used and what it would cost at API prices, across every session on this computer.")}
+    ${filters_row}
+    <div class="cols">${stat(`Cost, last ${UR.days} days`, usd(rangeUsd), "the work priced at Anthropic's API rates, from every session's log; on a subscription you pay your plan, not this")}${stat("Cost today", usd(sp.today || 0), "since midnight")}${stat(`Saved by Headroom, last ${UR.days} days`, hrTokens ? usd(hrUsd) : "—", hrTokens ? `${compact(hrTokens)} tokens removed, by Headroom's count` : hrPending ? "checking…" : "nothing recorded")}</div>
+    <div class="cols">${stat(`Tokens sent, last ${UR.days} days`, compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs about a tenth as much`)}${stat(`Tokens written, last ${UR.days} days`, compact(t.output), "Claude's replies")}</div>
+    ${section(UR.measure === "usd" ? `Cost per ${UR.by}` : `Tokens per ${UR.by}`, `<div class="box pad" id="usage-main">${chart}<div id="usage-detail"></div></div>`, UR.measure === "usd"
+      ? `the solid bar is what that ${UR.by}'s work cost at Anthropic's API prices; the dashed part on top is what Headroom saved, so the whole bar is what it would have cost without Headroom${hrPending ? " (Headroom's numbers are still loading)" : ""}. Hover for numbers, click for the breakdown by model.`
+      : `solid: what was sent (new text, and text reused from cache, hidden until you click its key) and what Claude wrote back. Dashed on top: what Headroom removed before sending, so the whole bar is what would have been sent without it${hrPending ? " (Headroom's numbers are still loading)" : ""}.`)}
+    ${(d.models || []).length ? section("By model", `<div class="box">${table(d.models, [{ k: "model", label: "Model" }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0) + (r.cache_write || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }, { k: "usd", label: "Cost", num: true, html: r => r.usd != null ? usd(r.usd) : "" }], { filter: false })}</div>`, "last " + (d.days || []).length + " days") : ""}
+    <div id="hr-detail"><div class="loading">Reading Headroom's logs…</div></div>
     ${(d.runs || []).length ? section(`${repoName()}, by run`, `<div class="box">${table(d.runs, [{ k: "run", label: "Run", html: r => r.run && r.run !== "(no run)" ? `<a href="#runs/${encodeURIComponent(r.run)}">${esc(runName({ slug: r.run.slice(14) }))}</a>` : '<span class="muted">Outside a run</span>' }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }], { filter: false })}</div>`, "this project only, all time") : ""}`;
 };
+function usageDetail(rows, i) {
+  const box = $("#usage-detail");
+  if (!box) return;
+  if (i == null) { box.innerHTML = ""; return; }
+  const r = rows[i], ms = Object.entries(r.models || {}).map(([m, v]) => ({ model: m, ...v })).sort((a, b) => (b.usd || 0) - (a.usd || 0));
+  box.innerHTML = `<div class="k">${esc(r.label)}: ${usd(r.usd || 0)}, ${compact((r.input || 0) + (r.cache_read || 0) + (r.cache_write || 0))} tokens sent, ${compact(r.output || 0)} written</div>
+    <div class="box">${table(ms, [{ k: "model", label: "Model" }, { k: "usd", label: "Cost", num: true, html: x => usd(x.usd || 0) }, { k: "input", label: "Sent new", num: true, html: x => compact((x.input || 0) + (x.cache_write_5m || 0) + (x.cache_write_1h || 0)) }, { k: "cache_read", label: "Reused", num: true, html: x => compact(x.cache_read || 0) }, { k: "output", label: "Written", num: true, html: x => compact(x.output || 0) }], { filter: false, sort: "usd" })}</div>`;
+  mountTables(box);
+}
+function wireUsage(root) {
+  $$("[data-ur]", root).forEach(el => el.onchange = () => {
+    const k = el.dataset.ur; UR[k] = k === "days" ? +el.value : el.value;
+    $$(".seg label", el.closest(".seg")).forEach(l => l.classList.toggle("on", l.contains(el)));
+    const m = $("#usage-main");
+    if (m) { m.classList.add("is-loading"); m.setAttribute("aria-busy", "true"); }
+    softRoute();
+  });
+  wireICharts(root);
+}
+
+async function loadHeadroom() {
+  const box = $("#hr-detail");
+  if (!box) return;
+  const d = await api("headroom", { days: UR.days > 30 ? 90 : 30 });
+  if (d.pending) { setTimeout(loadHeadroom, 2000); return; }
+  if (d.available === false) { box.innerHTML = ""; return; }
+  const W = d.when || {};
+  const since = new Date(Date.now() - (UR.days - 1) * 864e5).toISOString().slice(0, 10);
+  const days = (W.days || []).filter(x => x.day >= since);
+  const rows = bucket(days, UR.by, rs => addRows(rs, ["saved", "calls", "usd", "before"]));
+  const status = d.routed ? `<span class="row" style="gap:8px">${dot(d.live ? "ok" : "bad")}<span>${d.live ? "On: every Claude Code session goes through it." : "Every session goes through it, but it isn't running right now, so sessions can't reach Claude."}</span></span>` : d.live ? `<span class="row" style="gap:8px">${dot("warn")}<span>Running, but Claude Code doesn't go through it.</span></span>` : `<span class="row" style="gap:8px">${dot("")}<span>Off.</span></span>`;
+  const hours = (W.today_by_hour || []).filter(h => h.calls).sort((a, b) => b.calls - a.calls).slice(0, 3);
+  box.innerHTML = section("Saved by Headroom", `<p class="muted">Headroom is a small program on this computer that every request from Claude Code passes through on its way to Anthropic. It removes repeated and unneeded text first, so less is sent and billed.</p>
+    <p>${status}</p>
+    ${rows.length ? `<p class="muted small">In this range: ${compact(rows.reduce((a, x) => a + (x.saved || 0), 0))} tokens removed from ${n(rows.reduce((a, x) => a + (x.calls || 0), 0))} requests, about ${usd(rows.reduce((a, x) => a + (x.usd || 0), 0))} by Headroom's count. It's the dashed part of the chart above.${hours.length ? ` Busiest today: ${hours.map(h => `${h.hour}:00 (${n(h.calls)} requests)`).join(", ")}.` : ""}</p>` : ""}`);
+  mountTables(box);
+  wireICharts(box);
+}
 
 PAGES.settings = async () => {
   const [cfg, sk, cm, unlocked] = await Promise.all([api("settings"), api("skills"), api("claudemd"), isUnlocked()]);
@@ -1215,7 +1369,11 @@ async function mapStatus() {
   } catch (e) { el.innerHTML = ""; }
 }
 let renderSeq = 0;
-async function route() {
+/* Re-draw the current page in place: no loading placeholder, same scroll position, open sections stay open. For
+   controls that change one thing on the page (the Usage range); route() is for going to a page. */
+function softRoute() { return route({ soft: true }); }
+async function route(opts) {
+  const soft = !!(opts && opts.soft);
   let [page, ...rest] = (location.hash.slice(1) || "home").split("/");
   page = { overview: "home", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
   const key = PAGES[page] ? page : "home";
@@ -1223,8 +1381,9 @@ async function route() {
   renderNav(key);
   crumbs(key);
   document.title = `${TITLES[key]} · LFG`;
-  const seq = ++renderSeq, view = $("#view");
-  view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
+  const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
+  const open = soft ? $$("details[open]", view).map((d, i) => d.id || "i" + i) : [];
+  if (!soft) view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
   let html;
   try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); }
   if (seq !== renderSeq) return;
@@ -1232,7 +1391,11 @@ async function route() {
   mountTables(view); mountTabs(view); wire(view);
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
-  if (!arg) window.scrollTo(0, 0);
+  if (key === "usage") { wireUsage(view); loadHeadroom(); }
+  if (soft) {
+    $$("details", view).forEach((d, i) => { if (open.includes(d.id || "i" + i)) d.open = true; });
+    window.scrollTo(0, y);
+  } else if (!arg) window.scrollTo(0, 0);
 }
 function wireDocs() {
   const body = $("#doc-body");
