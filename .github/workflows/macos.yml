@@ -1,0 +1,38 @@
+name: macOS
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The CI tests on macOS, off the PR path: its runners can queue long enough to be cancelled.
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Omnigraph CLI (the Knowledge pack's; the knowledge-sync tests run it against a throwaway store)
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"; fi
+          brew install ModernRelay/tap/omnigraph && omnigraph version
+      - name: Unit and install-flow tests (sandboxed HOME, fake claude)
+        run: python -m unittest discover -s tests -v
+      - name: Installer dry run changes nothing
+        run: |
+          export HOME="$(mktemp -d)"
+          ./install.sh --dry-run
+          test -z "$(ls -A "$HOME")" || { echo "dry run wrote to HOME:"; ls -la "$HOME"; exit 1; }
