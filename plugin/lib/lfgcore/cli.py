@@ -74,9 +74,12 @@ def doctor(selftest=False):
     if SU.pack_on("knowledge"):
         from . import omnigraph as OG
         for name, gs in OG.status()["graphs"].items():
-            row("omnigraph %s" % name, gs["ready"], gs["url"] if gs["ready"] else
+            row("omnigraph %s" % name, gs["ready"] and gs["launchd"],
                 ("not set up - run `lfg add knowledge`" if not gs["created"] else
-                 "server down - run `lfg omnigraph restart %s`" % name), False)
+                 "server down - run `lfg omnigraph restart %s`" % name) if not gs["ready"] else
+                gs["url"] if gs["launchd"] else
+                "%s, but not kept running by its login agent - run `lfg omnigraph restart %s`" % (gs["url"], name),
+                False)
     gh = C.run(["gh", "auth", "status"], timeout=15) if SU.which("gh") else None
     row("gh signed in", bool(gh and gh.returncode == 0), "" if gh and gh.returncode == 0 else
         "run `gh auth login` yourself", False)
@@ -438,14 +441,29 @@ def cmd_worktree(a):
 
 
 def cmd_issue(a):
-    """`lfg issue sync <ID|title> [--title ..] [--type ..] [--status ..] [--priority N]`: mirror into dev-graph."""
+    """`lfg issue sync <ID|title> [--title ..] [--type ..] [--status ..] [--priority N] [--description ..]
+    [--criteria ..]`, `lfg issue sync-tasks` (the current run's tasks.json) or `lfg issue sync-brief` (its brief):
+    mirror into dev-graph."""
     from . import tracker as T
+    if a.action in ("sync", "show") and not a.key:
+        C.die("usage: lfg issue %s <ID|title>" % a.action, 2)
     try:
         if a.action == "show":
             out = T.lookup(T.slug_for(a.key)) or {"slug": T.slug_for(a.key), "found": False}
+        elif a.action in ("sync-tasks", "sync-brief"):
+            _, rid = C.need_repo()
+            run = C.current_run(rid)
+            if not run:
+                C.die("no current run - start one with `lfg run new <slug>`", 1)
+            if a.action == "sync-brief":
+                out = T.sync_brief(run)
+            else:
+                rows = T.sync_tasks(run)
+                out = {"tasks": len(rows), "created": sum(r["action"] == "created" for r in rows),
+                       "done": sum(r.get("status") == "done" for r in rows)}
         else:
             out = T.sync(a.key, title=a.title, issue_type=a.type, status=a.status, priority=a.priority,
-                         description=a.description)
+                         description=a.description, criteria=a.criteria)
     except Exception as e:
         C.die("dev-graph: %s" % (getattr(e, "reason", None) or e))
     if a.json:
@@ -967,14 +985,17 @@ def main(argv=None):
     wt.add_argument("name", nargs="?", help="new: branch; remove: folder name or branch")
     wt.add_argument("--from", dest="base", help="new: start a new branch from this ref (default HEAD)")
     iss = sp.add_parser("issue", help="mirror the run's issue into dev-graph (the Issues page)")
-    iss.add_argument("action", choices=["sync", "show"])
-    iss.add_argument("key", help="tracker id (ACME-4225) or a short title for an idea")
+    iss.add_argument("action", choices=["sync", "show", "sync-tasks", "sync-brief"],
+                     help="sync-tasks: one Issue per task in the current run's tasks.json (text, checks, done); "
+                          "sync-brief: the brief's Problem and Acceptance criteria onto the run's Issue")
+    iss.add_argument("key", nargs="?", help="tracker id (ACME-4225) or a short title for an idea")
     iss.add_argument("--title")
     iss.add_argument("--type", choices=["bug", "feature", "task", "chore", "question", "risk"])
     iss.add_argument("--status", choices=["backlog", "todo", "in_progress", "needs_review", "hold", "done",
                                           "canceled", "duplicate"])
     iss.add_argument("--priority", type=int, choices=range(0, 5))
     iss.add_argument("--description")
+    iss.add_argument("--criteria", help="acceptance criteria: what done looks like")
     iss.add_argument("--json", action="store_true")
     ru = sp.add_parser("rule")
     ru.add_argument("name")

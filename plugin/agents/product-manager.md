@@ -34,7 +34,7 @@ Then, as needed:
 Write `<run>/01-brief.md` with exactly these sections:
 `# Brief: <title>` · `Source:` (Linear id or "chat") · `## Problem` · `## Users` · `## Acceptance criteria` (numbered, Given/When/Then) · `## Non-goals` · `## Success metric` · `## New dependencies` · `## Open questions`.
 
-Upsert the dev-graph `Issue` (and `Epic` if one exists) with the title and criteria. Never propose creating a Linear issue unless the user asked for one. Any Linear write is proposed as exact text and done by the orchestrator only after the user says yes.
+Then run `lfg issue sync-brief`: it copies the brief's Problem and Acceptance criteria onto the run's dev-graph `Issue` (link an `Epic` if one exists). Never propose creating a Linear issue unless the user asked for one. Any Linear write is proposed as exact text and done by the orchestrator only after the user says yes.
 
 ## Rules
 

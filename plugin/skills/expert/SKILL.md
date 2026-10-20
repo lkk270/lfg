@@ -58,6 +58,7 @@ Reply with three sections (`## Standards`, `## Spec`, `## Blast radius`), the ve
 
 ## Rules
 
+- **A run filed under another repo** (this repo's tasks live in another repo's run, e.g. `/lfg` resumed that repo's handoff): write this repo's results as `06-review-<repo>.json`, with `<repo>` the repo's folder name (e.g. `aegis-compliance-portal`), never over the run's own files. The dashboard shows them under this repo, and the owner repo keeps its own.
 - Review only: the reviewer edits no code. Findings cite `file:line` and never quote secrets.
 - Out-of-scope problems become a dev-graph `Issue`, not an edit.
 - Deferrals go to a dev-graph `Issue`. Never create a Linear issue for one unless the user asks; Linear writes (issues, comments) only after an explicit yes on the exact text.
