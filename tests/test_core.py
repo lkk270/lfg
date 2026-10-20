@@ -1977,6 +1977,30 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(d["models"][0]["input"], 1000000)
         self.assertEqual(d["spend"]["today"], 6.0)  # 1M in at $4 + 0.1M out at $20
 
+    def test_pr_review_sessions_and_their_subagents_count_as_reviews(self):
+        u = {"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 0}
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        reply = lambda i: json.dumps({"type": "assistant", "timestamp": now,  # noqa: E731
+                                      "message": {"id": i, "model": "claude-opus-5-5", "usage": u}}) + "\n"
+        paths = {}
+        for n, first in ((1, "<command-name>/review-pr</command-name><command-args>1759</command-args>"),
+                         (2, "Read /x/skills/review/SKILL.md and follow it to review acme/api#12. Unattended."),
+                         (3, "fix the login bug")):
+            sid = "%08d-0000-0000-0000-000000000000" % n
+            self.write(sid, "/nowhere/app", "main", first)
+            paths[n] = glob.glob(os.path.join(self.dir, "*", sid + ".jsonl"))[0]
+            with open(paths[n], "a") as f:
+                f.write(reply("m%d" % n))
+        sub = os.path.join(paths[1][:-6], "subagents")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "agent-a.jsonl"), "w") as f:  # session 1's subagent: still the review
+            f.write(reply("s1"))
+        with mock.patch.object(self.SS, "_usage_index_path", lambda: os.path.join(self.dir, "idx.json")):
+            d = self.SS.usage()
+        self.assertEqual(sorted((r["pr"], r["usd"]) for r in d["reviews"]), [("1759", 8.0), ("acme/api#12", 4.0)])
+        self.assertEqual((d["days"][0]["review_usd"], d["days"][0]["usd"]), (12.0, 16.0))
+
     def test_headroom_savings_add_up_per_day(self):
         from lfgcore import hrstats
         now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())

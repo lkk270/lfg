@@ -327,6 +327,35 @@ def _file_usage(path):
     return out
 
 
+REVIEW_CMD = re.compile(r"^/(?:lfg:)?review(?:-pr)?(?:\s+(.*))?$")
+REVIEW_RUN = re.compile(r"follow it to review (\S+#\d+)")  # the dashboard's unattended review (review.run)
+
+
+def review_of(path):
+    """What PR a session reviews, from its first prompt: "/review-pr 1759", "/lfg:review 12", or the dashboard's
+    Review button ("owner/repo#12"). "PR review" when it names none; "" for any other session."""
+    with open(path, "rb") as fh:
+        for i, ln in enumerate(fh):
+            if i > 200:
+                return ""
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if ev.get("type") != "user" or ev.get("isMeta") or ev.get("isSidechain"):
+                continue
+            text = _prompt_text((ev.get("message") or {}).get("content"))
+            m = REVIEW_RUN.search(text or "")
+            if m:
+                return m.group(1)
+            first = _prompt_of(text)
+            if first is None:
+                continue
+            m = REVIEW_CMD.match(first)
+            return ((m.group(1) or "").strip()[:60] or "PR review") if m else ""
+    return ""
+
+
 def _usage_index_path():
     return C.lfg_path("state", "usage-index.json")
 
@@ -335,7 +364,7 @@ def usage(days=30):
     """Tokens and dollars per day and per model for every Claude Code session (and its subagents), whether or not
     LFG is on there. Only transcripts that changed since last time are read again."""
     idx = C.read_json(_usage_index_path(), {}) or {}
-    idx = idx if idx.get("v") == 1 else {"v": 1, "files": {}}
+    idx = idx if idx.get("v") == 2 else {"v": 2, "files": {}}
     old, new, changed = idx["files"], {}, False
     files = glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")) + \
         glob.glob(os.path.join(PROJECTS, "*", "*", "subagents", "*.jsonl"))
@@ -349,24 +378,34 @@ def usage(days=30):
             new[p] = hit
             continue
         try:
-            new[p] = {"size": st.st_size, "mtime": st.st_mtime, "days": _file_usage(p)}
+            # a subagent's file sits under its session's folder: it counts as that session's work
+            main = p if os.path.basename(os.path.dirname(p)) != "subagents" else \
+                os.path.dirname(os.path.dirname(p)) + ".jsonl"
+            try:
+                rv = review_of(main)
+            except OSError:
+                rv = ""
+            new[p] = {"size": st.st_size, "mtime": st.st_mtime, "days": _file_usage(p), "review": rv,
+                      "session": os.path.basename(main)[:-6]}
             changed = True
         except OSError:
             continue
     if changed or len(new) != len(old):
         C.ensure_dir(os.path.dirname(_usage_index_path()))
-        C.write_json(_usage_index_path(), {"v": 1, "files": new})
+        C.write_json(_usage_index_path(), {"v": 2, "files": new})
     since = time.strftime("%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
     today = time.strftime("%Y-%m-%d")
     week = time.strftime("%Y-%m-%d", time.localtime(time.time() - 6 * 86400))
-    per_day, per_model, unpriced = {}, {}, set()
+    per_day, per_model, unpriced, reviews = {}, {}, set(), {}
     spend = {"today": 0.0, "7d": 0.0, "30d": 0.0}
     for f in new.values():
+        rv = f.get("review") or ""
         for day, models in f["days"].items():
             if day < since:
                 continue
             for model, t in models.items():
-                dd = per_day.setdefault(day, dict(dict.fromkeys(FIELDS + ("usd",), 0), models={}))
+                dd = per_day.setdefault(day, dict(dict.fromkeys(FIELDS + ("usd", "review_usd", "review_tokens"), 0),
+                                                  models={}))
                 dm = dd["models"].setdefault(model, dict.fromkeys(FIELDS + ("usd",), 0))
                 mm = per_model.setdefault(model, dict.fromkeys(FIELDS + ("usd",), 0))
                 usd = cost(model, t)
@@ -379,17 +418,28 @@ def usage(days=30):
                     dm[k] += t[k]
                 dm["usd"] += usd
                 dd["usd"] += usd
+                if rv:
+                    dd["review_usd"] += usd
+                    dd["review_tokens"] += sum(t[k] for k in FIELDS)
+                    r = reviews.setdefault(f.get("session") or "", {"session": f.get("session") or "", "pr": rv,
+                                                                    "usd": 0.0, "tokens": 0, "last": day})
+                    r["usd"] += usd
+                    r["tokens"] += sum(t[k] for k in FIELDS)
+                    r["last"] = max(r["last"], day)
                 mm["usd"] += usd
                 spend["30d"] += usd
                 spend["7d"] += usd if day >= week else 0
                 spend["today"] += usd if day == today else 0
     for dd in per_day.values():
         dd["models"] = {m: dict(v, usd=round(v["usd"], 4)) for m, v in dd["models"].items()}
+        dd["review_usd"] = round(dd["review_usd"], 4)
     as_rows = lambda d, k: [dict(v, **{k: n}) for n, v in sorted(d.items())]  # noqa: E731
     return {"days": [dict(r, cache_write=r["cache_write_5m"] + r["cache_write_1h"]) for r in as_rows(per_day, "day")],
             "models": sorted([dict(r, cache_write=r["cache_write_5m"] + r["cache_write_1h"])
                               for r in as_rows(per_model, "model")], key=lambda r: -r["usd"]),
-            "spend": {k: round(v, 2) for k, v in spend.items()}, "unpriced": sorted(unpriced)}
+            "spend": {k: round(v, 2) for k, v in spend.items()}, "unpriced": sorted(unpriced),
+            "reviews": sorted([dict(r, usd=round(r["usd"], 2)) for r in reviews.values()], key=lambda r: r["last"],
+                              reverse=True)}
 
 
 # ---------------------------------------------------------------- done with a ticket: hide, trash, worktrees
