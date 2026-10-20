@@ -114,8 +114,8 @@ def fix_prompt(h, upstream):
     files = ", ".join(h["files"][:20]) or "the files git status lists"
     where = "In %s (branch %s), LFG's update is part way through merging %s's main (upstream/main)" % (
         h["worktree"], h["branch"], upstream)
-    todo = ("and these files conflict: %s. Resolve each conflict keeping both sides' changes (once: if one side already has the other's "
-            "change, in its own words, keep that one), run" % files
+    todo = ("and these files conflict: %s. Resolve each conflict keeping both sides' changes (once: if one side "
+            "already has the other's change, in its own words, keep that one), run" % files
             if h["state"] == "conflict" else "and the conflicts look resolved but aren't committed. Check them, run")
     return ("%s %s `python3 -m unittest discover -s tests` there until it passes, then `git add` the files and "
             "`git commit --no-edit` to finish the merge. Don't run git merge, rebase or push, and don't touch main; "
