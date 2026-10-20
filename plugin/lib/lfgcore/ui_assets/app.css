@@ -464,3 +464,9 @@ input.wide { width: 100%; }
 .opt > span { display: flex; flex-direction: column; gap: 2px; }
 details.told { margin-top: 6px; } details.told > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 input.num { width: 80px; }
+.chart rect.ghost { fill: none; stroke-width: 1.5; stroke-dasharray: 3 2; }
+.legend i.ghost { background: none; border: 1.5px dashed; width: 9px; height: 9px; }
+#usage-main { position: relative; transition: opacity .15s; }
+#usage-main.is-loading { pointer-events: none; }
+#usage-main.is-loading > * { opacity: .4; }
+#usage-main.is-loading::after { content: "Loading…"; position: absolute; top: 12px; right: 16px; font-size: 13px; color: var(--text); background: var(--soft); padding: 3px 10px; border-radius: 6px; opacity: 1; }
