@@ -6,6 +6,8 @@ an older install, or a repo you never turned LFG on in, behaves exactly as if LF
 
 pre-tool   : lfg-guard (exit 2 blocks) + graph freshness before code-review-graph MCP calls.
 post-tool  : marks graphs dirty and syncs in the background after edits; warns on secret-looking output.
+prompt     : restarts the Headroom proxy if this session goes through it and it's down; tells the user if it stays
+             down.
 session-start, stop, pre-compact: context, usage logging, state snapshot.
 """
 import json
@@ -140,6 +142,7 @@ def session_start(data):
     from . import graphs as G
     root, rid = _repo(data)
     lines = [CONTEXT[0] % C.VERSION] + CONTEXT[1:]
+    notice = None
     try:
         from . import settings as S
         own = S.own_rules()
@@ -159,9 +162,11 @@ def session_start(data):
             lines.append("Headroom proxy: BYPASSED - settings route Claude Code through Headroom, but this session"
                          " sends requests straight to %s%s. If the user asks about Headroom, say so; a terminal"
                          " `claude` session goes through it." % (other, why))
+        elif HR.ensure_live(root):
+            lines.append("Headroom proxy: up.")
         else:
-            down = "DOWN - tell the user to run `lfg headroom restart` or `lfg headroom off`"
-            lines.append("Headroom proxy: %s." % ("up" if HR.ensure_live(root) else down))
+            notice = HR.down_message()
+            lines.append("Headroom proxy: DOWN. " + notice)
     if root:
         st = G.status(root, rid)
         if st["status"] != "fresh":
@@ -192,7 +197,28 @@ def session_start(data):
             pass
         if run and os.path.exists(os.path.join(run, "progress.md")):
             lines.append("Resume from %s/progress.md." % run)
-    print("\n".join(lines))
+    if notice:  # the model can't answer while the proxy is down, so the user is told directly
+        print(json.dumps({"systemMessage": notice, "hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
+    else:
+        print("\n".join(lines))
+    return 0
+
+
+# ---------------------------------------------------------------- prompt
+
+def prompt(data):
+    """Every prompt, before it is sent: is the Headroom proxy this session goes through still answering? A crash is
+    restarted by launchd within seconds, but an unloaded agent or a proxy that keeps failing stays down, and Claude
+    Code would then retry for minutes with nothing on screen saying why. A refused connection fails at once, so
+    this costs a few milliseconds when the proxy is up."""
+    from . import headroom as HR
+    root, _rid = _repo(data)
+    if not HR.routed(root) or HR.bypassed() or HR.live(timeout=1):
+        return 0
+    back = HR.revive()
+    C.audit("headroom-down", {"restarted": back})
+    print(json.dumps({"systemMessage": "Headroom proxy was down; LFG restarted it." if back else HR.down_message()}))
     return 0
 
 
@@ -272,8 +298,8 @@ def pre_compact(data):
     return 0
 
 
-EVENTS = {"pre-tool": pre_tool, "post-tool": post_tool, "session-start": session_start, "stop": stop,
-          "pre-compact": pre_compact}
+EVENTS = {"pre-tool": pre_tool, "post-tool": post_tool, "session-start": session_start, "prompt": prompt,
+          "stop": stop, "pre-compact": pre_compact}
 
 
 def main(event):

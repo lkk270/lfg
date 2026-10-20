@@ -674,7 +674,7 @@ def cmd_headroom(a):
     if a.action == "serve":
         return HR.serve()
     if a.action == "restart":
-        return 0 if HR.restart() and HR.wait_live() else 1
+        return 0 if HR.revive(timeout=60) else 1
     try:
         out = {"setup": lambda: HR.setup(a.upstream, a.scope), "off": HR.off, "status": HR.status}[a.action]()
     except ValueError as e:  # a settings file that isn't valid JSON is left alone
