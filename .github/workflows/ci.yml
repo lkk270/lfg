@@ -33,6 +33,7 @@ jobs:
       - name: Unit and install-flow tests (sandboxed HOME, fake claude)
         run: python -m unittest discover -s tests -v
       - name: Installer dry run changes nothing
+        if: runner.os == 'macOS'  # the installer refuses Linux; macos.yml runs this step
         run: |
           export HOME="$(mktemp -d)"
           ./install.sh --dry-run
