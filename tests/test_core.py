@@ -1254,6 +1254,11 @@ class PrefsTest(unittest.TestCase):
             self.assertIn("own open PR", P.check_command("git commit --amend --no-edit", v, cwd=repo))
         self.assertIn("off", P.check_command("git commit --amend", dict(v, rewrite="never"), cwd=repo))
 
+    def test_text_in_a_quoted_heredoc_is_not_a_command(self):
+        v = self.P.effective()
+        self.assertIsNone(self.P.check_command("python3 - <<'EOF'\nprint('use `gh pr merge 3`')\nEOF", v))
+        self.assertIsNotNone(self.P.check_command("cat <<'EOF'\nx\nEOF\ngh pr merge 3", v))  # after the heredoc ends
+
     def test_old_amend_and_force_push_switches_become_review_fixes(self):
         C.write_json(self.P._state_path(), {"defaults": {"amend": True, "force_push": True}})
         self.assertEqual(self.P.effective()["rewrite"], "review")

@@ -298,10 +298,20 @@ def session_note(session_id, d=None):
 
 # ---------------------------------------------------------------- hooks
 
+HEREDOC = re.compile(r"<<-?\s*(['\"])(\w+)\1[^\n]*\n.*?\n\s*\2\s*(?=\n|$)", re.S)
+
+
 def _commands(cmd, depth=0):
-    """(argv) for every simple command in a shell string, including `sh -c "…"` and $(…)."""
+    """(argv) for every simple command in a shell string, including `sh -c "…"` and $(…). The bodies of quoted
+    heredocs (<<'EOF') are left out: the shell passes them on as text without running anything in them."""
     from . import guard as G
     if depth > 6 or not cmd or not cmd.strip():
+        return
+    cmd = HEREDOC.sub("<<HEREDOC", cmd)
+    lines = [ln for ln in re.split(r"(?<!\\)\n", cmd) if ln.strip()]
+    if len(lines) > 1:  # a newline separates commands, like ;
+        for ln in lines:
+            yield from _commands(ln, depth + 1)
         return
     for inner in G._substitutions(cmd):
         yield from _commands(inner, depth + 1)

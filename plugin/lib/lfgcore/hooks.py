@@ -136,7 +136,13 @@ def session_start(data):
     from . import graphs as G
     root, rid = _repo(data)
     lines = [CONTEXT[0] % C.VERSION] + CONTEXT[1:]
-    if C.config()["guard"].get("allow_commit") is True:
+    from . import guard as GD
+    if GD._prefs_on():
+        lines[0] = ("LFG %s is on in this repo. Commits, pushes, amends, force-pushes and PR merges follow the user's "
+                    "Preferences (lfg-preferences.md, plus any rules changed for this session), which are checked "
+                    "before every command; do what they say, including committing or pushing on your own when they "
+                    "say so. Never read .env or keys, never deploy, no other GitHub writes." % C.VERSION)
+    elif C.config()["guard"].get("allow_commit") is True:
         lines[0] = lines[0].replace("never commit/push/gh-write", "commit only when the user asks (never --amend), "
                                     "never push/gh-write").replace("; leave changes unstaged", "")
     try:

@@ -164,3 +164,47 @@ def ask(question, items):
         raise ValueError("Claude didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
     known = {i.get("slug") for i in items}
     return {"answer": str(out["answer"]), "slugs": [s for s in out.get("slugs") or [] if s in known]}
+
+
+def _slug(prefix, title):
+    import hashlib
+    import time as _t
+    base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48] or "item"
+    return "%s-%s-%s" % (prefix, base, hashlib.sha1(("%s%f" % (title, _t.time())).encode()).hexdigest()[:5])
+
+
+def add(kind, title, text, repo="", feature="", topic=""):
+    """Save a decision or lesson to dev-graph, or a note to second-brain, from the dashboard (you typed it). Repo,
+    feature and topic go into LFG's tags."""
+    from . import omnigraph as OG
+    title, text = re.sub(r"\s+", " ", str(title or "")).strip()[:200], str(text or "").strip()[:8000]
+    if not title or not text:
+        raise ValueError("give it a short title and the text itself")
+    from .settings import _secret_kinds
+    if _secret_kinds(title + "\n" + text):
+        raise ValueError("that looks like it contains a secret; not saved")
+    today, now = C.now_iso()[:10], C.now_iso()
+    if kind == "decision":
+        slug = _slug("dec", title)
+        OG.mutate("dev-graph", "query a($slug: String, $title: String, $decision: String, $at: Date) { insert Decision "
+                  "{ slug: $slug, title: $title, decision: $decision, status: \"accepted\", createdAt: $at, "
+                  "createdBy: \"lfg-dashboard\" } }", "a",
+                  {"slug": slug, "title": title, "decision": text, "at": today})
+    elif kind == "learning":
+        slug = _slug("lrn", title)
+        lk = topic if topic in ("incident_review", "retro", "gotcha", "hindsight") else "gotcha"
+        OG.mutate("dev-graph", "query a($slug: String, $title: String, $body: String, $kind: String, $at: Date) "
+                  "{ insert Learning { slug: $slug, title: $title, body: $body, learningKind: $kind, "
+                  "createdAt: $at, createdBy: \"lfg-dashboard\" } }", "a",
+                  {"slug": slug, "title": title, "body": text, "kind": lk, "at": today})
+    elif kind == "note":
+        slug = _slug("nt", title)
+        OG.mutate("second-brain", "query a($slug: String, $name: String, $content: String, $now: DateTime) { insert "
+                  "Note { slug: $slug, name: $name, kind: \"insight\", content: $content, createdAt: $now, "
+                  "updatedAt: $now } }", "a", {"slug": slug, "name": title, "content": text, "now": now})
+        return {"slug": slug, "saved_to": "second-brain"}
+    else:
+        raise ValueError("kind is decision, learning or note")
+    if repo or feature or topic == "setup":
+        set_tags(slug, repo=repo or None, feature=feature or None, topic="setup" if topic == "setup" else None)
+    return {"slug": slug, "saved_to": "dev-graph"}

@@ -1478,12 +1478,15 @@ PAGES.usage = async () => {
   const since = new Date(Date.now() - (UR.days - 1) * 864e5).toISOString().slice(0, 10);
   const days = (d.days || []).filter(x => x.day >= since).map(x => ({ ...x, hr_saved: (hrDay[x.day] || {}).saved || 0, hr_usd: (hrDay[x.day] || {}).usd || 0 }));
   const hrPending = H && H.pending;
+  const rangeUsd = days.reduce((a, x) => a + (x.usd || 0), 0), hrUsd = days.reduce((a, x) => a + (x.hr_usd || 0), 0);
+  const hrTokens = days.reduce((a, x) => a + (x.hr_saved || 0), 0);
   const t = days.reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
   const hit = pct(t.cache_read, t.cache_read + t.input + t.cache_write);
   const hr = d.headroom || {}, life = hr.lifetime || {}, sp = d.spend || {};
   const seg = (key, opts) => `<div class="seg inline">${opts.map(([v, l]) => `<label class="${UR[key] === v ? "on" : ""}"><input type="radio" name="ur-${key}" data-ur="${key}" value="${v}" ${UR[key] === v ? "checked" : ""}>${l}</label>`).join("")}</div>`;
   const rows = bucket(days, UR.by, rs => addRows(rs, ["input", "output", "cache_read", "cache_write", "usd", "hr_saved", "hr_usd"]));
   const usdFmt = v => usd(v || 0);
+  const filters_row = `<div class="row filters">${seg("days", [[7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"]])}${seg("by", [["day", "By day"], ["week", "By week"]])}${seg("measure", [["usd", "Dollars"], ["tokens", "Tokens"]])}</div>`;
   const ghost = { ghost: true };
   if (hrPending) setTimeout(() => { if ((location.hash.slice(1) || "").startsWith("usage")) softRoute(); }, 2500);
   const chart = UR.measure === "usd"
@@ -1493,10 +1496,9 @@ PAGES.usage = async () => {
         { title: "Tokens per " + UR.by, hidden: [1], onPick: i => usageDetail(rows, i), total: (x, hid) => hid.has(3) ? "" : `Without Headroom: ${compact(x.values.reduce((a, v, j) => a + (hid.has(j) ? 0 : v || 0), 0))} tokens` });
   state.usageRows = rows;
   return `${head("Usage", "What Claude Code used and what it would cost at API prices, across every session on this computer.")}
-    ${sp.available ? `<div class="cols">${stat("Spent today", usd(sp.today))}${stat("Last 7 days", usd(sp["7d"]))}${stat("Last 30 days", usd(sp["30d"]), sp.source === "lfg" ? "an estimate at API list prices, from every session's log; on a subscription you pay your plan, not this" : "at API prices, worked out by tokensave from Claude Code's logs")}</div>`
-      : sp.pending ? `<p class="muted small" data-spend-pending>Working out costs…</p>` : `<p class="muted small">Cost isn't shown: ${fmtWhy(sp.why || "not available")}.</p>`}
-    <div class="cols">${stat("Tokens sent", compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs less`)}${stat("Tokens written", compact(t.output), "Claude's replies")}${stat("Saved by Headroom", hr.available && life.calls ? compact(life.tokens_saved) : "—", hr.available && life.calls ? `${life.savings_percent || 0}% less sent, all time${life.cost_usd ? ` · about ${usd(life.cost_usd)} by Headroom's count` : ""}` : hr.pending ? `<span data-spend-pending>checking…</span>` : "not active yet")}</div>
-    <div class="row filters">${seg("days", [[7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"]])}${seg("by", [["day", "By day"], ["week", "By week"]])}${seg("measure", [["usd", "Dollars"], ["tokens", "Tokens"]])}</div>
+    ${filters_row}
+    <div class="cols">${stat(`Cost, last ${UR.days} days`, usd(rangeUsd), "the work priced at Anthropic's API rates, from every session's log; on a subscription you pay your plan, not this")}${stat("Cost today", usd(sp.today || 0), "since midnight")}${stat(`Saved by Headroom, last ${UR.days} days`, hrTokens ? usd(hrUsd) : "—", hrTokens ? `${compact(hrTokens)} tokens removed, by Headroom's count` : hrPending ? "checking…" : "nothing recorded")}</div>
+    <div class="cols">${stat(`Tokens sent, last ${UR.days} days`, compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs about a tenth as much`)}${stat(`Tokens written, last ${UR.days} days`, compact(t.output), "Claude's replies")}</div>
     ${section(UR.measure === "usd" ? `Cost per ${UR.by}` : `Tokens per ${UR.by}`, `<div class="box pad" id="usage-main">${chart}<div id="usage-detail"></div></div>`, UR.measure === "usd"
       ? `the solid bar is what that ${UR.by}'s work cost at Anthropic's API prices; the dashed part on top is what Headroom saved, so the whole bar is what it would have cost without Headroom${hrPending ? " (Headroom's numbers are still loading)" : ""}. Hover for numbers, click for the breakdown by model.`
       : `solid: what was sent (new text, and text reused from cache, hidden until you click its key) and what Claude wrote back. Dashed on top: what Headroom removed before sending, so the whole bar is what would have been sent without it${hrPending ? " (Headroom's numbers are still loading)" : ""}.`)}

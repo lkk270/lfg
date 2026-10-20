@@ -786,3 +786,55 @@ def set_skill_group(skill_id, group):
     C.ensure_dir(os.path.dirname(_groups_path()))
     C.write_json(_groups_path(), g)
     return {"id": skill_id, "group": group}
+
+
+SKILL_TEMPLATE = """---
+name: {name}
+description: >
+  {description}
+---
+
+# {name}
+
+{body}
+"""
+
+
+def create_personal(kind, name, description="", body="", folder=""):
+    """A new skill (~/.claude/skills/<name>/SKILL.md) or a new file inside one of your skills or shared folders.
+    Never overwrites: an existing name is refused."""
+    skills_dir, refs_dir = _claude_dirs()
+    if kind == "skill":
+        if not re.match(r"^[a-z0-9][a-z0-9-]{1,60}$", name or ""):
+            raise Invalid("a skill name is lowercase letters, digits and dashes, e.g. review-terraform")
+        if not str(description or "").strip():
+            raise Invalid("say what the skill does and when Claude should use it: that line is how Claude finds it")
+        d = os.path.join(skills_dir, name)
+        if os.path.exists(d):
+            raise Invalid("there is already a skill called %s" % name)
+        text = SKILL_TEMPLATE.format(name=name, description=re.sub(r"\s+", " ", description).strip(),
+                                     body=(body or "").strip() or "What to do, step by step.")
+        path = os.path.join(d, "SKILL.md")
+    elif kind == "file":
+        base = os.path.realpath(os.path.expanduser(folder or ""))
+        if not any(base == x or base.startswith(x + os.sep) for x in (skills_dir, refs_dir)) or not os.path.isdir(base):
+            raise Invalid("pick one of your skills or shared folders to put the file in")
+        if os.sep + "synced" in base[len(skills_dir):]:
+            raise Invalid("skills/synced is the Claude app's; add files there on claude.ai")
+        if not re.match(r"^[\w.-]{1,80}$", name or "") or ".." in name:
+            raise Invalid("a file name is letters, digits, dots, dashes and underscores")
+        if not name.endswith(TEXT_EXT):
+            name += ".md"
+        path = os.path.join(base, name)
+        if os.path.exists(path):
+            raise Invalid("%s already exists" % path)
+        text = (body or "").strip() + "\n" if (body or "").strip() else "# %s\n" % name[:-3]
+    else:
+        raise Invalid("kind is skill or file")
+    kinds = _secret_kinds(text)
+    if kinds:
+        raise Invalid("the text looks like it contains a secret (%s); not saved" % ", ".join(kinds))
+    C.ensure_dir(os.path.dirname(path), 0o755)
+    C.write_text(path, text, mode=0o644)
+    return {"created": path, "note": "Created. New Claude Code sessions can use it%s." % (
+        " as /" + name if kind == "skill" else "")}

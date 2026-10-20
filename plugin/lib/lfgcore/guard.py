@@ -294,6 +294,19 @@ def _commit_allowed():
     return C.config()["guard"].get("allow_commit") is True
 
 
+def _prefs_on():
+    """Your Preferences are switched on (their hooks are in ~/.claude/settings.json). Then they decide commits,
+    pushes, amends, force-pushes and PR merges, and their own hook enforces them; the guard keeps everything else."""
+    try:
+        from . import prefs as P
+        return P.installed()["hooks"]
+    except Exception:  # noqa: BLE001 - if in doubt, the guard's own rule stands
+        return False
+
+
+PREFS_DECIDE_GIT = {"commit", "push"}
+
+
 def _git(argv, envs, raw):
     args = argv[1:]
     sub, i = None, 0
@@ -313,6 +326,8 @@ def _git(argv, envs, raw):
     if "--no-verify" in args or any(e.startswith(("SKIP=", "HUSKY=0", "HUSKY_SKIP")) for e in envs):
         raise Block("3", "skipping git hooks / checks (--no-verify, SKIP=, HUSKY=0)")
     if sub is None:
+        return
+    if sub in PREFS_DECIDE_GIT and _prefs_on():
         return
     if sub == "commit" and "--amend" not in rest and _commit_allowed():
         return
@@ -373,6 +388,8 @@ def _gh(argv):
             raise Block("2", "`gh api` write request; only GET is allowed")
         if any("mutation" in a for a in args):
             raise Block("2", "GraphQL mutations are writes")
+        return
+    if (top, sub) == ("pr", "merge") and _prefs_on():
         return
     if (top, sub) in GH_ALLOW or (top, None) in GH_ALLOW:
         return
@@ -757,8 +774,9 @@ SELFTEST = [
 
 def selftest():
     """The default rules, so it also passes on a machine with guard.allow_commit on."""
-    global _commit_allowed
+    global _commit_allowed, _prefs_on
     real, _commit_allowed = _commit_allowed, lambda: False
+    real_p, _prefs_on = _prefs_on, lambda: False
     failures = []
     try:
         for tool, ti, want in SELFTEST:
@@ -767,4 +785,5 @@ def selftest():
                 failures.append((tool, ti, want))
     finally:
         _commit_allowed = real
+        _prefs_on = real_p
     return failures
