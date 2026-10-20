@@ -412,3 +412,7 @@ input.wide { width: 100%; }
 #update-banner details.inline { display: inline-block; }
 #update-banner details.inline ul { margin: 6px 0 0 18px; }
 .pre-wrap { white-space: pre-wrap; }
+.tag.ok { color: var(--green-tx); background: var(--green-bg); }
+.tag.warn { color: var(--yellow-tx); background: var(--yellow-bg); }
+.tag.bad { color: var(--red-tx); background: var(--red-bg); }
+.pr-edit .row input[type=text] { min-width: 0; }

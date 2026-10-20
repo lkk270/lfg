@@ -69,6 +69,68 @@ def pr_meta(repo, number):
             "head_sha": j["headRefOid"], "base": j["baseRefName"], "branch": j["headRefName"], "state": j["state"]}
 
 
+_STATUS = {}
+
+
+def gh_status(repo, number, max_age=300):
+    """Where the PR stands on GitHub: open/merged, approved or changes asked for, each reviewer's latest verdict,
+    who still has to review, and checks. Cached for max_age seconds."""
+    key = (repo, number)
+    hit = _STATUS.get(key)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    try:
+        j = gh_json(["pr", "view", str(number), "-R", repo, "--json",
+                     "state,isDraft,reviewDecision,mergeable,reviews,reviewRequests,statusCheckRollup,headRefOid"])
+    except ReviewError as e:
+        return {"available": False, "why": str(e)}
+    latest = {}
+    for r in j.get("reviews") or []:
+        who = (r.get("author") or {}).get("login") or "?"
+        if r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED") or who not in latest:
+            latest[who] = {"who": who, "state": r.get("state"), "at": r.get("submittedAt")}
+    checks = {}
+    for c in j.get("statusCheckRollup") or []:
+        k = (c.get("conclusion") or c.get("state") or "PENDING").upper()
+        checks[k] = checks.get(k, 0) + 1
+    out = {"available": True, "state": j.get("state"), "draft": j.get("isDraft"),
+           "decision": j.get("reviewDecision") or "", "mergeable": j.get("mergeable"),
+           "reviewers": sorted(latest.values(), key=lambda r: r["at"] or ""),
+           "waiting_on": [(r.get("login") or r.get("name") or "") for r in j.get("reviewRequests") or []],
+           "checks": checks, "head_sha": j.get("headRefOid"), "me": me()}
+    _STATUS[key] = (time.time(), out)
+    return out
+
+
+REWRITE = ("Rewrite this code review comment as asked. Keep it accurate to the finding, in the same voice. Reply "
+           "with only the new comment, no preamble.\n\nWhat was asked: %s\n\nThe finding (for context, not "
+           "posted):\n%s\n\nThe comment as it is now:\n%s")
+
+
+def rewrite(repo, number, fid, instruction):
+    """Ask Claude, with no tools, to change one comment ("shorter", "less blunt", "add the line number"). Returns the
+    new text without saving it: you look at it, then save it like any edit."""
+    import subprocess
+    if not str(instruction or "").strip():
+        raise ReviewError("say how to change it, e.g. \"make it two sentences\"")
+    if not C.which("claude"):
+        raise ReviewError("Claude Code (`claude`) is not on PATH")
+    f = find(need(repo, number), fid)
+    ctx = "\n".join(x for x in ("Title: " + (f.get("title") or ""), "Issue: " + (f.get("issue") or ""),
+                                 "Fix: " + (f.get("fix") or ""), "Where: %s:%s" % (f.get("file") or "-", f.get("line")
+                                                                                   or "-")) if x)
+    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""],
+                        input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"]),
+                        capture_output=True, text=True, timeout=300)
+    try:
+        text = (json.loads(cp.stdout).get("result") or "").strip()
+    except ValueError:
+        text = ""
+    if not text:
+        raise ReviewError("Claude didn't return a comment: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
+    return {"id": fid, "body": re.sub(r"^```\w*\n|\n```$", "", text)}
+
+
 def me():
     cp = _gh(["api", "user", "-q", ".login"], timeout=30)
     return cp.stdout.strip() if cp.returncode == 0 else ""
@@ -679,7 +741,7 @@ def import_session(repo, number, path, ticket=None, convert=True):
         if not C.which("claude"):
             raise ReviewError("Claude Code (`claude`) is not on PATH")
         said = "\n\n".join(t for t in _session_texts(path) if t.strip())[-60000:]
-        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk"],
+        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""],
                             input=CONVERT % (SHAPE, said), capture_output=True, text=True, timeout=600)
         try:
             data = find_review_json(json.loads(cp.stdout).get("result") or "")
@@ -731,6 +793,12 @@ def dashboard(fresh=False):
         r = have.get((x["repo"], x["number"]))
         x["passes"] = len(r["passes"]) if r else 0
         x["job"] = job(x["repo"], x["number"])
+    import concurrent.futures
+    want = {(x["repo"], x["number"]) for x in q} | {(r["repo"], r["number"]) for r in recs if r.get("state") == "OPEN"}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        st = dict(zip(want, pool.map(lambda k: gh_status(*k), want)))
+    for x in q:
+        x["gh"] = st.get((x["repo"], x["number"]))
     out = []
     for r in recs:
         p = r["passes"][-1]
@@ -740,5 +808,5 @@ def dashboard(fresh=False):
         out.append({"repo": r["repo"], "number": r["number"], "title": r.get("title"), "author": r.get("author"),
                     "url": r.get("url"), "ticket": r.get("ticket"), "passes": len(r["passes"]),
                     "score": p.get("score"), "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
-                    "job": job(r["repo"], r["number"])})
+                    "job": job(r["repo"], r["number"]), "gh": st.get((r["repo"], r["number"]))})
     return {"queue": q, "queue_why": qwhy, "reviews": out}

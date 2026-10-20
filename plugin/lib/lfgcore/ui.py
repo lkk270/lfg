@@ -147,7 +147,10 @@ def api(view, q):
             return R.dashboard(fresh=_arg(q, "fresh") == "1")
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
-            return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number}
+            return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number,
+                    "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
+                    "sessions": [s for s in R.sessions_for(repo, number) if "Read %s" % os.path.join(
+                        C.PLUGIN_ROOT, "skills", "review") not in s["title"]][:8]}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
     rid = _rid(q)
@@ -275,6 +278,8 @@ def review_action(what, body):
                           dry_run=bool(body.get("dry_run")))
         if what == "review_run":
             return R.start(repo, number, ticket=body.get("ticket") or None)
+        if what == "review_rewrite":
+            return R.rewrite(repo, number, str(body.get("id") or ""), body.get("instruction"))
         if what == "review_sessions":
             return {"sessions": R.sessions_for(repo, number)}
         if what == "review_import":

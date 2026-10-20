@@ -1318,17 +1318,34 @@ async function prStart(pr, btn) {
   btn.textContent = d.started ? "Started" : "Already running";
   setTimeout(route, 1500);
 }
+/* Where a PR stands on GitHub, as a tag: Approved / Changes requested / Needs review / Merged / Closed. */
+const GH_DECISION = { APPROVED: ["Approved", "ok"], CHANGES_REQUESTED: ["Changes requested", "bad"], REVIEW_REQUIRED: ["Needs review", "warn"] };
+function ghTag(g) {
+  if (!g || g.available === false) return "";
+  if (g.state === "MERGED") return '<span class="tag ok">Merged</span>';
+  if (g.state === "CLOSED") return '<span class="tag">Closed</span>';
+  const [t, tn] = GH_DECISION[g.decision] || ["No reviews yet", ""];
+  const mine = (g.reviewers || []).find(r => r.who === g.me);
+  const fails = (g.checks || {}).FAILURE || 0;
+  return `<span class="tag ${tn}">${esc(t)}</span>${mine ? ` <span class="tag">you: ${esc(({ APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" })[mine.state] || mine.state.toLowerCase())}</span>` : ""}${fails ? ` <span class="tag bad">${plural(fails, "check")} failing</span>` : ""}${g.draft ? ' <span class="tag">draft</span>' : ""}`;
+}
+function ghPanel(g) {
+  if (!g || g.available === false) return g && g.why ? `<p class="muted small">Couldn't ask GitHub: ${esc(g.why)}</p>` : "";
+  const word = { APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" };
+  const checks = Object.entries(g.checks || {}).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", ");
+  return `<div class="row small">${ghTag(g)}<span class="muted">${(g.reviewers || []).map(r => `${esc(r.who)} ${esc(word[r.state] || r.state.toLowerCase())} ${ago(r.at)}`).join(" · ") || "nobody has reviewed yet"}${(g.waiting_on || []).length ? ` · waiting on ${esc(g.waiting_on.join(", "))}` : ""}${checks ? ` · checks: ${esc(checks)}` : ""}</span></div>`;
+}
 PAGES.prs = async arg => {
   if (arg) return prDetail(arg);
   const [d, unlocked] = await Promise.all([api("prreviews"), isUnlocked()]);
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
   const qcols = [
-    { k: "title", label: "Pull request", html: x => `${esc(x.title)}${x.draft ? ' <span class="tag">draft</span>' : ""}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
+    { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
     { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button> <button class="btn small" data-pr-sessions="${esc(prRef(x))}" ${unlocked ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
   ];
   const rcols = [
-    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div>` },
+    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div>${x.gh ? `<div class="sub">${ghTag(x.gh)}</div>` : ""}` },
     { k: "state", label: "Where it is", html: x => `${tallyLine(x)}${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}`, sort: x => (x.posted ? 2 : (x.tally || {}).pending ? 0 : 1) },
     { k: "score", label: "Score", num: true },
     { k: "passes", label: "Reviews", num: true },
@@ -1352,7 +1369,9 @@ function prFinding(f, pr, unlocked, live) {
     ${f.detail ? `<details class="more"><summary>What the review checked</summary><div class="md">${md(f.detail)}</div></details>` : ""}
     <div class="k">Comment the author will read</div>
     <div class="pr-body md" data-pr-body="${esc(f.id)}">${md(f.body)}</div>
-    <div class="pr-edit" data-pr-editbox="${esc(f.id)}" hidden><textarea class="editor small">${esc(f.body)}</textarea>
+    <div class="pr-edit" data-pr-editbox="${esc(f.id)}" hidden>
+      <div class="row"><input type="text" class="grow" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"><button class="btn small" data-pr-askgo='${esc(JSON.stringify([pr, f.id]))}'>Ask Claude</button></div>
+      <textarea class="editor small">${esc(f.body)}</textarea>
       <div class="set-actions"><button class="btn small primary" data-pr-editsave='${esc(JSON.stringify([pr, f.id]))}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>
     <div class="row mt">${posted || `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}</div></div>`;
 }
@@ -1369,7 +1388,8 @@ async function prDetail(arg) {
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const jobBox = j && j.status !== "done" ? `<div class="callout ${running ? "" : "bad"}">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const startBtn = `<button class="btn" data-pr-start="${esc(pr)}" ${unlocked && !running ? "" : "disabled"}>${rec ? "Re-review" : "Review"}</button> <button class="btn" data-pr-sessions="${esc(pr)}" ${unlocked && !running ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>`;
-  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${jobBox}<div class="row">${startBtn}</div>`;
+  const sess = (d.sessions || []).length ? section("Your sessions about this PR", `<ul class="items box">${d.sessions.map(s => `<li class="sess"><div class="grow"><div class="title">${esc(s.title)}</div><div class="meta">${ago(s.modified)} · ${esc(s.cwd || "")}${s.has_json ? " · review ready to import" : ""}</div></div><button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, s.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button></li>`).join("")}</ul>`, "e.g. a /review-pr you ran yourself") : "";
+  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}<div class="row">${startBtn}</div>${sess}`;
   const last = rec.passes[rec.passes.length - 1];
   const live = !last.posted;
   const byId = Object.fromEntries(rec.passes.flatMap(p => p.findings).map(f => [f.id, f]));
@@ -1385,6 +1405,7 @@ async function prDetail(arg) {
     : `<div class="callout ok">${dot("ok")}Posted ${ago(last.posted.ts)}. <a href="${esc(last.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a> Re-review once the author has pushed changes.</div>`;
   const earlier = rec.passes.length > 1 ? section("Earlier reviews", rec.passes.slice(0, -1).reverse().map(p => `<details class="more"><summary>Review ${p.n}, ${ago(p.ts)}${p.score != null ? `, score ${p.score}` : ""}${p.posted ? ", posted" : ""}</summary>${p.summary ? `<p>${txt(p.summary)}</p>` : ""}${p.findings.map(f => prFinding(f, pr, false, false)).join("")}</details>`).join("")) : "";
   return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
+    ${ghPanel(d.gh)}
     ${jobBox}
     <div class="panel"><div class="row"><b>Review ${last.n}${last.kind === "re-review" ? " (re-review)" : ""}</b><span class="muted">${ago(last.ts)} · at commit <span class="mono">${esc(last.head_sha.slice(0, 8))}</span>${last.score != null ? ` · score ${esc(last.score)}` : ""}</span><span class="grow"></span>${startBtn}</div>
       ${last.summary ? `<p>${txt(last.summary)}</p>` : ""}
@@ -1392,6 +1413,7 @@ async function prDetail(arg) {
     ${prior}
     ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `${plural(last.findings.length, "finding")} · ${kept} kept · ${pending} to decide`)}
     ${postBar}
+    ${sess}
     ${earlier}`;
 }
 async function prImport(pr, path, btn) {
@@ -1428,6 +1450,22 @@ function wirePrs(root) {
   $$("[data-pr-editcancel]", root).forEach(b => b.onclick = () => {
     $(`[data-pr-editbox="${b.dataset.prEditcancel}"]`, root).hidden = true;
     $(`[data-pr-body="${b.dataset.prEditcancel}"]`, root).hidden = false;
+  });
+  $$("[data-pr-importpath]", root).forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
+  $$("[data-pr-askgo]", root).forEach(b => {
+    const [pr, id] = JSON.parse(b.dataset.prAskgo), box = b.closest(".pr-edit"), input = $("[data-pr-ask]", box);
+    const go = async () => {
+      if (!input.value.trim()) return input.focus();
+      b.disabled = true; b.textContent = "Asking…";
+      const d = await save("review_rewrite", { pr, id, instruction: input.value });
+      b.disabled = false; b.textContent = "Ask Claude";
+      if (!d.ok) return alertMsg(b, d);
+      $("textarea", box).value = d.body;
+      input.value = "";
+      input.placeholder = "Changed below. Ask again, edit it yourself, or Save comment.";
+    };
+    b.onclick = go;
+    input.onkeydown = e => { if (e.key === "Enter") go(); };
   });
   $$("[data-pr-editsave]", root).forEach(b => b.onclick = async () => {
     const [pr, id] = JSON.parse(b.dataset.prEditsave), box = b.closest(".pr-edit");
