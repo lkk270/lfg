@@ -1014,11 +1014,25 @@ def _mcp_servers():
     return out
 
 
-def _headroom_proxy_routed():
-    """Is Claude Code pointed at a local Headroom proxy? Only a yes/no ever leaves this function."""
+HEADROOM_DOWN = ("The Headroom proxy is down and Claude Code is pointed at it, so terminal sessions can't reach "
+                 "Claude: run `lfg headroom restart`")
+
+
+def _headroom_proxy():
+    """Is Claude Code pointed at a local Headroom proxy, and is it answering? Only yes/no ever leaves this function."""
     from . import claudecfg as CC
     from . import headroom as HR
-    return bool(HR.routed() or CC.find(tag=HR.ROUTE_TAG)) and HR.live(timeout=1)
+    return bool(HR.routed() or CC.find(tag=HR.ROUTE_TAG)), HR.live(timeout=1)
+
+
+def _headroom_row(installed, optional):
+    routed, live = _headroom_proxy()
+    row = {"name": "Headroom", "kind": "Token compression", "ok": installed and (live or not routed),
+           "detail": "proxy %s" % ("routing Claude Code" if routed and live else "down, and Claude Code is pointed "
+                                   "at it" if routed else "off"), "optional": optional}
+    if routed and not live:
+        row["problem"] = HEADROOM_DOWN
+    return row
 
 
 def tools():
@@ -1053,9 +1067,7 @@ def tools():
             {"name": "Linear", "kind": "Issues (MCP, OAuth)", "ok": "linear" in mcp and "Connected" in mcp["linear"],
              "detail": "MCP: %s. Sign in with /mcp in Claude Code; the dashboard shows the dev-graph mirror."
                        % mcp.get("linear", "not registered"), "optional": not SU.pack_on("linear")},
-            {"name": "Headroom", "kind": "Token compression", "ok": bool(versions["headroom"]),
-             "detail": "proxy %s" % ("routing Claude Code" if _headroom_proxy_routed() else "off"),
-             "optional": not SU.pack_on("headroom")},
+            _headroom_row(bool(versions["headroom"]), not SU.pack_on("headroom")),
             {"name": "GitHub (gh)", "kind": "PR/CI status, read-only", "ok": gh,
              "detail": "signed in" if gh else "not signed in: run `gh auth login` yourself",
              "problem": "GitHub CLI isn't signed in: run `gh auth login`" if C.which("gh") else
@@ -1084,7 +1096,7 @@ def tools_quick():
     from . import setup as SU
     off = not SU.pack_on("knowledge")
     return [{"name": n, "ok": _og_ready(n), "optional": off, "problem": "%s isn't running: run `lfg omnigraph restart "
-             "%s`" % (n, n)} for n in ("dev-graph", "second-brain")]
+             "%s`" % (n, n)} for n in ("dev-graph", "second-brain")] + [_headroom_row(True, False)]
 
 
 # ---------------------------------------------------------------- overview

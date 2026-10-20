@@ -453,6 +453,86 @@ class HeadroomTest(unittest.TestCase):
                 self.assertIsNone(HR.bypassed())  # unset: no way to tell, so no warning
                 self.assertIn("Headroom proxy: up.", self.session_start_text())
 
+    def prompt_out(self, live, revived=None):
+        import io
+        from contextlib import redirect_stdout
+        from lfgcore import hooks
+        buf = io.StringIO()
+        with mock.patch.object(hooks, "_repo", return_value=(None, None)), \
+                mock.patch.object(HR, "live", return_value=live), \
+                mock.patch.object(HR, "revive", return_value=revived) as rv, \
+                mock.patch.object(C, "audit"), redirect_stdout(buf):
+            self.assertEqual(hooks.prompt({}), 0)
+        return buf.getvalue(), rv
+
+    def test_prompt_is_silent_while_the_proxy_answers(self):
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        out, rv = self.prompt_out(live=True)
+        self.assertEqual(out, "")
+        rv.assert_not_called()
+
+    def test_prompt_restarts_a_proxy_that_went_down(self):
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        out, rv = self.prompt_out(live=False, revived=True)
+        rv.assert_called_once()
+        self.assertIn("restarted", json.loads(out)["systemMessage"])
+
+    def test_prompt_tells_the_user_when_the_proxy_stays_down(self):
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        out, _rv = self.prompt_out(live=False, revived=False)
+        msg = json.loads(out)["systemMessage"]
+        self.assertIn("can't reach Claude", msg)
+        self.assertIn("lfg headroom restart", msg)
+
+    def test_prompt_leaves_unrouted_and_bypassed_sessions_alone(self):
+        out, rv = self.prompt_out(live=False)  # no routing in settings
+        self.assertEqual(out, "")
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://api.anthropic.com"}):
+            out, rv = self.prompt_out(live=False)  # the desktop app: can't be fixed, already warned at start
+        self.assertEqual(out, "")
+        rv.assert_not_called()
+
+    def test_session_start_tells_the_user_when_the_proxy_stays_down(self):
+        import io
+        from contextlib import redirect_stdout
+        from lfgcore import hooks
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        buf = io.StringIO()
+        with mock.patch.object(C, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                mock.patch.object(hooks, "_repo", return_value=(None, None)), \
+                mock.patch.object(HR, "ensure_live", return_value=False), redirect_stdout(buf):
+            hooks.session_start({})
+        out = json.loads(buf.getvalue())
+        self.assertIn("lfg headroom restart", out["systemMessage"])
+        self.assertIn("Headroom proxy: DOWN.", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_revive_reloads_an_unloaded_agent_and_restarts_a_loaded_one(self):
+        os.makedirs(os.path.dirname(HR._plist_path()))
+        open(HR._plist_path(), "w").close()
+        for loaded in (False, True):
+            with mock.patch.object(HR, "_agent_loaded", return_value=loaded), \
+                    mock.patch.object(HR, "wait_live", return_value=True), \
+                    mock.patch.object(C, "run") as run, mock.patch.object(HR, "restart") as rs:
+                self.assertTrue(HR.revive())
+            if loaded:
+                rs.assert_called_once()
+                run.assert_not_called()
+            else:
+                rs.assert_not_called()
+                self.assertEqual(run.call_args[0][0][:2], ["launchctl", "bootstrap"])
+
+    def test_dashboard_flags_a_routed_proxy_that_is_down(self):
+        with mock.patch.object(dash, "_headroom_proxy", return_value=(True, False)):
+            row = dash._headroom_row(True, False)
+        self.assertFalse(row["ok"])
+        self.assertIn("lfg headroom restart", row["problem"])
+        for state in ((True, True), (False, False)):
+            with mock.patch.object(dash, "_headroom_proxy", return_value=state):
+                row = dash._headroom_row(True, False)
+            self.assertTrue(row["ok"])
+            self.assertNotIn("problem", row)
+
 
 class TrackerTest(unittest.TestCase):
     def test_slugs(self):

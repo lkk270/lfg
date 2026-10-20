@@ -98,7 +98,7 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg feedback add <finding-id> accept\|reject [--note ...]` | Records your verdict on a review finding |
 | `lfg usage [--json]` | Token/time summary from `usage.db` |
 | `lfg vendor status\|sync\|update` | Pinned mattpocock/skills source |
-| `lfg hook <session-start\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
+| `lfg hook <session-start\|prompt\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
 
 ## Skills
 
