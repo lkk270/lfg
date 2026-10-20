@@ -778,7 +778,8 @@ def issues(rid=None, branch=None):
     cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - STALE_DAYS * 86400))
     out = {"available": True, "linear_workspace": ws, "issues": keep,
            "error": allq.get("error") if isinstance(allq, dict) else None,
-           "ready": only(_rows(_inv("dev-graph", "ready", branch=br))), "blocked": only(_rows(_inv("dev-graph", "blocked", branch=br))),
+           "ready": only(_rows(_inv("dev-graph", "ready", branch=br))),
+           "blocked": only(_rows(_inv("dev-graph", "blocked", branch=br))),
            "stale": [i for i in keep if i["slug"] in open_ and str(i.get("updatedAt") or "") < cutoff],
            "stale_days": STALE_DAYS, "hidden": len(every) - len(keep),
            "epics": _rows(_inv("dev-graph", "open_epics", branch=br)),

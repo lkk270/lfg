@@ -862,8 +862,8 @@ def cmd_prefs(a):
 
 def cmd_update(a):
     from . import updates as U
-    if a.action == "apply":
-        return 0 if U.apply()["status"] == "done" else 1
+    if a.action in ("apply", "fix"):
+        return 0 if (U.apply if a.action == "apply" else U.fix)()["status"] == "done" else 1
     d = U.check(max_age=0)
     if a.json:
         print(U.as_json(d))
@@ -1154,8 +1154,9 @@ def main(argv=None):
     pf.add_argument("value", nargs="?", help="set: on/off, or one of the choices")
     pf.add_argument("--session", help="one session (its id from lfg sessions); default: the defaults")
     pf.add_argument("--by-user", action="store_true", help="allow loosening (your own terminal only)")
-    up = sp.add_parser("update", help="is there newer LFG (your fork, the original project)? apply installs it")
-    up.add_argument("action", nargs="?", default="check", choices=["check", "apply"])
+    up = sp.add_parser("update", help="is there newer LFG (your fork, the original project)? apply installs it; fix "
+                                      "has Claude fix a stopped update, then applies")
+    up.add_argument("action", nargs="?", default="check", choices=["check", "apply", "fix"])
     up.add_argument("--json", action="store_true")
     ss = sp.add_parser("sessions", help="every Claude Code session on this machine, with the command that resumes it")
     ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder"])
