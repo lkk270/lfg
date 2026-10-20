@@ -49,16 +49,25 @@ def _repo(data):
 
 # ---------------------------------------------------------------- pre-tool
 
+def _prefs(data):
+    """This session's Preferences, which can lift a guard rule. If they can't be read, every rule blocks."""
+    try:
+        from . import prefs as P
+        return P.effective(data.get("session_id"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def pre_tool(data):
     from . import graphs as G
     from . import guard
     tool, tin = data.get("tool_name", ""), data.get("tool_input") or {}
-    verdict = guard.check(tool, tin)
+    verdict = guard.check(tool, tin, prefs=_prefs(data), cwd=data.get("cwd"))
     if verdict:
         rule, why = verdict
         C.audit("blocked", {"rule": rule, "tool": tool, "why": why})
-        sys.stderr.write("Blocked by LFG rule %s (%s): %s. A human must do this in their own terminal.\n"
-                         % (rule, guard.rule_title(rule), why))
+        sys.stderr.write("Blocked by LFG rule %s (%s): %s. A human must do this in their own terminal, or lift it "
+                         "in lfg ui → Preferences → Safety rules.\n" % (rule, guard.rule_title(rule), why))
         return 2
     if GRAPH_TOOL_RX.match(tool):
         root, rid = _repo(data)
@@ -145,6 +154,11 @@ def session_start(data):
     elif C.config()["guard"].get("allow_commit") is True:
         lines[0] = lines[0].replace("never commit/push/gh-write", "commit only when the user asks (never --amend), "
                                     "never push/gh-write").replace("; leave changes unstaged", "")
+    vals = _prefs(data)
+    lifted = ["%s (%s)" % (r, t) for r, (t, _, _) in GD.RULES.items() if vals.get("rule_" + r) == "ask"]
+    if lifted:
+        lines.append("The user lifted LFG's block on safety rules %s: keep to them, but do what they forbid when the "
+                     "user asks you to (lfg-preferences.md has the wording)." % ", ".join(lifted))
     try:
         from . import settings as S
         own = S.own_rules()
