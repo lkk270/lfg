@@ -457,3 +457,9 @@ input.wide { width: 100%; }
 #pref-toast.bad { background: var(--c-red); }
 #pref-toast[hidden] { display: none; }
 .pref.just-saved { outline: 2px solid var(--green); transition: outline-color .4s; }
+.opts { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
+.opt { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+.opt.on { border-color: var(--series-1, var(--chart-1)); background: var(--c-blue); }
+.opt input { margin-top: 3px; }
+.opt > span { display: flex; flex-direction: column; gap: 2px; }
+details.told { margin-top: 6px; } details.told > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }

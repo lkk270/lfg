@@ -50,10 +50,42 @@ BUILTIN = [
          {"value": "squash", "label": "When I say so, squashed",
           "text": "Merge a PR only when I ask, and always as one squashed commit (`gh pr merge --squash`)."}]},
     {"id": "coauthor", "group": "Git", "title": "Claude as co-author", "kind": "switch", "default": False,
+     "about": "On: Claude's commits and PRs credit Claude as co-author. Off: you're the only author.",
      "text": "End commit messages with a Co-Authored-By line for Claude, and PR bodies with the Claude Code line.",
      "off_text": "I am the only author: no Co-Authored-By line for Claude in commits and no \"Generated with Claude "
      "Code\" line in PR bodies."},
 ]
+# What each choice does, said to you (the page shows this; "text" is what Claude is told).
+ABOUT = {
+    ("merge_pr", "squash"):
+        "Claude merges a PR only when you say so, always squashed into one commit; any other merge is blocked.",
+    ("commits", "never"):
+        "Claude leaves its changes uncommitted and gives you a commit message. It is blocked from committing, even "
+        "if you ask.",
+    ("commits", "ask"):
+        "Claude leaves its changes uncommitted until you say \"commit\", then commits.",
+    ("commits", "auto"):
+        "Claude commits by itself after each finished change whose tests pass, without asking you.",
+    ("amend", None):
+        "On: Claude may rewrite its last commit instead of adding a new one. Off: blocked; it always makes a new "
+        "commit.",
+    ("push", "never"):
+        "Claude is blocked from pushing; you push.",
+    ("push", "ask"):
+        "Claude pushes only when you say \"push\".",
+    ("push", "auto"):
+        "Claude pushes right after each of its commits, to the branch it is on.",
+    ("force_push", None):
+        "On: Claude may force-push your own branches, e.g. after amending. Never main, master, qa or prod, even "
+        "when on. Off: blocked.",
+    ("merge_pr", "never"):
+        "Claude is blocked from merging pull requests; you merge.",
+}
+for _p in BUILTIN:
+    if (_p["id"], None) in ABOUT:
+        _p["about"] = ABOUT[(_p["id"], None)]
+    for _o in _p.get("options") or []:
+        _o["about"] = ABOUT.get((_p["id"], _o["value"]), "")
 
 
 def _state_path():
