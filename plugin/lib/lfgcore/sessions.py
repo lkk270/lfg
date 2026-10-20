@@ -229,7 +229,8 @@ def rename(sid, name):
 
 
 def file_into(sid, folder):
-    """Put a session in one of your folders (a session is in at most one). Empty folder takes it out."""
+    """Put a session in one of your groups (stored as "folders"; a label in LFG only, nothing on disk moves). A
+    session is in at most one. Empty takes it out."""
     sid, p = _known(sid), prefs()
     folder = re.sub(r"\s+", " ", str(folder or "")).strip()[:80]
     for f in list(p["folders"]):

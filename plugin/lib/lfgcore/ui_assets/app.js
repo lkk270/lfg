@@ -736,6 +736,7 @@ async function loadStorage() {
 function wireSettings(root) {
   if ($("#cc-box", root)) loadClaudeCode();
   if ($("#skills-box", root)) loadSkills();
+  if ($("#mylib-box", root)) loadMyLibrary();
   if ($("#ollama-box", root)) loadOllama();
   if ($("#storage-box", root)) loadStorage();
   if ($("#tools-box", root)) loadTools();
@@ -1047,7 +1048,7 @@ PAGES.sessions = async () => {
   const rows = d.sessions.filter(hit);
   const byRepo = new Map();
   for (const s of rows) {
-    const repo = s.folder ? "Your folders" : s.repo || "Other";
+    const repo = s.folder ? "Your groups" : s.repo || "Other";
     if (!byRepo.has(repo)) byRepo.set(repo, new Map());
     const g = byRepo.get(repo);
     if (!g.has(s.group)) g.set(s.group, []);
@@ -1057,11 +1058,12 @@ PAGES.sessions = async () => {
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
-      <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"}>${s.folder ? "Move" : "Add to folder"}</button>
+      ${s.folder ? `<span class="tag" title="Your group">${esc(s.folder)} <a href="#" data-sess-ungroup="${esc(s.id)}" title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
+      <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Group sessions your own way, e.g. one feature across repos. Only LFG stores this; nothing on disk moves.">${s.folder ? "Change group" : "Group…"}</button>
       <button class="btn small" data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}' ${unlocked ? "" : "disabled"}>${s.hidden ? "Show again" : "Hide"}</button>
       <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></li>`;
-  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span>${repo !== "Your folders" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
-  const lock = unlocked ? "" : `<div class="callout warn">Rename and folders are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
+  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span>${repo !== "Your groups" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
+  const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
   return `${head("Sessions", "Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up.")}
     ${lock}
     <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span>${d.hidden_count ? `<label class="small"><input type="checkbox" id="sess-hidden" ${state.showHidden ? "checked" : ""}> Show ${plural(d.hidden_count, "hidden session")}</label>` : ""}</div>
@@ -1077,25 +1079,44 @@ function wireSessions(root) {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
     setTimeout(() => (b.textContent = "Copy resume command"), 1500);
   });
+  const setGroup = async (sid, folder, msgEl) => {
+    const r = await save("session_folder", { id: sid, folder });
+    if (msgEl) saidMsg(msgEl, r, folder ? `Added to ${folder}.` : "Taken out.");
+    if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 400);
+    return r;
+  };
   const ask = (sid, kind) => {
     const s = (state.sessions.sessions || []).find(x => x.id === sid) || {};
-    const folders = state.sessions.folders || [];
-    const isName = kind === "name";
-    openDrawer(isName ? "Rename session" : "Put in a folder", `<div class="readable">
-      ${isName ? `<p>Shown in LFG only. Leave it empty to go back to the automatic name: <i>${esc(s.auto_name || "")}</i>.</p>` : `<p>A session is in one folder at most. Leave it empty to take it out.${folders.length ? " Your folders: " + folders.map(f => `<a href="#" data-pick="${esc(f)}">${esc(f)}</a>`).join(", ") + "." : ""}</p>`}
-      <input type="text" id="sess-val" class="wide" value="${esc(isName ? (s.name !== s.auto_name ? s.name : "") : s.folder || "")}" placeholder="${isName ? esc(s.auto_name || "") : "e.g. ATO-4162 rollout"}">
-      <div class="set-actions"><button class="btn primary" id="sess-save">Save</button><span class="save-msg" id="sess-msg"></span></div></div>`);
-    $$("[data-pick]").forEach(a => a.onclick = e => { e.preventDefault(); $("#sess-val").value = a.dataset.pick; });
-    $("#sess-val").focus();
-    const go = async () => {
-      const v = $("#sess-val").value;
-      const r = await save(isName ? "session_name" : "session_folder", isName ? { id: sid, name: v } : { id: sid, folder: v });
-      saidMsg($("#sess-msg"), r, "Saved.");
-      if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 500);
+    const groups = state.sessions.folders || [];
+    if (kind === "name") {
+      openDrawer("Rename session", `<div class="readable"><p>Shown in LFG only; Claude Code's own title is left alone. Leave it empty to go back to the automatic name: <i>${esc(s.auto_name || "")}</i>.</p>
+        <input type="text" id="sess-val" class="wide" value="${esc(s.name !== s.auto_name ? s.name : "")}" placeholder="${esc(s.auto_name || "")}">
+        <div class="set-actions"><button class="btn primary" id="sess-save">Save</button><span class="save-msg" id="sess-msg"></span></div></div>`);
+      const go = async () => { const r = await save("session_name", { id: sid, name: $("#sess-val").value }); saidMsg($("#sess-msg"), r, "Saved."); if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 400); };
+      $("#sess-save").onclick = go;
+      $("#sess-val").onkeydown = e => { if (e.key === "Enter") go(); };
+      $("#sess-val").focus();
+      return;
+    }
+    openDrawer("Put this session in a group", `<div class="readable">
+      <p>Groups are your own way of sorting sessions, for example one feature that spans several repos. They live in LFG only: no file or folder on disk moves, and <code>/resume</code> is unchanged. A session is in at most one group.</p>
+      ${s.folder ? `<p>Now in <b>${esc(s.folder)}</b>. <button class="btn small" id="grp-out">Take it out</button></p>` : ""}
+      ${groups.filter(g => g !== s.folder).length ? `<div class="k">Your groups</div><div class="row wrap">${groups.filter(g => g !== s.folder).map(g => `<button class="btn small" data-grp="${esc(g)}">${esc(g)}</button>`).join("")}</div>` : ""}
+      <div class="k">New group</div>
+      <div class="row"><input type="text" id="grp-new" class="grow" placeholder="e.g. ATO-4162 rollout" maxlength="80"><button class="btn primary" id="grp-make">Create and add</button></div>
+      <span class="save-msg" id="sess-msg"></span></div>`);
+    $$("[data-grp]").forEach(b => b.onclick = () => setGroup(sid, b.dataset.grp, $("#sess-msg")));
+    const out = $("#grp-out");
+    if (out) out.onclick = () => setGroup(sid, "", $("#sess-msg"));
+    const make = () => {
+      const v = $("#grp-new").value.trim();
+      if (v.length < 2) { $("#sess-msg").textContent = "Give the group a name of at least 2 characters."; return; }
+      setGroup(sid, v, $("#sess-msg"));
     };
-    $("#sess-save").onclick = go;
-    $("#sess-val").onkeydown = e => { if (e.key === "Enter") go(); };
+    $("#grp-make").onclick = make;
+    $("#grp-new").onkeydown = e => { if (e.key === "Enter") make(); };
   };
+  $$("[data-sess-ungroup]", root).forEach(a => a.onclick = e => { e.preventDefault(); setGroup(a.dataset.sessUngroup, ""); });
   const hid = $("#sess-hidden", root);
   if (hid) hid.onchange = () => { state.showHidden = hid.checked; route(); };
   $$("[data-sess-hide]", root).forEach(b => b.onclick = async () => {
@@ -1225,11 +1246,31 @@ PAGES.usage = async () => {
       : sp.pending ? `<p class="muted small" data-spend-pending>Working out costs…</p>` : `<p class="muted small">Cost isn't shown: ${fmtWhy(sp.why || "not available")}.</p>`}
     <div class="cols">${stat("Tokens sent", compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs less`)}${stat("Tokens written", compact(t.output), "the AI's replies")}${stat("Saved by compression", hr.available && life.calls ? compact(life.tokens_saved) : "—", hr.available && life.calls ? `${life.savings_percent || 0}% smaller before sending${life.cost_usd ? ` · about ${usd(life.cost_usd)} saved, by Headroom's count` : ""}` : hr.pending ? `<span data-spend-pending>checking…</span>` : "not active yet")}</div>
     ${section("Per day", `<div class="box pad">${barChart((d.days || []).map(x => ({ label: x.day, values: [(x.input || 0) + (x.cache_write || 0), x.output] })), [["Sent (not cached)", "var(--chart-1)"], ["Written", "var(--chart-2)"]])}</div>`)}
+    <div id="hr-detail"><div class="loading">Reading Headroom's logs…</div></div>
     ${(d.models || []).length ? section("By model", `<div class="box">${table(d.models, [{ k: "model", label: "Model" }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }], { filter: false })}</div>`) : ""}
     ${sp.available && (sp.models || []).length ? section("Cost by model, last 30 days", `<div class="box">${table(sp.models, [{ k: "model", label: "Model" }, { k: "usd", label: "Cost", num: true, html: r => usd(r.usd) }], { filter: false })}</div>`) : ""}
     ${(d.runs || []).length ? section(`${repoName()}, by run`, `<div class="box">${table(d.runs, [{ k: "run", label: "Run", html: r => r.run && r.run !== "(no run)" ? `<a href="#runs/${encodeURIComponent(r.run)}">${esc(runName({ slug: r.run.slice(14) }))}</a>` : '<span class="muted">Outside a run</span>' }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }], { filter: false })}</div>`, "this project only, all time") : ""}`;
 };
 
+async function loadHeadroom() {
+  const box = $("#hr-detail");
+  if (!box) return;
+  const d = await api("headroom");
+  if (d.pending) { setTimeout(loadHeadroom, 2000); return; }
+  if (d.available === false) { box.innerHTML = ""; return; }
+  const W = d.when || {}, X = d.where || {};
+  const state_ = d.routed ? `${dot(d.live ? "ok" : "bad")}Every Claude Code session goes through Headroom${d.live ? "" : ", but it isn't running right now, so sessions can't reach Claude"}.` : d.live ? `${dot("warn")}Headroom is running, but Claude Code doesn't go through it${d.scope === "repos" ? " except in repos where LFG is on" : ""}.` : `${dot("")}Headroom isn't on.`;
+  const days = (W.days || []);
+  const hours = (W.today_by_hour || []).filter(h => h.calls);
+  box.innerHTML = section("Headroom", `<p>${state_} It shrinks what's sent to Claude before it goes.</p>
+    ${days.length ? `<div class="box pad">${barChart(days.map(x => ({ label: x.day, values: [x.saved] })), [["Tokens Headroom saved", "var(--chart-1)"]])}</div>
+      <p class="muted small">Last 30 days: ${compact(days.reduce((a, x) => a + x.saved, 0))} tokens saved on ${n(days.reduce((a, x) => a + x.calls, 0))} requests, about ${usd(days.reduce((a, x) => a + x.usd, 0))} by Headroom's count.${hours.length ? ` Today it was busiest at ${hours.sort((a, b) => b.calls - a.calls).slice(0, 3).map(h => `${h.hour}:00 (${n(h.calls)} requests)`).join(", ")}.` : ""}</p>` : ""}
+    ${(X.sessions || []).length ? `<div class="k">Where, since ${ago(X.since)}</div>
+      <p class="muted small">Headroom's request log only keeps the last few hours. Requests are matched to a session by their token counts: ${n(X.matched)} of ${n(X.requests)} matched one session exactly; the rest are counted as not matched.</p>
+      <div class="box">${table(X.repos, [{ k: "repo", label: "Repo" }, { k: "sessions", label: "Sessions", num: true }, { k: "calls", label: "Requests", num: true }, { k: "saved", label: "Tokens saved", num: true, html: r => compact(r.saved) }], { filter: false })}</div>
+      <div class="box mt">${table(X.sessions, [{ k: "name", label: "Session", html: r => `${esc(r.name)}<div class="sub">${esc(r.repo)}${r.group ? " · " + esc(r.group) : ""} · last ${ago(r.last)}</div>` }, { k: "calls", label: "Requests", num: true }, { k: "saved", label: "Tokens saved", num: true, html: r => compact(r.saved) }, { k: "percent", label: "Smaller by", num: true, html: r => r.percent + "%" }], { filter: false, sort: "saved" })}</div>` : ""}`, "context compression");
+  mountTables(box);
+}
 PAGES.settings = async () => {
   const [cfg, sk, cm, unlocked] = await Promise.all([api("settings"), api("skills"), api("claudemd"), isUnlocked()]);
   state.settings = { cfg, sk, cm, unlocked };
@@ -1245,25 +1286,43 @@ PAGES.skills = async () => {
   state.settings = Object.assign(state.settings || {}, { sk, cm, unlocked, cfg: (state.settings || {}).cfg });
   return `${head("Skills", "Everything Claude Code can load as a skill on this computer: yours, this project's and every plugin's, LFG's included.")}
     ${unlocked ? "" : `<div class="callout">Read-only. To change skills, run <code>lfg ui</code> in your own terminal; it opens this page unlocked.</div>`}
-    <div class="section">${tabs("skillspage", [["all", "All skills", null, () => '<div id="skills-box"><div class="loading">Reading skills…</div></div>'], ["lfgedit", "Edit LFG skills", null, settingsSkills]])}</div>`;
+    <div class="section">${tabs("skillspage", [["all", "All skills", null, () => '<div id="skills-box"><div class="loading">Reading skills…</div></div>'], ["mine", "Your skills & references", null, () => '<div id="mylib-box"><div class="loading">Reading ~/.claude…</div></div>'], ["lfgedit", "Edit LFG skills", null, settingsSkills]])}</div>`;
 };
 async function loadSkills() {
   const box = $("#skills-box");
   if (!box) return;
-  const d = await api("allskills"), un = state.settings.unlocked, S = d.summary;
+  const [d, G] = await Promise.all([api("allskills"), api("skillgroups")]), un = state.settings.unlocked, S = d.summary;
+  const groupOf = Object.fromEntries(Object.entries(G).flatMap(([g, ids]) => ids.map(i => [i, g])));
+  d.skills.forEach(r => (r.group = groupOf[r.id] || ""));
+  state.skillGroups = Object.keys(G).sort();
   const filt = sessionStorage.getItem("lfg.skills.filter") || "all";
-  const rows = d.skills.filter(r => filt === "all" || (filt === "collisions" ? r.collides_with.length : filt === "auto" ? r.auto : r.source === filt));
+  const rows = d.skills.filter(r => filt === "all" || (filt.startsWith("group:") ? r.group === filt.slice(6) : filt === "collisions" ? r.collides_with.length : filt === "auto" ? r.auto : r.source === filt));
   box.innerHTML = `<div class="cols">${stat("Skills", n(S.total))}${stat("Claude may use on its own", n(S.auto), `about ${compact(S.approx_tokens)} tokens of descriptions in every session`)}${stat("Name clashes", n(S.collisions), "the short name goes to your own skill first")}</div>
-    <div class="row mt"><label class="muted small" for="sk-filter">Show</label><select id="sk-filter">${[["all", "All"], ["auto", "Used on its own"], ["collisions", "Name clashes"], ...S.sources.map(x => [x, SRC_LABEL[x] || x])].map(([v, l]) => `<option value="${esc(v)}" ${v === filt ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><span class="save-msg" id="sk-msg"></span></div>
+    <div class="row mt"><label class="muted small" for="sk-filter">Show</label><select id="sk-filter">${[["all", "All"], ["auto", "Used on its own"], ["collisions", "Name clashes"], ...S.sources.map(x => [x, SRC_LABEL[x] || x]), ...state.skillGroups.map(g => ["group:" + g, "Group: " + g])].map(([v, l]) => `<option value="${esc(v)}" ${v === filt ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><span class="save-msg" id="sk-msg"></span></div>
     <div class="box mt">${table(rows, [
       { k: "invoke", label: "Type", html: r => `<code class="nowrap">${esc(r.invoke)}</code>${r.shadowed ? ' <span class="tag" title="A skill of yours has the same short name">use full name</span>' : ""}` },
       { k: "source", label: "From", html: r => `${esc(SRC_LABEL[r.source] || r.source)}${r.plugin ? `<div class="sub">${esc(r.plugin)}${r.enabled === false ? " · off" : ""}</div>` : ""}` },
       { k: "auto", label: "Claude uses it on its own", sort: r => (r.auto ? 1 : 0), html: r => r.editable ? `<label class="row"><input type="checkbox" data-sk-auto="${esc(r.id)}" ${r.auto ? "checked" : ""} ${un ? "" : "disabled"}> ${r.auto ? "yes" : "only when typed"}</label>` : (r.auto ? "yes" : "only when typed") },
       { k: "description", label: "What it does", html: r => `<span title="${esc(r.description)}">${esc(r.description.slice(0, 140))}${r.description.length > 140 ? "…" : ""}</span>${r.collides_with.length ? `<div class="sub">same name as ${r.collides_with.map(x => `<code>${esc(x)}</code>`).join(", ")}</div>` : ""}` },
+      { k: "group", label: "Group", html: r => `${r.group ? `<span class="tag">${esc(r.group)}</span> ` : ""}<button class="btn small" data-sk-group="${esc(r.id)}" ${un ? "" : "disabled"}>${r.group ? "Change" : "Group…"}</button>` },
       { k: "chars", label: "Size", num: true },
     ], { onRow: r => showSkillText(r.id), emptyTitle: "No skills here" })}</div>`;
   mountTables(box);
   $("#sk-filter", box).onchange = e => { sessionStorage.setItem("lfg.skills.filter", e.target.value); loadSkills(); };
+  $$("[data-sk-group]", box).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const id = b.dataset.skGroup, cur = (d.skills.find(x => x.id === id) || {}).group || "";
+    const set = async g => { const r = await save("skill_group", { id, group: g }); saidMsg($("#skg-msg"), r, "Saved."); if (r.ok) setTimeout(() => { closeDrawer(); loadSkills(); }, 400); };
+    openDrawer(`Group ${(d.skills.find(x => x.id === id) || {}).invoke || id}`, `<div class="readable"><p>Groups sort skills your own way, for example your <code>/review-pr</code> with <code>/lfg:review</code>. They live in LFG only and change nothing about the skills.</p>
+      ${cur ? `<p>Now in <b>${esc(cur)}</b>. <button class="btn small" id="skg-out">Take it out</button></p>` : ""}
+      ${state.skillGroups.filter(g => g !== cur).length ? `<div class="k">Your groups</div><div class="row wrap">${state.skillGroups.filter(g => g !== cur).map(g => `<button class="btn small" data-skg="${esc(g)}">${esc(g)}</button>`).join("")}</div>` : ""}
+      <div class="k">New group</div><div class="row"><input type="text" id="skg-new" class="grow" placeholder="e.g. PR reviews" maxlength="60"><button class="btn primary" id="skg-make">Create and add</button></div><span class="save-msg" id="skg-msg"></span></div>`);
+    $$("[data-skg]").forEach(x => x.onclick = () => set(x.dataset.skg));
+    if ($("#skg-out")) $("#skg-out").onclick = () => set("");
+    const make = () => { const v = $("#skg-new").value.trim(); if (v.length < 2) { $("#skg-msg").textContent = "Give the group a name of at least 2 characters."; return; } set(v); };
+    $("#skg-make").onclick = make;
+    $("#skg-new").onkeydown = e => { if (e.key === "Enter") make(); };
+  });
   $$("[data-sk-auto]", box).forEach(c => {
     c.onclick = e => e.stopPropagation();
     c.onchange = async () => {
@@ -1272,6 +1331,39 @@ async function loadSkills() {
       if (!r.ok) c.checked = !c.checked;
     };
   });
+}
+async function loadMyLibrary(pick) {
+  const box = $("#mylib-box");
+  if (!box) return;
+  const d = await api("mylibrary"), un = state.settings.unlocked;
+  const fileLink = (f, label) => `<a href="#" data-myfile="${esc(f.path)}" title="${esc(f.path)}">${esc(label)}${(f.used_by || []).length ? `<span class="tag" title="Mentioned by ${esc(f.used_by.join(", "))}">${f.used_by.length}</span>` : ""}</a>`;
+  const skills = d.skills.map(s => `<div class="nav-grp">/${esc(s.name)}</div>${s.files.map(f => fileLink(f, f.rel)).join("")}`).join("");
+  const shared = d.shared.map(g => `<div class="nav-grp">${esc(g.name)}</div>${g.files.map(f => fileLink(f, f.rel)).join("")}`).join("");
+  box.innerHTML = `<p class="muted">Your own skills in <code>~/.claude/skills</code>, and the shared files they read: <code>~/.claude/skills/shared</code> and <code>~/.claude/references</code>. The number on a shared file is how many of your skills mention it. ${un ? "Saving keeps a copy of the old version in <code>~/.lfg/backups/personal/</code>." : "Unlock editing (run <code>lfg ui</code>) to change them."}</p>
+    <div class="skill-edit"><nav>${shared ? `<div class="nav-grp"><b>Shared</b></div>${shared}` : ""}<div class="nav-grp"><b>Your skills</b></div>${skills}</nav>
+    <div class="grow"><div id="myfile-editor">${empty("Pick a file to read or change it", "New Claude Code sessions use what you save.")}</div></div></div>`;
+  $$("[data-myfile]", box).forEach(a => a.onclick = e => { e.preventDefault(); $$("[data-myfile]", box).forEach(x => x.classList.toggle("on", x === a)); showMyFile(a.dataset.myfile, d); });
+  if (pick) { const a = $(`[data-myfile="${CSS.escape(pick)}"]`, box); if (a) a.click(); }
+}
+async function showMyFile(path, lib) {
+  const ed = $("#myfile-editor"), un = state.settings.unlocked;
+  const d = await api("myfile", { path });
+  if (d.available === false) { ed.innerHTML = unavailable(d); return; }
+  const f = [...lib.skills, ...lib.shared].flatMap(g => g.files).find(x => x.path === path) || {};
+  const isMd = /\.md$/i.test(path);
+  ed.innerHTML = `<div class="row"><span class="mono small grow">${esc(path.replace(/^\/Users\/[^/]+/, "~"))}</span>${un ? '<button class="btn small" id="myf-edit">Edit</button>' : ""}</div>
+    ${(f.used_by || []).length ? `<p class="muted small">Mentioned by ${f.used_by.map(n => `<code>/${esc(n)}</code>`).join(", ")}: changing it changes how they work.</p>` : ""}
+    <div id="myf-read" class="box pad ${isMd ? "md" : ""}">${isMd ? md(frontMatter(d.text).body) : `<pre>${esc(d.text)}</pre>`}</div>
+    <div id="myf-write" hidden><textarea class="editor" id="myf-text" spellcheck="false">${esc(d.text)}</textarea>
+      <div class="set-actions"><button class="btn primary" id="myf-save">Save</button><button class="btn" id="myf-cancel">Cancel</button><span class="save-msg" id="myf-msg"></span></div></div>`;
+  if (!un) return;
+  $("#myf-edit").onclick = () => { $("#myf-read").hidden = true; $("#myf-write").hidden = false; $("#myf-edit").hidden = true; };
+  $("#myf-cancel").onclick = () => showMyFile(path, lib);
+  $("#myf-save").onclick = async () => {
+    const r = await save("my_file", { path, text: $("#myf-text").value });
+    saidMsg($("#myf-msg"), r, r.ok ? (r.note || "Saved.") : "");
+    if (r.ok) setTimeout(() => loadMyLibrary(path), 900);
+  };
 }
 async function showSkillText(id) {
   const d = await api("skilltext", { id });
@@ -1583,6 +1675,7 @@ async function route() {
   if (key === "prs") wirePrs(view);
   if (key === "sessions") wireSessions(view);
   if (key === "environment") wireEnvironment(view);
+  if (key === "usage") loadHeadroom();
   const rf = $("#refreshed");
   if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (!arg) window.scrollTo(0, 0);
@@ -1658,7 +1751,7 @@ async function checkUpdate() {
   if (j && j.status === "done" && !state.updateSeen && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
     box.hidden = false;
     box.className = "callout ok";
-    box.innerHTML = `${dot("ok")}LFG is updated. This page has reloaded on the new version. <b>Start a new Claude Code session</b> to get new or changed skills; sessions already open keep the old ones. <button class="btn small" id="update-ok">OK</button>`;
+    box.innerHTML = `${dot("ok")}<span><b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
     $("#update-ok").onclick = () => { state.updateSeen = true; box.hidden = true; };
     return;
   }
@@ -1669,6 +1762,9 @@ async function checkUpdate() {
     $("#update-ok").onclick = () => { state.updateSeen = true; box.hidden = true; };
     return;
   }
+  const ver = $("#lfg-version");
+  if (ver && d.available) ver.textContent = d.ready ? "Update ready" : "LFG up to date";
+  if (d.pending) { setTimeout(checkUpdate, 3000); return; }
   if (!d.available || !d.ready) { box.hidden = true; return; }
   const R = d.remotes || {}, parts = [];
   if ((R.upstream || {}).new) parts.push(`${plural(R.upstream.new, "change")} from the original LFG`);

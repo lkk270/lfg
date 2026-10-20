@@ -727,6 +727,12 @@ def _all_usage():
     return d
 
 
+def headroom_detail():
+    from . import hrstats
+    return in_background("headroom_detail", 120, lambda: dict(hrstats.summary(), available=True),
+                         "reading Headroom's logs")
+
+
 def usage(rid):
     """Per day, per model and dollars from every Claude Code session's own log (whether or not LFG is on there);
     per-run and per-project rows from LFG's usage.db, which only records repos where LFG is on."""

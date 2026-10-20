@@ -1114,6 +1114,48 @@ class UpdatesTest(unittest.TestCase):
         self.assertIn("uncommitted", j["why"])
 
 
+class PersonalSkillsTest(unittest.TestCase):
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.home, True)
+        p = mock.patch.object(C, "HOME", self.home)
+        p.start()
+        self.addCleanup(p.stop)
+        sk = os.path.join(self.home, ".claude", "skills")
+        os.makedirs(os.path.join(sk, "review-pr"))
+        os.makedirs(os.path.join(sk, "shared", "references"))
+        self.skill = os.path.join(sk, "review-pr", "SKILL.md")
+        with open(self.skill, "w") as f:
+            f.write("---\nname: review-pr\ndescription: d\n---\nRead shared/references/style.md first.\n")
+        with open(os.path.join(sk, "shared", "references", "style.md"), "w") as f:
+            f.write("# style\n")
+
+    def test_lists_shared_files_with_who_uses_them(self):
+        d = ST.personal_library()
+        self.assertEqual([s["name"] for s in d["skills"]], ["review-pr"])
+        f = d["shared"][0]["files"][0]
+        self.assertEqual((f["rel"], f["used_by"]), ("references/style.md", ["review-pr"]))
+
+    def test_save_keeps_a_backup_and_refuses_outside_claude_and_bad_front_matter(self):
+        ST.save_personal(self.skill, "---\nname: review-pr\ndescription: new\n---\nbody\n")
+        self.assertIn("description: new", open(self.skill).read())
+        self.assertTrue(glob.glob(C.lfg_path("backups", "personal", "skills", "review-pr", "SKILL.md.*")))
+        with self.assertRaises(ST.Invalid):
+            ST.save_personal(self.skill, "no front matter")
+        with self.assertRaises(ST.Invalid):
+            ST.save_personal(os.path.join(self.home, ".zshrc"), "x")
+        with self.assertRaises(ST.Invalid):
+            ST.save_personal(os.path.join(self.home, ".claude", "skills", "..", "settings.json"), "{}")
+
+    def test_skill_groups_are_one_per_skill_and_reversible(self):
+        ST.set_skill_group("personal:review-pr", "PR reviews")
+        ST.set_skill_group("lfg@lfg:review", "PR reviews")
+        self.assertEqual(ST.skill_groups(), {"PR reviews": ["personal:review-pr", "lfg@lfg:review"]})
+        ST.set_skill_group("personal:review-pr", "")
+        ST.set_skill_group("lfg@lfg:review", "")
+        self.assertEqual(ST.skill_groups(), {})
+
+
 class SessionsTest(unittest.TestCase):
     def setUp(self):
         import tempfile

@@ -1000,8 +1000,9 @@ def main(argv=None):
     ss = sp.add_parser("sessions", help="every Claude Code session on this machine, with the command that resumes it")
     ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder"])
     ss.add_argument("id", nargs="?", help="name/folder: the session id")
-    ss.add_argument("value", nargs="*", help="name: your name for it; folder: the folder (empty takes it out)")
-    ss.add_argument("--find", help="list: only sessions whose name, repo, branch, ticket or folder has this")
+    ss.add_argument("value", nargs="*", help="name: your name for it; folder: your group for it, LFG only, nothing on "
+                    "disk moves (empty takes it out)")
+    ss.add_argument("--find", help="list: only sessions whose name, repo, branch, ticket or group has this")
     ss.add_argument("--days", type=int, help="list: only the last N days")
     ss.add_argument("--limit", type=int, default=30)
     ss.add_argument("--json", action="store_true")

@@ -400,7 +400,7 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 .pr-steps { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); }
 .row.mt { margin-top: 10px; }
 
-.topbar #refreshed { margin-right: 10px; }
+.topbar #refreshed, .topbar #lfg-version { margin-right: 12px; }
 .sess-list { margin: 0 0 8px 22px; }
 .sess-list > li.sess { display: flex; gap: 8px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 .sess-list > li.sess:last-child { border-bottom: 0; }
@@ -409,10 +409,13 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 .bad-tx { color: var(--red); }
 input.wide { width: 100%; }
 #update-banner { margin: 10px 14px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-#update-banner details.inline { display: inline-block; }
+#update-banner details.inline { display: inline-block; margin: 0; }
+#update-banner details.inline > summary { margin: 0; line-height: inherit; }
+#update-banner .btn { align-self: center; }
 #update-banner details.inline ul { margin: 6px 0 0 18px; }
 .pre-wrap { white-space: pre-wrap; }
 .tag.ok { color: var(--green-tx); background: var(--green-bg); }
 .tag.warn { color: var(--yellow-tx); background: var(--yellow-bg); }
 .tag.bad { color: var(--red-tx); background: var(--red-bg); }
 .pr-edit .row input[type=text] { min-width: 0; }
+.row.wrap { flex-wrap: wrap; } .tag a { margin-left: 4px; color: inherit; text-decoration: none; }

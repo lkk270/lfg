@@ -146,6 +146,7 @@ def apply(log=print):
     if _git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         return fail("%s has uncommitted changes; commit or stash them first" % root)
     before = _git(root, "rev-parse", "HEAD").stdout.strip()
+    was_installed = (C.read_json(_state_path(), {}) or {}).get("installed_head") or before
     for r in ("origin", "upstream"):
         if not _remote_url(root, r):
             continue
@@ -178,8 +179,9 @@ def apply(log=print):
     if cp.returncode:
         return fail("install failed: %s" % ((cp.stderr or cp.stdout).strip()[-400:]))
     _CACHE.update(ts=0, data=None)
-    j.update(status="done", ended=C.now_iso(), from_head=before[:12],
-             to_head=_git(root, "rev-parse", "HEAD").stdout.strip()[:12])
+    after = _git(root, "rev-parse", "HEAD").stdout.strip()
+    j.update(status="done", ended=C.now_iso(), from_head=was_installed[:12], to_head=after[:12],
+             changes=_log(root, was_installed, after, n=30))
     say("Installed. LFG commands and the dashboard use it now; start a new Claude Code session for new skills")
     return j
 

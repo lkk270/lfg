@@ -117,6 +117,17 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "mylibrary":
+        return S.personal_library()
+    if view == "myfile":
+        try:
+            return S.read_personal(_arg(q, "path"))
+        except S.Invalid as e:
+            return {"available": False, "why": str(e)}
+    if view == "skillgroups":
+        return S.skill_groups()
+    if view == "headroom":
+        return dash.headroom_detail()
     if view == "environment":
         from . import env as E
         if _arg(q, "fresh") == "1":
@@ -124,8 +135,10 @@ def api(view, q):
         return dash.in_background("environment", 300, E.snapshot, "looking at every repo and worktree")
     if view == "update":
         from . import updates as U
+        if _arg(q, "fresh") == "1":
+            dash.forget("update")
         d = dash.in_background("update", 600, U.check, "checking for updates")
-        return dict(d, job=U.job()) if d.get("available") else d
+        return dict(d, job=U.job())  # the job even while the check is still running, e.g. right after a restart
     if view == "sessions":
         from . import sessions as SS
         return SS.listing(hidden=_arg(q, "hidden") == "1")
@@ -211,6 +224,10 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what == "my_file":
+        return S.save_personal(body.get("path"), body.get("text"))
+    if what == "skill_group":
+        return S.set_skill_group(body.get("id"), body.get("group"))
     if what == "update_apply":
         from . import updates as U
         return U.start()
