@@ -162,6 +162,24 @@ class OmnigraphTest(unittest.TestCase):
         err = "applying...\nAdmission lock: 01ABCXYZ9; retain until 2026-10-13T00:00:00Z\n"
         self.assertEqual(OG.LOCK_RX.search(err).group(1), "01ABCXYZ9")
 
+    def test_stale_lock_cleared_only_when_its_process_is_gone(self):
+        lock = OG.root("dev-graph", "__cluster", "lock.json")
+        C.ensure_dir(os.path.dirname(lock))
+        ran = []
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(OG, "_which", lambda n: "/bin/omnigraph"), \
+                mock.patch.object(C, "run", lambda argv, **k: ran.append(argv) or ok):
+            C.write_text(lock, json.dumps({"lock_id": "01LIVE", "operation": "serve", "pid": os.getpid()}))
+            self.assertIsNone(OG.clear_stale_lock("dev-graph"))
+            self.assertEqual(ran, [])
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()
+            C.write_text(lock, json.dumps({"lock_id": "01DEAD", "operation": "serve", "pid": dead.pid}))
+            self.assertEqual(OG.clear_stale_lock("dev-graph"), "01DEAD")
+            self.assertEqual(ran, [["/bin/omnigraph", "cluster", "force-unlock", "01DEAD", "--config", "."]])
+            os.remove(lock)
+            self.assertIsNone(OG.clear_stale_lock("dev-graph"))
+
 
 class OmnigraphRowsTest(unittest.TestCase):
     def test_rows_from_columns_and_dicts(self):
@@ -169,6 +187,10 @@ class OmnigraphRowsTest(unittest.TestCase):
         self.assertEqual(OG._rows(res), [{"slug": "a-1", "title": "First"}])
         self.assertEqual(OG._rows({"rows": [{"$x.status": "done"}]}), [{"status": "done"}])
         self.assertEqual(OG._rows({}), [])
+
+    def test_subject_wins_over_a_joined_node(self):
+        res = {"rows": [{"i.slug": "iss-b", "i.status": "todo", "b.slug": "iss-a", "b.status": "done"}]}
+        self.assertEqual(OG._rows(res), [{"slug": "iss-b", "status": "todo"}])
 
     def test_api_contract_header_matches_pin(self):
         self.assertRegex(OG.cfg()["version"].rstrip("."), r"^\d+\.\d+$")
@@ -424,6 +446,29 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(T.slug_for("acme-4225"), "acme-4225")  # run.json stores the slug; must map to itself
         self.assertEqual(T.slug_for("Make billing-service logs useful!"), "iss-make-billing-service-logs-useful")
         self.assertEqual(T.slug_for("iss-x"), "iss-x")
+
+    def test_sync_tasks_and_brief_carry_the_real_text(self):
+        run = tempfile.mkdtemp()
+        C.write_json(os.path.join(run, "tasks.json"), [
+            {"id": "t-001", "description": "Add the thing", "steps": ["one", "two"], "verification": "tests pass",
+             "passes": True, "priority": 2},
+            {"id": "t-002", "description": "Next thing", "passes": False, "linear_id": "ACME-9"}])
+        C.write_json(os.path.join(run, "run.json"), {"issue": "ACME-1"})
+        C.write_text(os.path.join(run, "01-brief.md"), "# Brief: X\n\n## Problem\nIt breaks.\n\n"
+                     "## Acceptance criteria\n1. **Works**\n   Given a, Then b.\n### detail\nmore\n\n"
+                     "## Non-goals\nnone\n")
+        calls = []
+        with mock.patch.object(T, "lookup", lambda slug: {"slug": slug} if slug == "acme-9" else None), \
+                mock.patch.object(T, "sync", lambda key, **kw: calls.append((key, kw)) or {"action": "x", **kw}):
+            T.sync_tasks(run)
+            T.sync_brief(run)
+        self.assertEqual(calls[0], ("iss-t-001", {"title": "Add the thing", "description":
+                                                  "Add the thing\n\nSteps:\n- one\n- two", "criteria": "tests pass",
+                                                  "status": "done", "priority": 2}))
+        self.assertEqual(calls[1][0], "ACME-9")  # its tracker id, and an existing issue keeps title and status
+        self.assertEqual((calls[1][1]["title"], calls[1][1]["status"]), (None, None))
+        self.assertEqual(calls[2], ("ACME-1", {"description": "It breaks.", "criteria":
+                                               "1. **Works**\n   Given a, Then b.\n### detail\nmore"}))
 
     def test_sync_creates_then_updates_only_given_fields(self):
         calls = []
@@ -948,6 +993,127 @@ class OnboardingTourTest(unittest.TestCase):
         self.assertIn("**billing**", text)
         self.assertNotIn("Community 3", text)
         self.assertNotIn("EXTRACTED", text)
+
+
+class IssueScopeTest(unittest.TestCase):
+    def test_issues_follow_repo_branch_and_run_progress(self):
+        rid = "scope-1234abcd"
+        run = C.lfg_path("runs", rid, "20261001-0000-thing")
+        C.write_json(os.path.join(run, "run.json"), {"issue": "iss-big-thing", "branch": "feat/x"})
+        C.write_json(os.path.join(run, "tasks.json"), [{"id": "thing-001", "passes": True, "description": "Do one"},
+                                                       {"id": "thing-002", "passes": False},
+                                                       {"id": "thing-003", "passes": False}])
+        old, new = "2026-01-01", time.strftime("%Y-%m-%d")
+        rows = [{"slug": "iss-big-thing", "status": "in_progress", "updatedAt": new},
+                {"slug": "iss-thing-001", "status": "todo", "updatedAt": new},
+                {"slug": "iss-thing-002", "status": "todo", "updatedAt": old},
+                {"slug": "ato-77", "status": "todo", "updatedAt": new},
+                {"slug": "iss-elsewhere", "status": "todo", "updatedAt": old},
+                {"slug": "iss-thing-003", "status": "todo", "updatedAt": new, "description": "Repo: other. Run x."},
+                {"slug": "iss-named", "status": "todo", "updatedAt": new, "description": "Repo: scope. Run y."}]
+        inv = {"ready": [{"slug": "iss-thing-002"}, {"slug": "iss-elsewhere"}, {"slug": "iss-thing-001"}],
+               "blocked": [{"slug": "ato-77"}, {"slug": "ato-77"}], "open_epics": []}
+        gb = {"local": ["main", "feat/x", "kim/ato-77-fix"], "merged": set(), "default": "main", "current": "main"}
+        with mock.patch.object(dash, "og_access", lambda n: None), \
+                mock.patch.object(dash, "_list", lambda *a, **k: rows if a[1] == "Issue" else []), \
+                mock.patch.object(dash, "_inv", lambda n, q, p=None: inv[q]), \
+                mock.patch.object(dash, "git_branches", lambda root: gb), \
+                mock.patch.object(dash, "repo_root", lambda r: "/src/scope"):
+            d = dash.issues(rid)
+            by = {i["slug"]: i for i in d["issues"]}
+            self.assertEqual(set(by), {"iss-big-thing", "iss-thing-001", "iss-thing-002", "ato-77", "iss-named"})
+            self.assertEqual(d["hidden"], 2)  # iss-elsewhere (no link) and iss-thing-003 (says another repo)
+            self.assertEqual((by["iss-thing-001"]["status"], by["iss-thing-001"]["graph_status"]), ("done", "todo"))
+            self.assertEqual(by["ato-77"]["branches"], ["kim/ato-77-fix"])
+            self.assertEqual([r["slug"] for r in d["ready"]], ["iss-thing-002"])  # done and other repos drop out
+            self.assertEqual([r["slug"] for r in d["blocked"]], ["ato-77"])  # once, not per blocker
+            self.assertEqual([i["slug"] for i in d["stale"]], ["iss-thing-002"])
+            self.assertEqual({i["slug"] for i in dash.issues(rid, "kim/ato-77-fix")["issues"]}, {"ato-77"})
+            self.assertEqual(len(dash.issues(rid, "feat/x")["issues"]), 3)
+            self.assertEqual((by["iss-thing-001"]["description"], by["iss-thing-001"]["text_from"]),
+                             ("Do one", "20261001-0000-thing"))
+            # no run text to fill it from: left as saved
+            self.assertEqual(by["iss-named"]["description"], "Repo: scope. Run y.")
+
+
+class SharedRunTest(unittest.TestCase):
+    def test_a_run_shows_under_every_repo_its_tasks_name(self):
+        api, portal = "api-11111111", "acme-portal-22222222"
+        run = C.lfg_path("runs", api, "20261002-0000-span")
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main"})
+        for f in ("01-brief.md", "02-design.md", "04-qa.md"):
+            C.write_text(os.path.join(run, f), "x")
+        C.write_json(os.path.join(run, "06-review.json"), {"verdict": "changes"})
+        C.write_json(os.path.join(run, "tasks.json"), [{"id": "s-001", "repo": "api", "passes": True},
+                                                       {"id": "s-portal-1", "repo": "portal", "passes": False}])
+        roots = {api: "/src/api", portal: "/src/acme-portal"}
+        with mock.patch.object(dash, "repo_ids", lambda: [api, portal]), \
+                mock.patch.object(dash, "repo_root", lambda r: roots.get(r)):
+            self.assertTrue(dash.repo_matches(portal, "portal"))
+            self.assertFalse(dash.repo_matches(portal, "tal"))
+            self.assertFalse(dash.repo_matches(api, "portal"))
+            mine = dash.runs(portal)["runs"]
+            self.assertEqual([(r["run"], r["owner_name"], r["tasks_here"], r["tasks_here_done"]) for r in mine],
+                             [("20261002-0000-span", "api", 1, 0)])
+            self.assertEqual(dash.runs(portal, "main")["runs"], [])  # main is api's branch, not the portal's
+            self.assertEqual(mine[0]["progress"], 3)  # brief/design/tasks; api's checks are not the portal's
+            self.assertIsNone(mine[0]["review"])
+            det = dash.run_detail(portal, "20261002-0000-span")
+            self.assertEqual((det["owner_name"], [t["id"] for t in det["tasks_list"]]), ("api", ["s-portal-1"]))
+            self.assertEqual(dash.run_detail(portal, "nope").get("available"), False)
+            self.assertNotIn("owner", dash.runs(api)["runs"][0])
+            self.assertEqual(det["checks"], [])  # api's checks ran on api's code
+            C.write_json(os.path.join(run, "05-secure-portal.json"), {"verdict": "safe", "findings": [{"id": "P-1"}]})
+            C.write_json(os.path.join(run, "05-secure.json"), {"verdict": "don't", "blocking": 3})
+            self.assertEqual([x["verdict"] for x in dash.security(portal)["secure"]], ["safe"])
+            self.assertEqual([x["verdict"] for x in dash.security(api)["secure"]], ["don't"])  # not the portal's
+            self.assertEqual(dash.runs(portal)["runs"][0]["secure"], "safe")
+            self.assertTrue(dash.runs(portal)["runs"][0]["stages"]["secure"])
+
+    def test_checks_older_than_the_work_are_out_of_date(self):
+        d = tempfile.mkdtemp()
+        C.write_json(os.path.join(d, "ready.json"), {"green": False, "checks": [{"name": "types", "exit": 1}]})
+        self.assertEqual(dash._run_summary(d)["ready"], "red")
+        C.write_text(os.path.join(d, "03-build-t1.md"), "built")
+        later = os.path.getmtime(os.path.join(d, "ready.json")) + 60
+        os.utime(os.path.join(d, "03-build-t1.md"), (later, later))
+        self.assertEqual(dash._run_summary(d)["ready"], "stale")
+
+
+class RunChecksTest(unittest.TestCase):
+    def test_rerun_only_the_current_run_and_once_at_a_time(self):
+        from lfgcore import settings as ST2
+        rid = "chk-33333333"
+        root = tempfile.mkdtemp()
+        cur, old = C.lfg_path("runs", rid, "20261003-0000-now"), C.lfg_path("runs", rid, "20261001-0000-old")
+        for d in (cur, old):
+            C.write_json(os.path.join(d, "run.json"), {"worktrees": [{"path": root}]})
+        C.write_text(C.lfg_path("runs", rid, "CURRENT"), "20261003-0000-now")
+        started = []
+        fake = types.SimpleNamespace(pid=os.getpid())
+        with mock.patch.object(dash, "repo_ids", lambda: [rid]), mock.patch.object(dash, "repo_root", lambda r: root), \
+                mock.patch("subprocess.Popen", lambda argv, **k: started.append((argv, k["cwd"])) or fake):
+            with self.assertRaises(ST2.Invalid):
+                ui.run_checks(rid, "20261001-0000-old")
+            self.assertEqual(ui.run_checks(rid, "20261003-0000-now"), {"started": True})
+            self.assertEqual((started[0][0][-2:], started[0][1]), (["gate", "--json"], root))
+            self.assertTrue(dash.run_detail(rid, "20261003-0000-now")["checking"])  # its pid is alive
+            self.assertEqual(ui.run_checks(rid, "20261003-0000-now"), {"started": False, "running": True})
+            self.assertEqual(len(started), 1)
+
+
+class KnowledgeDetailTest(unittest.TestCase):
+    def test_knowledge_and_notes_carry_their_full_text(self):
+        asked = {}
+        with mock.patch.object(dash, "og_access", lambda n: None), \
+                mock.patch.object(dash, "_inv", lambda *a, **k: []), \
+                mock.patch.object(dash, "_list", lambda g, node, fields, *a, **k: asked.update({node: fields}) or []):
+            dash.knowledge()
+            dash.brain()
+        self.assertTrue({"context", "decision", "consequences"} <= set(asked["Decision"]))
+        self.assertTrue({"rationale", "correctAlternative"} <= set(asked["Principle"]))
+        self.assertIn("body", asked["Learning"])
+        self.assertIn("content", asked["Note"])  # the stored query for recent notes leaves the text out
 
 
 class InBackgroundTest(unittest.TestCase):

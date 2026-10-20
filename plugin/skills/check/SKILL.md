@@ -62,6 +62,7 @@ Reply to the user with: gate status per check, what you fixed, anything still re
 
 ## Rules
 
+- **A run filed under another repo** (this repo's tasks live in another repo's run, e.g. `/lfg` resumed that repo's handoff): write this repo's results as `04-qa-<repo>.md` and `ready-<repo>.json`, with `<repo>` the repo's folder name (e.g. `aegis-compliance-portal`), never over the run's own files. The dashboard shows them under this repo, and the owner repo keeps its own.
 - A failing test is never skipped, deleted or weakened. If a test looks wrong, say so and ask.
 - New `eslint-disable`, `# noqa`, `@ts-ignore`, `#[allow]`, `.skip(`, `xit(` or `@pytest.mark.skip` in the diff fails the gate; remove it and fix the code.
 - `gh` is read-only here: `auth status`, `pr checks/view`, `run list/view`. See `lfg rule git-guard`.

@@ -90,8 +90,6 @@ def api(view, q):
         return dash.repos()
     if view == "tools":
         return dash.tools()
-    if view == "issues":
-        return dash.issues()
     if view == "knowledge":
         from . import knowledge as KN
         k = dash.knowledge()
@@ -183,6 +181,8 @@ def api(view, q):
                                            "on the first session."}
     if view == "overview":
         return dash.overview(rid, _arg(q, "branch"))
+    if view == "issues":
+        return dash.issues(rid, _arg(q, "branch"))
     if view == "runs":
         return dash.runs(rid, _arg(q, "branch"))
     if view == "run":
@@ -233,6 +233,8 @@ def save(what, body):
         return S.save_rule(body.get("name"), body.get("text"))
     if what == "rule_reset":
         return S.reset_rule(body.get("name"))
+    if what == "run_checks":
+        return run_checks(_rid({"repo": [str(body.get("repo") or "")]}), body.get("run"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
     if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove"):
@@ -372,6 +374,30 @@ def build_graphs(rid, what):
     else:
         raise S.Invalid("unknown action")
     return {"started": what}
+
+
+def run_checks(rid, run):
+    """Re-run `lfg gate` (lint, types, tests, build) for the repo's current run, in the background, where the run's
+    code is: its worktree when it has one, else the repo. Only the current run, since that is where the gate
+    writes ready.json."""
+    import subprocess
+    import sys
+    root = dash.repo_root(rid) if rid in dash.repo_ids() else None
+    cur = C.current_run(rid) if root else None
+    if not cur or os.path.basename(cur) != os.path.basename(str(run or "")):
+        raise S.Invalid("Checks can only be re-run here for the project's current run; for another run, run "
+                        "/lfg:check in it")
+    if dash.checks_running(cur):
+        return {"started": False, "running": True}
+    meta = C.read_json(os.path.join(cur, "run.json"), {}) or {}
+    where = next((w["path"] for w in meta.get("worktrees") or [] if os.path.isdir(w.get("path") or "")), root)
+    lfg = C.lfg_bin() if os.path.exists(C.lfg_bin()) else os.path.abspath(sys.argv[0])
+    logs = C.ensure_dir(os.path.join(cur, "gate-logs"))
+    with open(os.path.join(logs, "gate.out"), "wb") as out:
+        p = subprocess.Popen([sys.executable, lfg, "gate", "--json"], cwd=where, stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    C.write_json(os.path.join(cur, "gate-running.json"), {"pid": p.pid, "started": C.now_iso(), "where": where})
+    return {"started": True}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
