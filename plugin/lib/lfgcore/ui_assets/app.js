@@ -1053,7 +1053,7 @@ PAGES.code = async () => {
   const [c, a] = await Promise.all([api("code"), api("architecture")]);
   const g = await api("graphs");
   const [gText, gTone] = say(g.status);
-  const mapRow = `<div class="box pad row">${dot(gTone)}<div class="grow"><b>Code map: ${esc((gText || "unknown").toLowerCase())}</b><div class="meta">${g.status === "syncing" ? "Building in the background. This page updates when it's done." : g.synced_at ? `Updated ${ago(g.synced_at)}${g.seconds ? ` in ${Math.round(g.seconds)}s` : ""}.` : "Not built yet."}${g.error ? ` Last error: ${esc(String(g.error).slice(0, 200))}` : ""}</div></div>
+  const mapRow = `<div class="box pad row">${dot(gTone)}<div class="grow"><b>${esc(repoName())} code map: ${esc((gText || "unknown").toLowerCase())}</b><div class="meta">${g.status === "syncing" ? "Building in the background. This page updates when it's done." : g.synced_at ? `Updated ${ago(g.synced_at)}${g.seconds ? ` in ${Math.round(g.seconds)}s` : ""}.` : "Not built yet."}${g.error ? ` Last error: ${esc(String(g.error).slice(0, 200))}` : ""}</div></div>
     ${mapBtn(g.status)}${g.status !== "missing" && g.status !== "syncing" ? '<button class="btn small" data-map-build="rebuild">Rebuild from scratch</button><button class="btn small" data-map-build="docs" title="Wikis, call flows and playbooks">Refresh docs</button>' : ""}</div>`;
   if (c.available === false && a.available === false) return `${head("Code", "LFG keeps a map of this project so agents read only the parts that matter.")}${mapRow}
     ${g.status === "syncing" ? "" : empty("No code map yet", "Build it now. It runs in the background on this computer and usually takes a minute or two.")}`;
@@ -1950,8 +1950,8 @@ async function mapStatus() {
   try {
     const g = await api("graphs");
     const [text, t] = say(g.status);
-    el.innerHTML = `<span class="map-line">${dot(t)}<span class="label">Code map: ${esc((text || "unknown").toLowerCase())}</span></span>${mapBtn(g.status, "btn tiny")}`;
-    el.title = `Code map: ${(text || "unknown").toLowerCase()}. Agents read this map instead of whole files.`;
+    el.innerHTML = `<span class="map-line">${dot(t)}<span class="label">${esc(repoName())} code map: ${esc((text || "unknown").toLowerCase())}</span></span>${mapBtn(g.status, "btn tiny")}`;
+    el.title = `The code map of ${repoName()} (the project picked above): an index of its functions and what calls what, which LFG's agents read instead of whole files. ${text || "Unknown"}. Each project has its own.`;
     wireMap(el);
     if (g.status === "syncing") { mapWatching = true; mapTimer = setTimeout(mapStatus, 4000); }
     else if (mapWatching) {
