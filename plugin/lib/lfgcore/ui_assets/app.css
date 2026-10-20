@@ -463,3 +463,4 @@ input.wide { width: 100%; }
 .opt input { margin-top: 3px; }
 .opt > span { display: flex; flex-direction: column; gap: 2px; }
 details.told { margin-top: 6px; } details.told > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+input.num { width: 80px; }

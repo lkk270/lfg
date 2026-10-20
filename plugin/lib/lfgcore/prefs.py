@@ -32,18 +32,27 @@ BUILTIN = [
          {"value": "ask", "label": "When I say so", "text": "Commit only when I ask you to in this session."},
          {"value": "auto", "label": "On its own, once tests pass", "text": "Commit on your own when a change is "
           "complete and its tests and checks pass, one commit per logical change, without asking."}]},
-    {"id": "amend", "group": "Git", "title": "Amend the last commit", "kind": "switch", "default": False,
-     "enforce": True, "text": "You may amend the last commit (`git commit --amend`) when it is unpushed or on my own "
-     "branch.", "off_text": "Never amend a commit; make a new one."},
+    {"id": "rewrite", "group": "Git", "title": "Amend and force-push", "kind": "choice", "default": "never",
+     "enforce": True, "options": [
+         {"value": "never", "label": "Never",
+          "text": "Never amend a commit or force-push. Every change is a new commit."},
+         {"value": "review", "label": "Small fixes while I review my PR",
+          "text": "Amend the last commit and force-push it (`--force-with-lease`) only to fold in a small fix, at most "
+                  "{rewrite_lines} changed lines, that I found while reviewing my own open PR on this branch. "
+                  "Anything bigger is a new commit. Never on main, master, qa or prod."},
+         {"value": "anytime", "label": "Any time on my branches",
+          "text": "You may amend and force-push (`--force-with-lease`) my own branches whenever it keeps history "
+                  "clean. Never main, master, qa or prod."}]},
+    {"id": "rewrite_lines", "group": "Git", "title": "A small fix is at most", "kind": "number", "default": 20,
+     "min": 1, "max": 500, "unit": "changed lines", "enforce": True, "shown_if": ["rewrite", "review"],
+     "about": "For \"Small fixes while I review my PR\": LFG counts the lines an amend changes (added plus removed) "
+              "and blocks it, or the force-push that follows, above this."},
     {"id": "push", "group": "Git", "title": "Push", "kind": "choice", "default": "ask", "enforce": True,
      "options": [
          {"value": "never", "label": "Never: I push", "text": "Never run `git push`."},
          {"value": "ask", "label": "When I say so", "text": "Push only when I ask you to in this session."},
          {"value": "auto", "label": "After every commit", "text": "Push right after each commit, to the branch "
           "you're on."}]},
-    {"id": "force_push", "group": "Git", "title": "Force-push my own branch", "kind": "switch", "default": False,
-     "enforce": True, "text": "You may force-push (prefer `--force-with-lease`) a branch that isn't main, master, "
-     "qa or prod, e.g. after amending or rebasing my own work.", "off_text": "Never force-push."},
     {"id": "merge_pr", "group": "GitHub", "title": "Merging PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
          {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
@@ -66,18 +75,21 @@ ABOUT = {
         "Claude leaves its changes uncommitted until you say \"commit\", then commits.",
     ("commits", "auto"):
         "Claude commits by itself after each finished change whose tests pass, without asking you.",
-    ("amend", None):
-        "On: Claude may rewrite its last commit instead of adding a new one. Off: blocked; it always makes a new "
-        "commit.",
+    ("rewrite", "never"):
+        "Claude always adds a new commit. Amending and force-pushing are blocked.",
+    ("rewrite", "review"):
+        "Claude may fold a small fix into your last commit and force-push it, but only on a branch with your own open "
+        "PR, only if the fix is small (the size below), and never on main, master, qa or prod. LFG checks all of this "
+        "before the command runs.",
+    ("rewrite", "anytime"):
+        "Claude may amend and force-push your branches whenever it wants to keep history clean. Never main, master, "
+        "qa or prod.",
     ("push", "never"):
         "Claude is blocked from pushing; you push.",
     ("push", "ask"):
         "Claude pushes only when you say \"push\".",
     ("push", "auto"):
         "Claude pushes right after each of its commits, to the branch it is on.",
-    ("force_push", None):
-        "On: Claude may force-push your own branches, e.g. after amending. Never main, master, qa or prod, even "
-        "when on. Off: blocked.",
     ("merge_pr", "never"):
         "Claude is blocked from merging pull requests; you merge.",
 }
@@ -96,10 +108,20 @@ def _seen_path():
     return C.lfg_path("state", "prefs-seen.json")
 
 
+def _migrate(vals):
+    """The old amend and force_push switches became one `rewrite` choice: either one on means review-sized fixes."""
+    if "amend" in vals or "force_push" in vals:
+        on = vals.pop("amend", False) or vals.pop("force_push", False)
+        vals.pop("force_push", None)
+        if on and "rewrite" not in vals:
+            vals["rewrite"] = "review"
+    return vals
+
+
 def load():
     d = C.read_json(_state_path(), {}) or {}
-    return {"catalog": list(d.get("catalog") or []), "defaults": dict(d.get("defaults") or {}),
-            "sessions": dict(d.get("sessions") or {})}
+    return {"catalog": list(d.get("catalog") or []), "defaults": _migrate(dict(d.get("defaults") or {})),
+            "sessions": {k: _migrate(dict(v)) for k, v in (d.get("sessions") or {}).items()}}
 
 
 def _save(d):
@@ -120,6 +142,14 @@ def _pref(pid, d=None):
 
 
 def _coerce(p, value):
+    if p["kind"] == "number":
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("%s is a whole number" % p["id"]) from None
+        if not p.get("min", 0) <= v <= p.get("max", 10 ** 6):
+            raise ValueError("%s is between %s and %s" % (p["id"], p.get("min", 0), p.get("max")))
+        return v
     if p["kind"] == "switch":
         if isinstance(value, bool):
             return value
@@ -136,7 +166,9 @@ def _coerce(p, value):
 
 
 def _rank(p, value):
-    """Higher is looser. Switches: on is looser for enforced rules (they allow something)."""
+    """Higher is looser. Switches: on is looser for enforced rules (they allow something). Numbers: bigger."""
+    if p["kind"] == "number":
+        return value
     if p["kind"] == "switch":
         return 1 if value else 0
     return [o["value"] for o in p["options"]].index(value)
@@ -151,11 +183,14 @@ def effective(session_id=None, d=None):
     return out
 
 
-def _text(p, value):
+def _text(p, value, values=None):
+    if p["kind"] == "number":
+        return None  # shown inside the choice it belongs to
     if p["kind"] == "switch":
         return p.get("text") if value else p.get("off_text")
     o = next((o for o in p["options"] if o["value"] == value), None)
-    return o and o["text"]
+    t = o and o["text"]
+    return t.format(**(values or {})) if t and "{" in t else t
 
 
 def set_pref(pid, value, session=None, by_agent=False):
@@ -225,10 +260,12 @@ def remove_custom(pid):
 
 def render(values, d, only=None, header="Your rules"):
     groups = {}
+    if only is not None and "rewrite_lines" in only:
+        only = set(only) | {"rewrite"}
     for p in catalog(d):
         if only is not None and p["id"] not in only:
             continue
-        t = _text(p, values[p["id"]])
+        t = _text(p, values[p["id"]], values)
         if t:
             groups.setdefault(p["group"], []).append("- %s" % t)
     if not groups:
@@ -306,6 +343,68 @@ def _branch(cwd):
         return ""
 
 
+def _git_out(cwd, *args):
+    try:
+        cp = subprocess.run(["git", *args], cwd=cwd or None, capture_output=True, text=True, timeout=10)
+        return cp.stdout.strip() if cp.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _lines(numstat):
+    n = 0
+    for ln in (numstat or "").splitlines():
+        a, _, rest = ln.partition("\t")
+        b = rest.partition("\t")[0]
+        n += (int(a) if a.isdigit() else 0) + (int(b) if b.isdigit() else 0)
+    return n
+
+
+def _my_open_pr(cwd, branch):
+    """True if this branch has an open PR that you opened (asked of GitHub with your gh login)."""
+    try:
+        cp = subprocess.run(["gh", "pr", "view", branch, "--json", "state,author"], cwd=cwd or None,
+                            capture_output=True, text=True, timeout=20)
+        pr = json.loads(cp.stdout) if cp.returncode == 0 else {}
+        me = subprocess.run(["gh", "api", "user", "-q", ".login"], cwd=cwd or None, capture_output=True, text=True,
+                            timeout=20).stdout.strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return pr.get("state") == "OPEN" and bool(me) and (pr.get("author") or {}).get("login") == me
+
+
+def _rewrite_allowed(values, cwd, amend_all=False, push=False):
+    """None if amending (or force-pushing the amend) is within your rule here, else why not."""
+    mode = values.get("rewrite", "never")
+    if mode == "never":
+        return "amending and force-pushing are off for this session"
+    branch = _branch(cwd)
+    if branch in PROTECTED_BRANCHES:
+        return "rewriting main, master, qa or prod is never allowed"
+    if mode == "anytime":
+        return None
+    limit = int(values.get("rewrite_lines") or 20)
+    if not branch or not _my_open_pr(cwd, branch):
+        return "amending is only for small fixes on a branch with your own open PR, and %s has none" % (
+            branch or "this checkout")
+    if push:
+        remote = _git_out(cwd, "rev-parse", "--verify", "-q", "@{upstream}") or \
+            _git_out(cwd, "rev-parse", "--verify", "-q", "origin/" + branch)
+        if not remote:
+            return "can't tell what the force-push would replace (no upstream for %s)" % branch
+        if _git_out(cwd, "rev-parse", remote + "^") != _git_out(cwd, "rev-parse", "HEAD^"):
+            return "this force-push would replace more than the last commit; only an amended last commit may go"
+        n = _lines(_git_out(cwd, "diff", "--numstat", remote, "HEAD"))
+    else:
+        n = _lines(_git_out(cwd, "diff", "--cached", "--numstat"))
+        if amend_all:
+            n += _lines(_git_out(cwd, "diff", "--numstat"))
+    if n > limit:
+        return "this changes %d lines; amending is for small fixes of at most %d (make a new commit, or raise the " \
+               "limit in Preferences)" % (n, limit)
+    return None
+
+
 def check_command(cmd, values, cwd=None):
     """Why this shell command breaks a rule, or None."""
     for argv in _commands(cmd):
@@ -315,8 +414,12 @@ def check_command(cmd, values, cwd=None):
             if sub == "commit":
                 if values["commits"] == "never":
                     return "your rule for this session is that you commit, not Claude"
-                if "--amend" in rest and not values["amend"]:
-                    return "amending commits is off for this session"
+                if "--amend" in rest:
+                    why = _rewrite_allowed(values, cwd, amend_all=any(a in ("-a", "--all") or
+                                                                      (a.startswith("-") and not a.startswith("--")
+                                                                       and "a" in a) for a in rest))
+                    if why:
+                        return why
             if sub == "push":
                 if values["push"] == "never":
                     return "your rule for this session is that you push, not Claude"
@@ -324,12 +427,16 @@ def check_command(cmd, values, cwd=None):
                             a.startswith("--force-with-lease=") for a in rest) or \
                     any(a.startswith("+") for a in rest if not a.startswith("-"))
                 if force:
-                    if not values["force_push"]:
+                    if values["rewrite"] == "never":
                         return "force-pushing is off for this session"
                     refs = [a.lstrip("+").split(":")[-1] for a in rest if not a.startswith("-")][1:]
                     target = refs or [_branch(cwd)]
                     if any(t.replace("refs/heads/", "") in PROTECTED_BRANCHES for t in target if t):
                         return "force-pushing main, master, qa or prod is never allowed"
+                    if values["rewrite"] == "review":
+                        why = _rewrite_allowed(values, cwd, push=True)
+                        if why:
+                            return why
         if base == "gh" and argv[1:3] == ["pr", "merge"]:
             if values["merge_pr"] == "never":
                 return "your rule for this session is that you merge PRs, not Claude"

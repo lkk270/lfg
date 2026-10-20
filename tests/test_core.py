@@ -1207,14 +1207,13 @@ class PrefsTest(unittest.TestCase):
     def test_a_session_can_differ_and_an_agent_can_only_tighten(self):
         P = self.P
         with self.assertRaises(PermissionError):
-            P.set_pref("force_push", True, session=self.SID, by_agent=True)
-        P.set_pref("force_push", True, session=self.SID)  # the dashboard / your terminal
-        self.assertTrue(P.effective(self.SID)["force_push"])
-        self.assertFalse(P.effective()["force_push"])
+            P.set_pref("rewrite", "anytime", session=self.SID, by_agent=True)
+        P.set_pref("rewrite", "anytime", session=self.SID)  # the dashboard / your terminal
+        self.assertEqual(P.effective(self.SID)["rewrite"], "anytime")
+        self.assertEqual(P.effective()["rewrite"], "never")
         P.set_pref("commits", "never", session=self.SID, by_agent=True)  # stricter is fine
         code, out = self.hook("session-start", {"session_id": self.SID})
-        self.assertIn("Force-push", json.loads(out)["hookSpecificOutput"]["additionalContext"].replace("force-push",
-                                                                                                     "Force-push"))
+        self.assertIn("force-push", json.loads(out)["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(self.hook("prompt", {"session_id": self.SID})[1], "")  # told once, not every message
         code, _ = self.hook("pre-tool", {"session_id": self.SID, "tool_name": "Bash",
                                          "tool_input": {"command": "git commit -m x"}})
@@ -1231,6 +1230,34 @@ class PrefsTest(unittest.TestCase):
         self.assertIn("changed their default rules", out)
         self.assertEqual(self.hook("prompt", {"session_id": "22222222-2222-3333-4444-555555555555"})[1], "")
 
+    def test_review_fixes_only_small_amends_on_your_own_open_pr(self):
+        P = self.P
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        repo = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, repo, True)
+        git = lambda *a: subprocess.run(["git", *a], cwd=repo, env=env, check=True, capture_output=True)  # noqa: E731
+        git("init", "-q", "-b", "feat")
+        with open(os.path.join(repo, "a.txt"), "w") as f:
+            f.write("x\n")
+        git("add", "a.txt")
+        git("commit", "-q", "-m", "one")
+        with open(os.path.join(repo, "a.txt"), "w") as f:
+            f.write("".join("line %d\n" % i for i in range(40)))
+        git("add", "a.txt")
+        v = dict(P.effective(), rewrite="review", rewrite_lines=20)
+        with mock.patch.object(P, "_my_open_pr", return_value=True):
+            self.assertIn("at most 20", P.check_command("git commit --amend --no-edit", v, cwd=repo))
+            v["rewrite_lines"] = 100
+            self.assertIsNone(P.check_command("git commit --amend --no-edit", v, cwd=repo))
+        with mock.patch.object(P, "_my_open_pr", return_value=False):
+            self.assertIn("own open PR", P.check_command("git commit --amend --no-edit", v, cwd=repo))
+        self.assertIn("off", P.check_command("git commit --amend", dict(v, rewrite="never"), cwd=repo))
+
+    def test_old_amend_and_force_push_switches_become_review_fixes(self):
+        C.write_json(self.P._state_path(), {"defaults": {"amend": True, "force_push": True}})
+        self.assertEqual(self.P.effective()["rewrite"], "review")
+
     def test_defaults_file_and_hard_rules(self):
         P = self.P
         P.set_pref("merge_pr", "squash")
@@ -1239,8 +1266,9 @@ class PrefsTest(unittest.TestCase):
         self.assertIsNotNone(P.check_command("gh pr merge 4", v))
         self.assertIsNone(P.check_command("gh pr merge 4 --squash", v))
         self.assertIsNotNone(P.check_command("sh -c 'git push --force origin x'", v))
-        v["force_push"] = True
-        self.assertIsNone(P.check_command("git push --force-with-lease origin feat", v))
+        v["rewrite"] = "anytime"
+        with mock.patch.object(P, "_branch", return_value="feat"):
+            self.assertIsNone(P.check_command("git push --force-with-lease origin feat", v))
         self.assertIsNotNone(P.check_command("git push -f origin main", v))
         self.assertIsNotNone(P.check_command("lfg prefs set force_push on --by-user", v))
         code, _ = self.hook("pre-tool", {"session_id": self.SID, "tool_name": "Write",

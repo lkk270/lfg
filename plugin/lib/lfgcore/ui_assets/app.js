@@ -1184,11 +1184,12 @@ function wireKnowledge(root) {
 /* Preferences: your rules for Claude. Defaults here; one session's changes from Sessions → Rules. */
 function prefControls(P, values, defaults, scope, unlocked) {
   const groups = {};
-  for (const p of P.catalog) (groups[p.group] = groups[p.group] || []).push(p);
+  for (const p of P.catalog) if (!p.shown_if || values[p.shown_if[0]] === p.shown_if[1]) (groups[p.group] = groups[p.group] || []).push(p);
   const changed = p => scope && values[p.id] !== defaults[p.id];
   const ctl = p => {
     const v = values[p.id], dis = unlocked ? "" : "disabled";
     const told = t => t ? `<details class="told"><summary>What Claude is told</summary><p class="small mono">${esc(t)}</p></details>` : "";
+    if (p.kind === "number") return `<label class="row"><input type="number" class="num" min="${p.min || 0}" max="${p.max || ""}" value="${esc(v)}" data-pref='${esc(JSON.stringify([p.id, scope || ""]))}' ${dis}> <span>${esc(p.unit || "")}</span></label>${p.about ? `<p class="small">${esc(p.about)}</p>` : ""}`;
     if (p.kind === "switch") return `<label class="row"><input type="checkbox" data-pref='${esc(JSON.stringify([p.id, scope || ""]))}' ${v ? "checked" : ""} ${dis}> <span>${v ? "On" : "Off"}</span></label>${p.about ? `<p class="small">${esc(p.about)}</p>` : ""}${told(v ? p.text : p.off_text)}`;
     return `<div class="opts">${p.options.map(o => `<label class="opt ${o.value === v ? "on" : ""}"><input type="radio" name="pref-${esc(p.id)}${scope ? "-" + esc(scope) : ""}" data-pref='${esc(JSON.stringify([p.id, scope || ""]))}' value="${esc(o.value)}" ${o.value === v ? "checked" : ""} ${dis}><span><b>${esc(o.label)}</b>${o.about ? `<span class="small muted">${esc(o.about)}</span>` : ""}</span></label>`).join("")}</div>${told((p.options.find(o => o.value === v) || {}).text)}`;
   };
@@ -1206,7 +1207,7 @@ function prefToast(msg, bad) {
 function wirePrefs(root, after) {
   $$("[data-pref]", root).forEach(el => el.onchange = async () => {
     const [id, session] = JSON.parse(el.dataset.pref);
-    const value = el.type === "checkbox" ? el.checked : el.value;
+    const value = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value;
     const r = await save("pref_set", { id, value, session: session || null });
     if (!r.ok) { prefToast("Not saved: " + (r.why || "error"), true); after(); return; }
     prefToast(session ? "Saved for this session. It takes effect with your next message there." : "Saved. New sessions start with it; open sessions pick it up with your next message.");
