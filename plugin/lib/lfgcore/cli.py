@@ -724,6 +724,15 @@ def _review_human(rec):
             print("  %-5s %-7s %-8s %s  %s" % (f["id"], f["status"], f["severity"], f["title"], where))
 
 
+def cmd_knowledge(a):
+    from . import knowledge as KN
+    try:
+        _print(KN.set_tags(a.slug, repo=a.repo, feature=a.feature, topic=a.topic))
+    except ValueError as e:
+        C.die(str(e), 2)
+    return 0
+
+
 def cmd_update(a):
     from . import updates as U
     if a.action == "apply":
@@ -994,6 +1003,12 @@ def main(argv=None):
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--json", action="store_true")
+    kn = sp.add_parser("knowledge", help="tag a saved decision or lesson with its repo, feature or topic")
+    kn.add_argument("action", choices=["tag"])
+    kn.add_argument("slug", help="the item's slug (dev-graph Decision or Learning)")
+    kn.add_argument("--repo")
+    kn.add_argument("--feature")
+    kn.add_argument("--topic", choices=["setup", "gotcha", "incident_review", "retro", "hindsight", ""])
     up = sp.add_parser("update", help="is there newer LFG (your fork, the original project)? apply installs it")
     up.add_argument("action", nargs="?", default="check", choices=["check", "apply"])
     up.add_argument("--json", action="store_true")
@@ -1061,7 +1076,8 @@ def main(argv=None):
     return {"init": cmd_init, "graphs": cmd_graphs, "run": cmd_run, "rule": cmd_rule, "repo": cmd_repo,
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
-            "usage": cmd_usage, "sessions": cmd_sessions, "update": cmd_update, "vendor": cmd_vendor,
+            "usage": cmd_usage, "sessions": cmd_sessions, "update": cmd_update, "knowledge": cmd_knowledge,
+            "vendor": cmd_vendor,
             "omnigraph": cmd_omnigraph,
             "headroom": cmd_headroom,
             "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue,

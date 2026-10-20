@@ -93,7 +93,11 @@ def api(view, q):
     if view == "issues":
         return dash.issues()
     if view == "knowledge":
-        return dash.knowledge()
+        from . import knowledge as KN
+        k = dash.knowledge()
+        if k.get("available"):
+            KN.enrich(k["decisions"], k["learnings"])
+        return k
     if view == "brain":
         return dash.brain()
     if view == "guide":
@@ -224,6 +228,26 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what in ("knowledge_tag", "knowledge_ask"):
+        from . import knowledge as KN
+        try:
+            if what == "knowledge_tag":
+                return KN.set_tags(body.get("slug"), repo=body.get("repo"), feature=body.get("feature"),
+                                   topic=body.get("topic"))
+            k, b = dash.knowledge(), dash.brain()
+            items = []
+            if k.get("available"):
+                d, ls = KN.enrich(k["decisions"], k["learnings"])
+                items += [dict(x, text=" ".join(filter(None, [x.get("decision"), x.get("context")]))) for x in d]
+                items += [dict(x, text=x.get("body") or "") for x in ls]
+                items += [dict(slug=p["slug"], kind="rule", title=p.get("statement"), text=p.get("rationale") or "")
+                          for p in k.get("principles") or []]
+            if b.get("available"):
+                items += [dict(slug=n["slug"], kind="note", title=n.get("name"), text=str(n.get("content") or ""))
+                          for n in b.get("notes") or []]
+            return KN.ask(body.get("question"), items)
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
     if what == "my_file":
         return S.save_personal(body.get("path"), body.get("text"))
     if what == "skill_group":

@@ -1156,6 +1156,32 @@ class PersonalSkillsTest(unittest.TestCase):
         self.assertEqual(ST.skill_groups(), {})
 
 
+class KnowledgeTagsTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import knowledge as KN
+        self.KN = KN
+        if os.path.exists(KN._tags_path()):
+            os.remove(KN._tags_path())
+
+    def test_guesses_come_from_tickets_and_features_and_your_tags_win(self):
+        decisions = [{"slug": "dec-a", "title": "a"}, {"slug": "dec-b", "title": "b"}]
+        learnings = [{"slug": "l-1", "title": "run it locally with docker", "learningKind": "gotcha"}]
+        links = ({"dec-a": {"ATO-1"}, "dec-b": {"ATO-2"}}, {"dec-a": {"Epic X"}, "dec-b": {"Epic X"}})
+        with mock.patch.object(self.KN, "_links", return_value=links), \
+                mock.patch.object(self.KN, "_repo_of_ticket", return_value={"ATO-1": "api"}):
+            d, ls = self.KN.enrich([dict(x) for x in decisions], [dict(x) for x in learnings])
+            self.assertEqual([(x["repo"], x["feature"]) for x in d], [("api", "Epic X"), ("api", "Epic X")])
+            self.assertEqual(ls[0]["topic"], "setup")
+            self.KN.set_tags("dec-b", repo="web")
+            d, _ = self.KN.enrich([dict(x) for x in decisions], [])
+        self.assertEqual(d[1]["repo"], "web")
+        self.assertNotIn("repo", d[1]["guessed"])
+        self.KN.set_tags("dec-b", repo="")
+        self.assertEqual(self.KN.tags(), {})
+        with self.assertRaises(ValueError):
+            self.KN.set_tags("dec-b", topic="nonsense")
+
+
 class SessionsTest(unittest.TestCase):
     def setUp(self):
         import tempfile

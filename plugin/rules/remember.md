@@ -10,12 +10,19 @@ People forget why things are the way they are. When the conversation or the work
 |---|---|---|---|
 | dev-graph (team, this repo) | `Decision` + why | "we use Postgres advisory locks, not Redis, because…" | `record_decision` (`supersede_decision` if it replaces one) |
 | dev-graph | `Learning` (gotcha, root cause, landmine) | "the billing webhook retries 3× and is not idempotent" | `add_learning` |
+| dev-graph | `Learning` about setup: running, deploying or reaching something | "atomus-local-mcp needs its env vars set by hand to run locally" | `add_learning` (kind `gotcha`), then `lfg knowledge tag <slug> --topic setup` |
 | dev-graph | `Invariant` / `Principle` | "every tenant query filters by org_id" | none: `schema_get`, then insert |
 | dev-graph | `Issue` (follow-up, deferral) | "the CSV export times out over 50k rows" | `create_issue` |
 | second-brain (personal, every project) | `Note` kind `preference` / `insight` / `question` / `idea` | "I want small PRs with a test first" | `save_note` (LFG's, keeps the text) |
 | second-brain | `Person` | "Alex owns the payments service" | `add_person` |
 
 Not worth saving: anything already in the code, a commit or a file in the repo; one-off task details; restatements of an LFG rule; guesses. Never secrets, credentials or other people's private data.
+
+Something every session must know without searching (which account to use for prod, a command that must always
+carry a flag) is not a Learning: offer to add it to the user's `~/.claude/CLAUDE.md` instead, as exact text.
+
+After saving a `Decision` or `Learning`, tag it with the repo and feature it belongs to when you know them:
+`lfg knowledge tag <slug> --repo <repo folder name> --feature "<epic or feature name>"`.
 
 ## When to offer
 

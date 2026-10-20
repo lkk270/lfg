@@ -1016,29 +1016,97 @@ PAGES.docs = async arg => {
     <div class="box" id="doc-body" data-src="${esc(src || "")}" data-path="${esc(path || "")}">${body}</div></div>`;
 };
 
+/* Knowledge: what LFG has saved, each item with a repo, a feature and a topic, fuzzy search and Ask. */
+const KINDS = {
+  decision: ["Decisions", "Choices made while building something, and why: \"the queue auto-starts and can be cancelled\". Kept so nobody re-argues them. Usually about one repo and one feature."],
+  learning: ["Lessons", "Things found out the hard way: gotchas, root causes, how to run or deploy something. The kind of thing you'd tell a teammate before they start."],
+  rule: ["Rules", "Always/never rules and things that must stay true, which agents check their work against."],
+  note: ["Your notes", "Personal notes and preferences in second-brain, not tied to a repo. How you like to work, ideas, questions."],
+};
+const TOPIC = { setup: "Setup and environment", gotcha: "Gotcha", incident_review: "Incident review", retro: "Retro", hindsight: "Hindsight" };
+/* Fuzzy match: every word of the query must appear, as a substring or as letters in order, in the item's text. */
+function fuzzy(q, text) {
+  if (!q) return 1;
+  const t = text.toLowerCase();
+  let score = 0;
+  for (const w of q.toLowerCase().split(/\s+/).filter(Boolean)) {
+    if (t.includes(w)) { score += 2; continue; }
+    let i = 0;
+    for (const c of t) if (c === w[i]) i++;
+    if (i === w.length) score += 1; else return 0;
+  }
+  return score;
+}
 PAGES.knowledge = async () => {
-  const [k, b] = await Promise.all([api("knowledge"), api("brain")]);
-  if (k.available === false && b.available === false) return `${head("Knowledge", "What LFG remembers between sessions: decisions and lessons about this project, and your own preferences.")}${unavailable(k, "Knowledge isn't available")}${b.why && b.why !== k.why ? unavailable(b, "Your second-brain isn't available") : ""}`;
+  const [k, b, unlocked] = await Promise.all([api("knowledge"), api("brain"), isUnlocked()]);
   const K = k.available === false ? { decisions: [], principles: [], invariants: [], unheld: [], gaps: [], learnings: [] } : k;
   const B = b.available === false ? { notes: [], preferences: [] } : b;
   const unheld = new Set((K.unheld || []).map(r => r.slug));
-  const listOf = (rows, fn) => rows.length ? `<div class="box"><ul class="list">${rows.map(fn).join("")}</ul></div>` : empty("Nothing saved yet", "Tell Claude Code what to remember, or use <code>/lfg:note</code>.");
-  const rules = K.principles.map(p => ({ text: p.statement, why: p.rationale, s: p.status, kind: p.polarity === "forbids" ? "Never" : "Always" }))
-    .concat(K.invariants.map(i => ({ text: i.statement, s: unheld.has(i.slug) ? "unheld" : i.status, kind: "Must stay true" })));
+  const items = [
+    ...K.decisions.map(r => ({ ...r, kind: "decision", text: [r.decision, r.context].filter(Boolean).join(" "), when: r.createdAt })),
+    ...K.learnings.map(r => ({ ...r, kind: "learning", text: r.body || "", when: r.createdAt })),
+    ...K.principles.map(p => ({ slug: p.slug, kind: "rule", title: (p.polarity === "forbids" ? "Never: " : "Always: ") + p.statement, text: p.rationale || "", status: p.status })),
+    ...K.invariants.map(i => ({ slug: i.slug, kind: "rule", title: "Must stay true: " + i.statement, text: "", status: unheld.has(i.slug) ? "unheld" : i.status })),
+    ...[...B.notes].map(n => ({ slug: n.slug, kind: "note", title: n.name || words(n.slug), text: String(n.content || ""), when: n.createdAt, topic: n.kind })),
+  ];
+  state.knowledge = items;
+  const F = state.kf || (state.kf = { q: "", kind: "", repo: "", feature: "", topic: "" });
+  const opts = key => [...new Set(items.map(i => i[key]).filter(Boolean))].sort();
+  const shown = items.map(i => [i, fuzzy(F.q, [i.title, i.text, i.repo, i.feature, (i.tickets || []).join(" "), TOPIC[i.topic] || i.topic].join(" "))])
+    .filter(([i, s]) => s && (!F.kind || i.kind === F.kind) && (!F.repo || i.repo === F.repo) && (!F.feature || i.feature === F.feature) && (!F.topic || i.topic === F.topic))
+    .sort((a, b) => b[1] - a[1] || String(b[0].when || "").localeCompare(String(a[0].when || ""))).map(([i]) => i);
+  const sel = (key, label, values, names = {}) => `<label class="small muted">${label} <select data-kf="${key}"><option value="">All</option>${values.map(v => `<option value="${esc(v)}" ${F[key] === v ? "selected" : ""}>${esc(names[v] || v)}</option>`).join("")}</select></label>`;
+  const guessed = (i, f) => (i.guessed || []).includes(f) ? ' title="Filled in by LFG from the ticket it came from; set your own with Tag"' : "";
+  const line = i => `<li class="sess"><div class="grow"><div class="title">${esc(i.title || "")}</div>
+      ${i.text ? `<div class="meta clamp">${esc(i.text.slice(0, 400))}</div>` : ""}
+      <div class="meta"><span class="tag">${esc(KINDS[i.kind][0].replace(/s$/, ""))}</span>${i.repo ? ` <span class="tag"${guessed(i, "repo")}>${esc(i.repo)}</span>` : ""}${i.feature ? ` <span class="tag"${guessed(i, "feature")}>${esc(i.feature.slice(0, 48))}</span>` : ""}${i.topic && TOPIC[i.topic] ? ` <span class="tag"${guessed(i, "topic")}>${esc(TOPIC[i.topic])}</span>` : ""}${(i.tickets || []).length ? ` · ${esc(i.tickets.join(", "))}` : ""}${i.when ? ` · ${ago(i.when)}` : ""}${i.status && i.status !== "accepted" && i.status !== "active" ? ` · ${st(i.status)}` : ""}</div></div>
+      ${["decision", "learning"].includes(i.kind) ? `<button class="btn small" data-ktag="${esc(i.slug)}" ${unlocked ? "" : "disabled"}>Tag</button>` : ""}</li>`;
   const missing = [k, b].filter(x => x.available === false).map(x => `<div class="callout warn">${fmtWhy(x.why)}</div>`).join("");
-  return `${head("Knowledge", "What LFG remembers between sessions: decisions and lessons about this project, and your own preferences. Agents read these before they work.")}
+  return `${head("Knowledge", "What Claude has saved while working with you. Agents read it before they start, so they don't repeat old mistakes or re-argue settled choices.")}
     ${missing}
-    ${tabs("know", [
-      ["dec", "Decisions", K.decisions.length, () => listOf(K.decisions, r => `<li><div class="grow"><div class="title">${esc(r.title)}</div><div class="meta">${esc(r.decision)}</div></div><span class="muted small nowrap">${ago(r.createdAt)}</span></li>`)],
-      ["lrn", "Lessons learned", K.learnings.length, () => listOf(K.learnings, r => `<li><div class="grow"><div class="title">${esc(r.title)}</div><div class="meta">${esc((r.body || "").slice(0, 280))}</div></div><span class="muted small nowrap">${ago(r.createdAt)}</span></li>`)],
-      ["rules", "Code rules", rules.length, () => listOf(rules, r => `<li><span class="tag">${esc(r.kind)}</span><div class="grow"><div class="title">${esc(r.text)}</div>${r.why ? `<div class="meta">${esc(r.why)}</div>` : ""}</div>${st(r.s)}</li>`)],
-      ["gaps", "Known gaps", K.gaps.length, () => listOf(K.gaps, r => `<li><div class="grow"><div class="title">${esc(r.title)}</div><div class="meta">${r.currentBehavior ? `Today: ${esc(r.currentBehavior)}` : ""}${r.targetBehavior ? ` · Goal: ${esc(r.targetBehavior)}` : ""}</div></div>${st(r.state)}</li>`)],
-      ["pref", "Your preferences", B.preferences.length, () => listOf(B.preferences, r => `<li><div class="grow"><div class="title">${esc(r.name || words(r.slug))}</div>${r.content ? `<div class="meta">${esc(String(r.content).slice(0, 280))}</div>` : ""}</div></li>`)],
-      ["notes", "Your notes", B.notes.length, () => listOf(B.notes, r => `<li><div class="grow"><div class="title">${esc(r.name || words(r.slug))}</div>${r.content ? `<div class="meta">${esc(String(r.content).slice(0, 280))}</div>` : ""}</div><span class="muted small nowrap">${esc(words(r.kind))}</span></li>`)],
-    ])}
-    <p class="muted small mt">To add something, tell Claude Code what to remember, or use <code>/lfg:note</code>.</p>`;
+    <div class="cols">${Object.entries(KINDS).map(([kk, [t, about]]) => `<a href="#" class="box pad stat-link ${F.kind === kk ? "on" : ""}" data-kkind="${kk}"><div class="k" style="margin-top:0">${t} · ${items.filter(i => i.kind === kk).length}</div><p class="muted small">${about}</p></a>`).join("")}</div>
+    <div class="panel mt"><div class="row"><input type="text" id="k-ask" class="grow" placeholder="Ask: how do I run atomus-local-mcp locally? what did we decide about the run queue?"><button class="btn primary" id="k-askgo" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to ask\""}>Ask</button></div><div id="k-answer"></div></div>
+    <div class="table-tools mt"><input type="search" id="k-find" placeholder="Search everything (typos are fine)…" value="${esc(F.q)}">${sel("repo", "Repo", opts("repo"))}${sel("feature", "Feature", opts("feature"))}${sel("topic", "Topic", Object.keys(TOPIC).filter(t => items.some(i => i.topic === t)), TOPIC)}<span class="count">${plural(shown.length, "item")}</span></div>
+    ${shown.length ? `<ul class="items box">${shown.slice(0, 300).map(line).join("")}</ul>` : empty("Nothing matches", "Try fewer words, or clear a filter.")}
+    <p class="muted small">Repo and feature come from the ticket each item was saved under; a hover on a tag says when LFG filled it in. Tag sets your own, which always wins. To save something, tell Claude "remember that…" or use <code>/lfg:note</code>; things every session must know, like how to reach prod, belong in your CLAUDE.md instead.</p>`;
 };
-
+function wireKnowledge(root) {
+  const F = state.kf;
+  const find = $("#k-find", root);
+  let t;
+  if (find) find.oninput = () => { clearTimeout(t); t = setTimeout(() => { F.q = find.value; route().then(() => { const f = $("#k-find"); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }); }, 200); };
+  $$("[data-kf]", root).forEach(s => s.onchange = () => { F[s.dataset.kf] = s.value; route(); });
+  $$("[data-kkind]", root).forEach(a => a.onclick = e => { e.preventDefault(); F.kind = F.kind === a.dataset.kkind ? "" : a.dataset.kkind; route(); });
+  const go = $("#k-askgo", root), q = $("#k-ask", root);
+  const ask = async () => {
+    if (!q.value.trim()) return q.focus();
+    go.disabled = true; go.textContent = "Asking…";
+    const r = await save("knowledge_ask", { question: q.value });
+    go.disabled = false; go.textContent = "Ask";
+    const box = $("#k-answer");
+    if (!r.ok) { box.innerHTML = `<p class="bad-tx small">${esc(r.why || "")}</p>`; return; }
+    const by = Object.fromEntries((state.knowledge || []).map(i => [i.slug, i]));
+    box.innerHTML = `<p class="mt">${esc(r.answer)}</p>${(r.slugs || []).length ? `<div class="k">From</div><ul class="list">${r.slugs.map(sl => `<li>${esc((by[sl] || {}).title || sl)} <span class="muted small">${esc(KINDS[(by[sl] || {}).kind]?.[0] || "")}</span></li>`).join("")}</ul>` : ""}`;
+  };
+  if (go) go.onclick = ask;
+  if (q) q.onkeydown = e => { if (e.key === "Enter") ask(); };
+  $$("[data-ktag]", root).forEach(b => b.onclick = () => {
+    const i = (state.knowledge || []).find(x => x.slug === b.dataset.ktag) || {};
+    const opts = key => [...new Set((state.knowledge || []).map(x => x[key]).filter(Boolean))].sort();
+    openDrawer("Tag: " + (i.title || i.slug), `<div class="readable"><p class="muted">Stored in LFG only; the saved item itself doesn't change. Leave a box empty to go back to what LFG filled in.</p>
+      <label class="k">Repo</label><input type="text" id="kt-repo" class="wide" list="kt-repos" value="${esc(i.repo || "")}"><datalist id="kt-repos">${opts("repo").map(v => `<option value="${esc(v)}">`).join("")}</datalist>
+      <label class="k">Feature</label><input type="text" id="kt-feature" class="wide" list="kt-features" value="${esc(i.feature || "")}"><datalist id="kt-features">${opts("feature").map(v => `<option value="${esc(v)}">`).join("")}</datalist>
+      ${i.kind === "learning" ? `<label class="k">Topic</label><select id="kt-topic"><option value="">(LFG's guess)</option>${Object.entries(TOPIC).map(([v, l]) => `<option value="${v}" ${i.topic === v && !(i.guessed || []).includes("topic") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>` : ""}
+      <div class="set-actions"><button class="btn primary" id="kt-save">Save</button><span class="save-msg" id="kt-msg"></span></div></div>`);
+    $("#kt-save").onclick = async () => {
+      const body = { slug: i.slug, repo: $("#kt-repo").value, feature: $("#kt-feature").value };
+      if ($("#kt-topic")) body.topic = $("#kt-topic").value;
+      const r = await save("knowledge_tag", body);
+      saidMsg($("#kt-msg"), r, "Saved.");
+      if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 400);
+    };
+  });
+}
 /* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
 PAGES.sessions = async () => {
   const [d, unlocked] = await Promise.all([api("sessions", state.showHidden ? { hidden: "1" } : {}), isUnlocked()]);
@@ -1674,6 +1742,7 @@ async function route() {
   if (key === "docs") wireDocs();
   if (key === "prs") wirePrs(view);
   if (key === "sessions") wireSessions(view);
+  if (key === "knowledge") wireKnowledge(view);
   if (key === "environment") wireEnvironment(view);
   if (key === "usage") loadHeadroom();
   const rf = $("#refreshed");
