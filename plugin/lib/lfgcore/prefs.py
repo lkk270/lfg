@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 from . import common as C
+from . import guard as G
 
 PREFS_MD = os.path.join(C.HOME, ".claude", "lfg-preferences.md")
 IMPORT_LINE = "@~/.claude/lfg-preferences.md"
@@ -53,11 +54,27 @@ BUILTIN = [
          {"value": "ask", "label": "When I say so", "text": "Push only when I ask you to in this session."},
          {"value": "auto", "label": "After every commit", "text": "Push right after each commit, to the branch "
           "you're on."}]},
+    {"id": "git_ff_sync", "group": "Git", "title": "Catch up with the remote", "kind": "switch", "default": False,
+     "enforce": True,
+     "about": "On: Claude may bring a local branch up to date with its remote when no merge commit is needed "
+              "(`git merge --ff-only`, `git pull --ff-only`), for example main after your PR merges. It can't lose "
+              "work. Off: blocked by safety rule 1.",
+     "text": "You may fast-forward a local branch to its remote with `git merge --ff-only` or `git pull --ff-only`, "
+             "for example to update main after a PR merges. Never a merge that makes a merge commit.",
+     "off_text": ""},
     {"id": "merge_pr", "group": "GitHub", "title": "Merging PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
          {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
          {"value": "squash", "label": "When I say so, squashed",
           "text": "Merge a PR only when I ask, and always as one squashed commit (`gh pr merge --squash`)."}]},
+    {"id": "gh_default_branch", "group": "GitHub", "title": "Default branch of your repos", "kind": "switch",
+     "default": False, "enforce": True,
+     "about": "On: Claude may change which branch is the default on a GitHub repo you own "
+              "(`gh repo edit --default-branch`), and nothing else about the repo. LFG asks GitHub that the repo is "
+              "yours first. Off: blocked by safety rule 2.",
+     "text": "You may change the default branch of a GitHub repo I own with `gh repo edit <repo> --default-branch "
+             "<branch>`, and no other repo setting.",
+     "off_text": ""},
     {"id": "coauthor", "group": "Git", "title": "Claude as co-author", "kind": "switch", "default": False,
      "about": "On: Claude's commits and PRs credit Claude as co-author. Off: you're the only author.",
      "text": "End commit messages with a Co-Authored-By line for Claude, and PR bodies with the Claude Code line.",
@@ -98,6 +115,25 @@ for _p in BUILTIN:
         _p["about"] = ABOUT[(_p["id"], None)]
     for _o in _p.get("options") or []:
         _o["about"] = ABOUT.get((_p["id"], _o["value"]), "")
+
+# The guard's safety rules (guard.RULES), one choice each. "ask" lifts the block; Claude is still told the rule.
+STAYS_BLOCKED = {
+    "4": " LFG's own dashboard key stays blocked.",
+    "13": " Changing LFG itself (its files, hooks, on/off switch and these rules) stays blocked.",
+}
+for _r, (_title, _means, _how) in G.RULES.items():
+    if not _how.startswith("guard"):
+        continue
+    BUILTIN.append({
+        "id": "rule_" + _r, "group": "Safety rules", "title": "%s. %s" % (_r, _title), "kind": "choice",
+        "default": "block", "enforce": True, "options": [
+            {"value": "block", "label": "Blocked", "text": "",
+             "about": "LFG blocks any command that breaks it, even if you ask. " + _means},
+            {"value": "ask", "label": "Only when I ask",
+             "text": "LFG no longer blocks safety rule %s (%s). Keep to it unless I ask you otherwise in this "
+                     "session: %s" % (_r, _title, _means),
+             "about": "LFG stops blocking it. Claude still keeps to it, and does it only when you ask."
+                      + STAYS_BLOCKED.get(_r, "")}]})
 
 
 def _state_path():

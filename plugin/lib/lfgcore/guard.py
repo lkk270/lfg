@@ -157,6 +157,36 @@ class Block(Exception):
         self.rule, self.why = rule, why
 
 
+# What check() was given for this call: your Preferences (prefs.effective) and the session's folder. A rule whose
+# preference `rule_<n>` is "ask" no longer blocks; empty (the selftest, direct calls) means every rule blocks.
+_CTX = {"values": {}, "loose": frozenset(), "cwd": None}
+
+
+def _block(rule, why, hard=False):
+    """Block unless you lifted this rule in Preferences. hard: LFG's own files, switches and rules, which an agent
+    could otherwise use to lift the rest; those always block."""
+    if hard or rule not in _CTX["loose"]:
+        raise Block(rule, why)
+
+
+def _pref_on(pid):
+    return _CTX["values"].get(pid) is True
+
+
+LFG_OWN = [os.path.join(HOME, p) for p in (".lfg", ".local/bin/lfg", ".claude/settings.json",
+                                           ".claude/settings.local.json", ".claude/plugins")]
+
+
+def _lfg_own(p):
+    """LFG itself, its hooks or your rules for it: writing here could switch the guard off."""
+    p = os.path.normpath(_expand(p))
+    return is_protected_write(p) and any(p == d or p.startswith(d + "/") for d in LFG_OWN)
+
+
+def _secret(p, why):
+    _block("4", why, hard="edit.key" in str(p))  # the dashboard's edit key changes your rules
+
+
 def _tokens(cmd):
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>")
     lex.whitespace_split = True
@@ -229,9 +259,9 @@ def _strip_wrappers(seg):
                     i += 1
                 i += 1
             if base == "sudo":
-                raise Block("13", "sudo is not allowed for agents (system changes need a human)")
+                _block("13", "sudo is not allowed for agents (system changes need a human)")
             if base == "env" and i >= len(seg):
-                raise Block("5", "dumping the environment can expose secrets")
+                _block("5", "dumping the environment can expose secrets")
             continue
         break
     return envs, seg[i:]
@@ -314,7 +344,7 @@ def _git(argv, envs, raw):
         a = args[i]
         if a in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") and i + 1 < len(args):
             if a == "-c" and re.search(r"core\.hookspath|hooks", args[i + 1], re.I):
-                raise Block("3", "overriding git hooks (-c core.hooksPath) bypasses checks")
+                _block("3", "overriding git hooks (-c core.hooksPath) bypasses checks")
             i += 2
             continue
         if a.startswith("-"):
@@ -324,43 +354,80 @@ def _git(argv, envs, raw):
         break
     rest = args[i + 1:] if sub else []
     if "--no-verify" in args or any(e.startswith(("SKIP=", "HUSKY=0", "HUSKY_SKIP")) for e in envs):
-        raise Block("3", "skipping git hooks / checks (--no-verify, SKIP=, HUSKY=0)")
+        _block("3", "skipping git hooks / checks (--no-verify, SKIP=, HUSKY=0)")
     if sub is None:
         return
     if sub in PREFS_DECIDE_GIT and _prefs_on():
         return
     if sub == "commit" and "--amend" not in rest and _commit_allowed():
         return
+    if sub in ("merge", "pull") and _pref_on("git_ff_sync") and _ff_only(rest):
+        return
     if sub in GIT_WRITE_BLOCK:
-        raise Block("1", "`git %s` changes history or the remote; agents never commit, push, merge or rebase" % sub)
+        _block("1", "`git %s` changes history or the remote; agents never commit, push, merge or rebase" % sub)
     if sub == "reset" and any(r in ("--hard", "--merge", "--keep") for r in rest):
-        raise Block("1", "`git reset --hard` discards uncommitted work")
+        _block("1", "`git reset --hard` discards uncommitted work")
     if sub == "clean" and any(r.startswith("-") and "f" in r.lstrip("-") or r == "--force" for r in rest):
-        raise Block("1", "`git clean -f` deletes untracked work")
+        _block("1", "`git clean -f` deletes untracked work")
     if sub == "branch" and any(r in ("-D", "-d", "--delete", "-M", "-m", "--move", "-f", "--force") for r in rest):
-        raise Block("1", "deleting, renaming or forcing branches is a human action")
+        _block("1", "deleting, renaming or forcing branches is a human action")
     if sub == "tag" and [r for r in rest if not r.startswith("-")] and not any(
             r in ("-l", "--list", "-n", "--contains", "--points-at", "--merged", "--no-merged") for r in rest):
-        raise Block("1", "creating tags is a human action")
+        _block("1", "creating tags is a human action")
     if sub == "stash" and rest[:1] and rest[0] in ("drop", "clear", "pop"):
-        raise Block("1", "`git stash %s` can lose work" % rest[0])
+        _block("1", "`git stash %s` can lose work" % rest[0])
     if sub in ("checkout", "restore") and ("--" in rest or "." in rest or "-f" in rest or "--force" in rest
                                            or (sub == "restore" and "--staged" not in rest and rest)):
-        raise Block("1", "`git %s` over files discards uncommitted work" % sub)
+        _block("1", "`git %s` over files discards uncommitted work" % sub)
     if sub == "switch" and any(r in ("-f", "--force", "--discard-changes", "-C") for r in rest):
-        raise Block("1", "forced branch switch discards uncommitted work")
+        _block("1", "forced branch switch discards uncommitted work")
     if sub == "remote" and rest[:1] and rest[0] in ("add", "remove", "rm", "rename", "set-url", "set-head", "prune"):
-        raise Block("13", "changing git remotes is a human action")
-    if sub == "config" and any(r in ("--global", "--system", "--unset", "--unset-all", "--add", "--replace-all",
-                                      "--remove-section", "--rename-section", "--edit", "-e") for r in rest):
-        if not any(r in ("--get", "--get-all", "--list", "-l", "--get-regexp", "--show-origin") for r in rest):
-            raise Block("13", "changing git config is a human action")
-    if sub == "config" and len([r for r in rest if not r.startswith("-")]) >= 2:
-        raise Block("13", "changing git config is a human action")
+        _block("13", "changing git remotes is a human action")
+    if sub == "config" and _git_config_writes(rest):
+        if any(re.search(r"hookspath", r, re.I) for r in rest):
+            _block("3", "pointing core.hooksPath elsewhere bypasses checks")
+        _block("13", "changing git config is a human action")
     if sub == "submodule" and rest[:1] and rest[0] in ("add", "deinit", "set-url"):
-        raise Block("1", "changing submodules is a human action")
+        _block("1", "changing submodules is a human action")
     if sub in ("mv", "rm") and "--cached" not in rest and sub == "rm":
         pass  # git rm only stages deletions of tracked files; the working-tree edit is reversible via git
+
+
+def _ff_only(rest):
+    """`git merge|pull --ff-only` moves the branch forward to what it already contains, or refuses: no merge
+    commit, no rewritten history, no lost work."""
+    return "--ff-only" in rest and not any(
+        r in ("--rebase", "-r", "--no-ff", "--squash", "--abort", "--continue", "--quit") or r.startswith("--rebase=")
+        for r in rest)
+
+
+GIT_CONFIG_WRITE = {"--unset", "--unset-all", "--add", "--replace-all", "--remove-section", "--rename-section",
+                    "--edit", "-e"}
+GIT_CONFIG_READ = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool",
+                   "--list", "-l"}
+GIT_CONFIG_TAKES_VALUE = {"-f", "--file", "--blob", "--type", "--default", "--comment"}
+
+
+def _git_config_writes(rest):
+    """`git config [--global] <key>` reads; a key with a value, or a write flag, writes. --global, --system and
+    --local only pick which file. Also the git 2.46 form: `git config get|list` read, `set|unset|edit|…` write."""
+    words, i = [], 0
+    while i < len(rest):
+        if rest[i] in GIT_CONFIG_TAKES_VALUE:
+            i += 2
+            continue
+        if not rest[i].startswith("-"):
+            words.append(rest[i])
+        i += 1
+    if words[:1] in (["get"], ["list"]):
+        return False
+    if words[:1] in (["set"], ["unset"], ["edit"], ["rename-section"], ["remove-section"]):
+        return True
+    if any(r in GIT_CONFIG_WRITE for r in rest):
+        return True
+    if any(r in GIT_CONFIG_READ for r in rest):
+        return False
+    return len(words) >= 2
 
 
 def _gh(argv):
@@ -370,9 +437,9 @@ def _gh(argv):
     top = args[0]
     sub = args[1] if len(args) > 1 and not args[1].startswith("-") else None
     if top == "auth" and sub == "token":
-        raise Block("5", "`gh auth token` prints a credential")
+        _block("5", "`gh auth token` prints a credential")
     if top == "auth" and sub in ("login", "logout", "refresh", "setup-git", "switch"):
-        raise Block("2", "GitHub login changes are done by you: run `gh auth login` in your own terminal")
+        _block("2", "GitHub login changes are done by you: run `gh auth login` in your own terminal")
     if top == "api":
         method = None
         for i, a in enumerate(args):
@@ -385,15 +452,50 @@ def _gh(argv):
         has_fields = any(a in ("-f", "-F", "--field", "--raw-field", "--input")
                          or a.startswith(("--field=", "--raw-field=", "--input=")) for a in args)
         if method not in (None, "GET") or (has_fields and method != "GET"):
-            raise Block("2", "`gh api` write request; only GET is allowed")
+            _block("2", "`gh api` write request; only GET is allowed")
         if any("mutation" in a for a in args):
-            raise Block("2", "GraphQL mutations are writes")
+            _block("2", "GraphQL mutations are writes")
         return
     if (top, sub) == ("pr", "merge") and _prefs_on():
         return
     if (top, sub) in GH_ALLOW or (top, None) in GH_ALLOW:
         return
-    raise Block("2", "`gh %s%s` is not on the read-only allowlist" % (top, " " + sub if sub else ""))
+    if (top, sub) == ("repo", "edit") and _pref_on("gh_default_branch"):
+        repo = _default_branch_only(args[2:])
+        if repo is not False and _own_repo(repo):
+            return
+    _block("2", "`gh %s%s` is not on the read-only allowlist" % (top, " " + sub if sub else ""))
+
+
+def _default_branch_only(rest):
+    """The repo (None: this checkout's) if `gh repo edit` changes only the default branch, else False."""
+    repo, branch, i = None, None, 0
+    while i < len(rest):
+        r = rest[i]
+        if r == "--default-branch" and i + 1 < len(rest) and branch is None:
+            branch, i = rest[i + 1], i + 2
+            continue
+        if r.startswith("--default-branch=") and branch is None:
+            branch = r.split("=", 1)[1]
+        elif not r.startswith("-") and repo is None:
+            repo = r
+        else:
+            return False
+        i += 1
+    return repo if branch else False
+
+
+def _own_repo(repo):
+    """True if your gh login owns the repo (asked of GitHub). Only runs when gh_default_branch is on."""
+    import subprocess
+    try:
+        run = lambda *a: subprocess.run(["gh", *a], cwd=_CTX["cwd"] or None, capture_output=True,  # noqa: E731
+                                        text=True, timeout=20).stdout.strip()
+        owner = run("repo", "view", *([repo] if repo else []), "--json", "owner", "-q", ".owner.login")
+        me = run("api", "user", "-q", ".login")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bool(me) and owner == me
 
 
 def _docker(argv, raw):
@@ -405,16 +507,16 @@ def _docker(argv, raw):
     sub2 = words[1] if len(words) > 1 else ""
     joined = " ".join(args)
     if sub in ("push", "login", "logout") or (sub in ("image", "manifest", "buildx", "compose") and sub2 in ("push",)):
-        raise Block("15", "pushing images / registry login is a human action")
+        _block("15", "pushing images / registry login is a human action")
     if sub in ("build", "buildx") and "--push" in args:
-        raise Block("15", "`--push` publishes an image")
+        _block("15", "`--push` publishes an image")
     if "docker.sock" in joined:
-        raise Block("17", "mounting the Docker socket into a container gives it control of the host")
+        _block("17", "mounting the Docker socket into a container gives it control of the host")
     if sub == "system" and sub2 == "prune":
-        raise Block("16", "`docker system prune` deletes resources LFG didn't create")
+        _block("16", "`docker system prune` deletes resources LFG didn't create")
     if sub in ("image", "container", "volume", "network", "builder", "buildx") and sub2 == "prune" or sub == "prune":
         if "label=lfg.shipcheck" not in joined and "label=lfg.pentest" not in joined:
-            raise Block("16", "prune without `--filter label=lfg.shipcheck=<run>` would delete your own resources")
+            _block("16", "prune without `--filter label=lfg.shipcheck=<run>` would delete your own resources")
         return
     targets = None
     if sub in ("rm", "rmi", "kill", "stop") or (sub in ("container", "image", "volume", "network")
@@ -422,14 +524,14 @@ def _docker(argv, raw):
         targets = [w for w in words[(1 if sub in ("rm", "rmi", "kill", "stop") else 2):]]
     if targets is not None:
         if not targets or not all(LFG_DOCKER_NAME.match(t) for t in targets):
-            raise Block("16", "only containers/images/volumes/networks named lfg-shipcheck-* or lfg-pentest-* may be "
+            _block("16", "only containers/images/volumes/networks named lfg-shipcheck-* or lfg-pentest-* may be "
                               "removed; use `lfg shipcheck --cleanup`")
     if sub == "compose" and ("down" in words or "rm" in words):
         proj = re.search(r"(-p|--project-name)[ =](\S+)", joined)
         if not proj or not LFG_DOCKER_NAME.match(proj.group(2)):
-            raise Block("16", "`docker compose down/rm` is only allowed for LFG projects (-p lfg-shipcheck-*)")
+            _block("16", "`docker compose down/rm` is only allowed for LFG projects (-p lfg-shipcheck-*)")
         if "--rmi" in joined and "local" not in joined:
-            raise Block("16", "`--rmi all` would delete images LFG didn't build")
+            _block("16", "`--rmi all` would delete images LFG didn't build")
 
 
 def _net(base, argv):
@@ -447,13 +549,13 @@ def _net(base, argv):
         sends = True
     urls = [a for a in args if re.match(r"^(https?|ftp)://", a, re.I) or re.match(r"^[\w.-]+\.[a-z]{2,}(:\d+)?/", a)]
     if sends and any(not LOCAL_HOST_RX.match(u) for u in urls):
-        raise Block("7", "sending data to a non-local host; repo content may only go to the Anthropic API")
+        _block("7", "sending data to a non-local host; repo content may only go to the Anthropic API")
 
 
 def _scp(base, argv):
     for a in argv[1:]:
         if re.match(r"^[\w.@-]+:", a) and not a.startswith(("localhost:", "127.0.0.1:")):
-            raise Block("7", "copying files to a remote host")
+            _block("7", "copying files to a remote host")
 
 
 def _deploy(base, argv):
@@ -463,7 +565,7 @@ def _deploy(base, argv):
         words = [a for a in argv[1:] if not a.startswith("-") or a == "--prod"]
         if tool == "vercel" and not any(a in ("--version", "-v", "--help", "-h") for a in argv[1:]) and (
                 not words or words[0] in subs):
-            raise Block("15", "deploying is a human action (LFG never deploys)")
+            _block("15", "deploying is a human action (LFG never deploys)")
         if words and words[0] in subs:
             if tool in ("aws", "gcloud", "az") and any(w in ("describe", "list", "get", "ls", "show", "logs", "help")
                                                          for w in words[1:]) and not any(
@@ -473,29 +575,30 @@ def _deploy(base, argv):
                     for w in words[1:]):
                 return
             if tool == "npm" and words[0] == "token":
-                raise Block("5", "npm tokens are credentials")
-            raise Block("15" if tool not in ("terraform", "tofu", "pulumi") else "11",
+                _block("5", "npm tokens are credentials")
+                return
+            _block("15" if tool not in ("terraform", "tofu", "pulumi") else "11",
                         "`%s %s` deploys, publishes or changes live infrastructure" % (tool, words[0]))
 
 
 def _env_dump(base, argv, envs):
     args = argv[1:]
     if base in ("printenv",) or (base == "env" and not args):
-        raise Block("5", "dumping the environment can expose secrets")
+        _block("5", "dumping the environment can expose secrets")
     if base in ("set", "export", "declare", "typeset", "compgen") and (
             not args or args in (["-p"], ["-x"], ["-px"], ["-v"], ["-a"]) or "-p" in args and len(args) == 1):
-        raise Block("5", "dumping shell variables can expose secrets")
+        _block("5", "dumping shell variables can expose secrets")
     if base == "security" and args and re.match(r"(find-|dump-keychain|export)", args[0]):
-        raise Block("5", "reading the macOS keychain")
+        _block("5", "reading the macOS keychain")
     if base == "launchctl" and args[:1] == ["getenv"]:
-        raise Block("5", "reading launchd environment variables")
+        _block("5", "reading launchd environment variables")
     if base == "ps" and any(re.match(r"^-?[a-zA-Z]*[eE][a-zA-Z]*$", a) and a not in ("-e", "-ef", "-eo") for a in args):
-        raise Block("5", "`ps` with environment output")
+        _block("5", "`ps` with environment output")
     if base in ("defaults",) and args[:1] and args[0] in ("write", "delete", "import"):
-        raise Block("13", "changing macOS defaults is a human action")
+        _block("13", "changing macOS defaults is a human action")
     if base in ("pfctl", "csrutil", "spctl", "systemsetup", "networksetup", "scutil", "dscl", "launchctl") and \
             not (base == "launchctl" and args[:1] in (["list"], ["print"])):
-        raise Block("13", "changing system or security settings is a human action")
+        _block("13", "changing system or security settings is a human action")
 
 
 def _rm(base, argv):
@@ -509,7 +612,25 @@ def _rm(base, argv):
             n = os.path.normpath(_expand(t))
             if n in ("/", HOME, os.path.dirname(HOME), "..", ".") or n.startswith(("/System", "/usr", "/bin")) \
                     or n in (os.path.join(HOME, ".lfg"), os.path.join(HOME, ".claude")):
-                raise Block("13", "recursive delete of %s" % t)
+                _block("13", "recursive delete of %s" % t, hard=n in (os.path.join(HOME, ".lfg"),
+                                                                     os.path.join(HOME, ".claude")))
+
+
+NAMES_ONLY = {"ls", "stat", "test", "[", "echo", "printf"}
+NAMES_ONLY_GIT = {"check-ignore", "ls-files", "status"}
+
+
+def _git_word(argv):
+    """git's subcommand, past -C/-c and their values."""
+    i = 1
+    while i < len(argv):
+        if argv[i] in ("-C", "-c", "--git-dir", "--work-tree") and i + 1 < len(argv):
+            i += 2
+        elif argv[i].startswith("-"):
+            i += 1
+        else:
+            return argv[i]
+    return None
 
 
 def analyze_bash(cmd, depth=0):
@@ -522,7 +643,7 @@ def analyze_bash(cmd, depth=0):
     for m in SECRET_VAR_RX.finditer(cmd):
         name = m.group(1)
         if SECRET_VAR_NAME.search(name) and not re.match(r"^(LFG_|GITHUB_ACTIONS$|CI$)", name):
-            raise Block("5", "expanding $%s would put a secret into the transcript; reference it by name only" % name)
+            _block("5", "expanding $%s would put a secret into the transcript; reference it by name only" % name)
     tokens = _tokens(cmd)
     segs, ops = _segments(tokens)
     # curl|sh : a downloader feeding an interpreter
@@ -535,9 +656,9 @@ def analyze_bash(cmd, depth=0):
         names.append(os.path.basename(argv[0]) if argv else "")
     for i in range(1, len(names)):
         if names[i] in INTERPRETERS and names[i - 1] in ("curl", "wget", "fetch", "http", "https"):
-            raise Block("10", "piping a downloaded script into an interpreter")
+            _block("10", "piping a downloaded script into an interpreter")
     if re.search(r"(sh|bash|zsh|python3?|node)\s+(-c\s+)?[\"']?\s*(<\(|\$\()\s*(curl|wget)", cmd):
-        raise Block("10", "running a downloaded script")
+        _block("10", "running a downloaded script")
 
     prev_redirect = None
     for seg in segs:
@@ -548,13 +669,18 @@ def analyze_bash(cmd, depth=0):
         for j, t in enumerate(seg):
             if t in (">", ">>", "&>", ">|") and j + 1 < len(seg):
                 if is_protected_write(seg[j + 1]):
-                    raise Block("13", "writing to %s (protected config)" % seg[j + 1])
+                    _block("13", "writing to %s (protected config)" % seg[j + 1], hard=_lfg_own(seg[j + 1]))
             if t == "<" and j + 1 < len(seg) and is_secret_path(seg[j + 1]):
-                raise Block("4", "reading a secret file (%s)" % seg[j + 1])
+                _secret(seg[j + 1], "reading a secret file (%s)" % seg[j + 1])
         base = os.path.basename(argv[0])
-        for t in argv[1:] + [argv[0]]:
+        looked = argv[1:] + [argv[0]]
+        if base in NAMES_ONLY or (base == "git" and _git_word(argv) in NAMES_ONLY_GIT):
+            # these only look at a file's name or whether it exists; a redirect still opens it
+            looked = [argv[j + 1] for j in range(len(argv) - 1)
+                      if set(argv[j]) <= set("<>&|") and set(argv[j]) & set("<>")]
+        for t in looked:
             if is_secret_path(t):
-                raise Block("4", "the command touches a secret file (%s); secrets are never read, even if asked" % t)
+                _secret(t, "the command touches a secret file (%s); secrets are never read, even if asked" % t)
         if base in SHELLS and len(argv) >= 3 and argv[1] in ("-c", "-lc", "-ic", "-ec"):
             analyze_bash(argv[2], depth + 1)
         if base in ("eval",):
@@ -574,14 +700,15 @@ def analyze_bash(cmd, depth=0):
         elif base in ("nc", "ncat", "netcat", "socat", "telnet"):
             hosts = [a for a in argv[1:] if not a.startswith("-") and not a.isdigit()]
             if any(not LOCAL_HOST_RX.match(h) for h in hosts):
-                raise Block("7", "raw network connection to a non-local host")
+                _block("7", "raw network connection to a non-local host")
         elif base in ("tee", "cp", "mv", "install", "ln") and argv[1:]:
             dest = [a for a in argv[1:] if not a.startswith("-")]
             if dest and (is_protected_write(dest[-1]) or (base == "tee" and any(is_protected_write(d) for d in dest))):
-                raise Block("13", "writing to protected config (%s)" % dest[-1])
+                _block("13", "writing to protected config (%s)" % dest[-1], hard=any(_lfg_own(d) for d in dest))
         elif base == "sed" and any(a.startswith("-i") for a in argv[1:]):
             if any(is_protected_write(a) for a in argv[1:] if not a.startswith("-")):
-                raise Block("13", "editing protected config in place")
+                _block("13", "editing protected config in place",
+                       hard=any(_lfg_own(a) for a in argv[1:] if not a.startswith("-")))
         elif base == "strix":
             _strix(argv)
         elif base == "lfg":
@@ -603,14 +730,17 @@ def _lfg(argv):
     if sub in LFG_USER_ONLY or (sub == "packs" and rest[:1] in (["add"], ["remove"])) \
             or (sub == "changes" and rest[:1] == ["undo"]) or (sub == "headroom" and rest[:1] in (["setup"], ["off"])) \
             or (sub == "claudemd" and rest[:1] == ["remove-legacy"]):
-        raise Block("13", "`lfg %s` changes your setup; run it yourself (or use lfg ui)" % " ".join(args[:2]))
+        _block("13", "`lfg %s` changes your setup; run it yourself (or use lfg ui)" % " ".join(args[:2]),
+               hard=True)
+    if sub == "prefs" and "--by-user" in argv:
+        _block("13", "`lfg prefs set --by-user` loosens your rules; only you run it, in your own terminal", hard=True)
     if sub == "review" and "post" in rest and "--dry-run" not in argv:
-        raise Block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
+        _block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
     if sub == "update" and "apply" in rest:
-        raise Block("13", "`lfg update apply` merges, pushes and installs new LFG code; run it yourself "
-                    "(or use lfg ui)")
+        _block("13", "`lfg update apply` merges, pushes and installs new LFG code; run it yourself "
+                    "(or use lfg ui)", hard=True)
     if sub == "review" and ("run" in rest or "import" in rest):
-        raise Block("13", "`lfg review %s` can start another Claude Code session on your usage; start it yourself"
+        _block("13", "`lfg review %s` can start another Claude Code session on your usage; start it yourself"
                     % ("run" if "run" in rest else "import"))
 
 
@@ -620,9 +750,9 @@ def _strix(argv):
         if a in ("-t", "--target") and i + 1 < len(args):
             t = args[i + 1]
             if re.match(r"^https?://", t) and not LOCAL_HOST_RX.match(t):
-                raise Block("11", "Strix may only target local apps (localhost, 127.0.0.1, *.localhost, *.test)")
+                _block("11", "Strix may only target local apps (localhost, 127.0.0.1, *.localhost, *.test)")
         if a in ("--workspace-file", "--instruction-file") and i + 1 < len(args) and is_secret_path(args[i + 1]):
-            raise Block("4", "passing a secret file to Strix")
+            _secret(args[i + 1], "passing a secret file to Strix")
 
 
 # ------------------------------------------------------------------ code strings (context-mode etc.)
@@ -643,10 +773,10 @@ def analyze_code(code, language=""):
         return
     m = ENV_DUMP_CODE.search(code)
     if m:
-        raise Block("5", "code dumps the environment (%s)" % m.group(0).strip()[:40])
+        _block("5", "code dumps the environment (%s)" % m.group(0).strip()[:40])
     for m in SECRET_LITERAL_PATH.finditer(code):
         if is_secret_path(m.group(1)):
-            raise Block("4", "code reads a secret file (%s)" % m.group(1))
+            _secret(m.group(1), "code reads a secret file (%s)" % m.group(1))
     exec_rx = r"(subprocess\.\w+|os\.system|execSync|exec|spawnSync|spawn)\(\s*[\[\(]?\s*[\"'`]([^\"'`]+)"
     for m in re.finditer(exec_rx, code):
         analyze_bash(m.group(2))
@@ -657,24 +787,28 @@ def analyze_code(code, language=""):
 FILE_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRead"}
 
 
-def check(tool_name, tool_input):
-    """Return None if allowed, or (rule, why) if blocked."""
+def check(tool_name, tool_input, prefs=None, cwd=None):
+    """Return None if allowed, or (rule, why) if blocked. prefs: your Preferences for this session
+    (prefs.effective), which can lift a rule (`rule_<n>`: "ask") or allow one narrow case; None blocks everything."""
     ti = tool_input or {}
+    values = prefs or {}
+    saved = dict(_CTX)
+    _CTX.update(values=values, cwd=cwd, loose=frozenset(r for r in RULES if values.get("rule_" + r) == "ask"))
     try:
         if tool_name in FILE_TOOLS:
             p = ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or ""
             if is_secret_path(p):
-                raise Block("4", "%s on a secret file (%s); secrets are never read or written, even if asked"
+                _secret(p, "%s on a secret file (%s); secrets are never read or written, even if asked"
                             % (tool_name, p))
             if tool_name != "Read" and tool_name != "NotebookRead" and is_protected_write(p):
-                raise Block("13", "editing %s is a human action" % p)
+                _block("13", "editing %s is a human action" % p, hard=_lfg_own(p))
         elif tool_name in ("Grep", "Glob"):
             for k in ("path", "glob", "pattern"):
                 v = ti.get(k) or ""
                 if k == "pattern" and tool_name == "Grep":
                     continue
                 if v and (is_secret_path(v) or re.search(r"(^|/|\*)\.env(\*|$|[^.a-z])", v)):
-                    raise Block("4", "%s over secret files (%s)" % (tool_name, v))
+                    _secret(v, "%s over secret files (%s)" % (tool_name, v))
         elif tool_name == "Bash":
             analyze_bash(ti.get("command", ""))
         elif "ctx_" in tool_name or tool_name.startswith("mcp__") and "context-mode" in tool_name:
@@ -687,13 +821,15 @@ def check(tool_name, tool_input):
                     analyze_code(v, ti.get("language", "shell" if k.startswith("command") else ""))
             for k in ("path", "file_path", "file", "source"):
                 if is_secret_path(ti.get(k) or ""):
-                    raise Block("4", "context-mode on a secret file (%s)" % ti.get(k))
+                    _secret(ti.get(k), "context-mode on a secret file (%s)" % ti.get(k))
         elif tool_name in ("WebFetch",):
             url = ti.get("url", "")
             if re.search(r"[?&](token|key|secret|password|auth)=", url, re.I):
-                raise Block("6", "a credential in a URL query string")
+                _block("6", "a credential in a URL query string")
     except Block as b:
         return b.rule, b.why
+    finally:
+        _CTX.update(saved)
     return None
 
 
@@ -769,6 +905,18 @@ SELFTEST = [
     ("Bash", {"command": "~/.local/bin/lfg add pentest -y"}, True),
     ("Write", {"file_path": "~/.lfg/enabled.json"}, True),
     ("Edit", {"file_path": "~/.lfg/state/ledger.json"}, True),
+    ("Bash", {"command": "lfg prefs set rule_1 ask --by-user"}, True),
+    ("Bash", {"command": "git merge --ff-only origin/main"}, True),
+    ("Bash", {"command": "gh repo edit o/r --default-branch main"}, True),
+    ("Bash", {"command": "git config --global user.name x"}, True),
+    ("Bash", {"command": "git config core.hooksPath /dev/null"}, True),
+    ("Bash", {"command": "echo X=1 > .env"}, True),
+    ("Bash", {"command": "git add .env"}, True),
+    ("Bash", {"command": "git config --global core.excludesfile"}, False),
+    ("Bash", {"command": "git config --get user.email"}, False),
+    ("Bash", {"command": "git check-ignore -v .env"}, False),
+    ("Bash", {"command": "echo .env >> .gitignore"}, False),
+    ("Bash", {"command": "ls -la .env"}, False),
 ]
 
 
