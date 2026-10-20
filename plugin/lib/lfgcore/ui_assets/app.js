@@ -2030,11 +2030,11 @@ async function loadBranches() {
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
 /* "Update ready": newer LFG in your fork or the original project. Checked on load and every 10 minutes. */
-async function checkUpdate() {
+async function checkUpdate(fresh) {
   const box = $("#update-banner");
   if (!box) return;
   let d;
-  try { d = await api("update"); } catch (e) { return; }
+  try { d = await api("update", fresh === true ? { fresh: "1" } : {}); } catch (e) { return; }
   const j = d.job;
   if (j && j.status === "running") {
     box.hidden = false;
@@ -2103,7 +2103,7 @@ async function watchUpdate() {
   }
 }
 setInterval(checkUpdate, 10 * 60 * 1000);
-function refresh() { state.cache = {}; state.fresh = true; mapStatus(); route().finally(() => { state.fresh = false; }); }
+function refresh() { state.cache = {}; state.fresh = true; mapStatus(); checkUpdate(true); route().finally(() => { state.fresh = false; }); }
 /* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
    drawer is open, so nothing you're in the middle of is thrown away. */
 const AUTO_REFRESH = ["home", "sessions", "environment", "prs", "checks", "runs", "issues"];
