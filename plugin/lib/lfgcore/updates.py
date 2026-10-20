@@ -262,7 +262,8 @@ def apply(log=print):
                             "installed; the half-done merge is on %s in %s" % (up_name, len(h["files"]), branch, wt),
                             h)
     say("Running LFG's tests")
-    t = C.run(TESTS, cwd=wt or root, timeout=900)
+    # no __pycache__ left behind: an untracked file would stop the merge worktree being removed afterwards
+    t = C.run(TESTS, cwd=wt or root, timeout=900, env={"PYTHONDONTWRITEBYTECODE": "1"})
     if t.returncode:
         _git(root, "reset", "--keep", before)
         if made:
