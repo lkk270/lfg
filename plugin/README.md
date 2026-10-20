@@ -34,6 +34,7 @@ Talk → Plan → Build → Prove → Ship → Learn, plus helpers you can use a
 | Prove | `check`, `secure`, `pentest`, `expert` |
 | Ship | `ship` |
 | Learn | `learn` |
+| Review others' PRs | `review` |
 | Helpers | `explain`, `impact`, `spike`, `research`, `map`, `inbox`, `handoff`, `note`, `health`, `which` |
 
 Trigger phrases, inputs and outputs for each: `lfg ui` → Skills, or the guide in `docs/guide.html`.

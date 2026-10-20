@@ -21,7 +21,9 @@ After install (`~/.lfg`, mode 700):
 ├── state/ledger.json       # every change LFG made outside ~/.lfg (claudecfg.py), what `lfg uninstall` replays
 ├── state/{packs.json,gh.json,usage-offsets.json}
 ├── config.json             # user config, mode 600 (models, lanes, shipcheck, pentest, ports, linear, graphs.docs,
-│                           # headroom.port/mode/scope, guard.hardened)
+│                           # headroom.port/mode/scope, guard.hardened,
+│                           # guard.allow_commit: local commits allowed, not --amend; push/merge stay blocked,
+│                           # review.sources: files/folders /lfg:review reads instead of plugin/review/)
 ├── overrides/{skills,rules}/  defaults/skills/  backups/   # your dashboard edits, pristine copies, backups
 ├── graphs/<repo-id>/{state.json,docs.json,knowledge.json,.lock,sync.log,knowledge.log}  # bookkeeping only
 ├── repos/<repo-id>/shipcheck-history.json   # this machine's image sizes; everything else moved into the repo
@@ -31,6 +33,8 @@ After install (`~/.lfg`, mode 700):
 ├── ui/static/              # generated viewer pages (e.g. arch-health/<repo-id>.html from /lfg:health)
 ├── playbooks/<repo-id>/{onboarding,landmines,test-gaps,incidents}.md   # generated from the graphs, never in the repo
 ├── secintel/cache/  strix/<repo-id>/  feedback/<repo-id>.json  usage.db (600)  audit.log
+├── reviews/<owner>__<repo>/<number>.json   # PR review records (`lfg review`), one per PR, a pass per review
+├── overrides/review/*.md  # your additions to the review method, read last
 ```
 
 The repo's own knowledge lives in the repo, committed with the code on the branch it was written on:
@@ -43,7 +47,7 @@ The repo's own knowledge lives in the repo, committed with the code on the branc
 ├── runs/<run-id>/          # 01-brief.md … 07-shipcheck.json, tasks.json, progress.md, run.json
 │                           # ignored: CURRENT, patches/, gate-logs/, ready.json, 05-secure.*, 05-pentest.json,
 │                           # COMMIT_MSG.md, PR_BODY.md
-└── nodes/<Type>/<slug>.md  # shared dev-graph nodes, the master copy (lfgcore/knowledge.py)
+└── nodes/<Type>/<slug>.md  # shared dev-graph nodes, the master copy (lfgcore/teamknowledge.py)
 ```
 
 `<repo-id>` = the id in `.lfg/repo-id`; before that file exists, `<repo-dir-name>-<first 8 hex of sha1(git remote
@@ -75,13 +79,13 @@ Only through `claudecfg.py` (backup, compare-and-swap, ledger entry), only after
 | user-scope MCP `linear` (only if you have none) | Linear pack | `claude mcp remove` |
 | `claude plugin install lfg@lfg --scope user` | `lfg enable --everywhere` | `uninstall --scope user` |
 
-Revert restores a value only while it still equals what LFG wrote. Homebrew/uv installs are listed (`state/packs.json`), never removed. Older versions' machine-wide changes (global deny rules, the `~/.claude/CLAUDE.md` block, user-scope MCP servers, global Headroom routing, the plugin on everywhere) are detected exactly by `setup.legacy_items()` and offered for clean-up by `lfg setup`, the dashboard and `lfg uninstall`.
+Revert restores a value only while it still equals what LFG wrote. Homebrew/uv installs are listed (`state/packs.json`), never removed. Older versions' machine-wide changes (global deny rules, the `~/.claude/CLAUDE.md` block, user-scope MCP servers, global Headroom routing, the plugin on everywhere) are detected exactly by `setup.legacy_items()` and offered for clean-up by `lfg setup --migrate`, the dashboard and `lfg uninstall`.
 
 ## CLI (`lfg <command>`). Every command: exit 0 = ok, 1 = failed check, 2 = usage/env error. `--json` where noted.
 
 | Command | Does |
 |---|---|
-| `lfg setup [--packs a,b] [--here] [--everywhere] [--no-migrate] [--dry-run] [--yes] [--json]` | Install or update: read-only scan → plan → apply after a yes; a failed step rolls back this run's changes. `install.sh` runs it |
+| `lfg setup [--packs a,b] [--here] [--everywhere] [--migrate] [--dry-run] [--yes] [--json]` | Install or update: read-only scan → plan → apply after a yes; a failed step rolls back this run's changes. `install.sh` runs it |
 | `lfg enable [path] [--hardened] [--everywhere]` / `lfg disable [path] [--everywhere]` | LFG on/off for one repo (or machine-wide); `disable` undoes exactly what `enable` changed, keeps graphs and runs |
 | `lfg packs [list\|add\|remove] [<name>] [--yes] [--no-scripts]`, `lfg add <pack>`, `lfg remove <pack>` | Optional packs: security, shipcheck, pentest, knowledge, linear, headroom. Core is always on |
 | `lfg changes [list\|undo <id>] [--json]` | The change ledger; `undo` reverts one entry if it is still LFG's |
@@ -102,7 +106,7 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg knowledge sync` / `status` | Brings `.lfg/nodes/` and the repo's dev-graph branch level (SessionStart and Stop run it in the background with the Knowledge pack on); `status` shows the folder, branch, file count and leftovers in `~/.lfg` |
 | `lfg knowledge migrate [--dry-run] [--take-main-nodes]` | Moves runs, glossary, ADRs and commands kept in `~/.lfg` under any id this repo had into `.lfg/`, merging a run found under two ids; originals go to `~/.lfg/backups/`. `--take-main-nodes` also copies the shared nodes on dev-graph `main` (where older versions kept every repo's) into this repo's files |
 | `lfg run set [lane=…] [stage=…] [issue=<ID or title>] [--force]` | Records lane, stage and issue in the current run's `run.json` (what the dashboard shows). A stage moves the linked dev-graph Issue (plan → todo, build/fix/check/secure → in_progress, expert/ship → needs_review, done → done). Refuses to lower the lane without `--force` |
-| `lfg issue sync <ID\|title> [--title] [--type] [--status] [--priority 0-4] [--description] \| show <ID> [--json]` | Creates or updates the Issue in dev-graph as the writer role (`ACME-4225` → slug `acme-4225`, `legacyRef` kept; an idea → `iss-<kebab>-<4 hex>`, or the existing issue with that title). The Issues page lists these; skills call it at intake |
+| `lfg issue sync <ID\|title> [--title] [--type] [--status] [--priority 0-4] [--description] [--criteria] \| show <ID> \| sync-tasks \| sync-brief [--json]` | `sync-tasks`: one Issue per task in the current run's tasks.json (description + steps, verification as acceptance criteria, done once `passes`), called by /plan and /build. `sync-brief`: the brief's Problem and Acceptance criteria onto the run's Issue, called after /grill. `sync`: creates or updates the Issue in dev-graph as the writer role (`ACME-4225` → slug `acme-4225`, `legacyRef` kept; an idea → `iss-<kebab>-<4 hex>`, or the existing issue with that title). The Issues page lists these; skills call it at intake |
 | `lfg rule <name>` | Prints a hidden rule module (`tdd-rules`, `slice-rules`, `domain-docs`, `module-design`, `bug-loop`, `agent-writing`, `git-guard`, `graph-first`, `remember`, `worktrees`), or the user's own version from `~/.lfg/overrides/rules/<name>.md` (changed or added in the dashboard). SessionStart lists rules the user added |
 | `lfg repo docs` | Prints the repo's docs dir (glossary, ADRs): `<checkout>/.lfg/docs` |
 | `lfg repo id` | Prints `<repo-id>` (the same in every worktree and clone of a repo) |
@@ -117,12 +121,13 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg watch` | Read-only: follows the CI run of the current branch via `gh` |
 | `lfg ui [--port 7777] [--no-open] [--unlock]` | Dashboard on 127.0.0.1: read-only except Settings and Skills, which need the local edit key (handed to the browser in the URL fragment, never printed). Pages, rules and API: [docs/dashboard.md](docs/dashboard.md) |
 | `lfg claudemd show\|remove-legacy` | Shows `~/.claude/CLAUDE.md`, or removes the marked block an older LFG appended, only if it is byte-identical to one LFG shipped. LFG no longer writes this file: the same guidance is session context in LFG repos (`hooks.CONTEXT`) |
-| `lfg omnigraph setup [--no-launchd] \| status \| restart <name> \| serve <name> \| mcp <name> [--json]` | dev-graph + second-brain (Knowledge pack): creates the graphs from the pinned Omnigraph cookbooks (no seed data), generates per-machine tokens (never printed), runs each server on 127.0.0.1 under a launchd agent `dev.lfg.omnigraph.<name>` (in the ledger). The plugin's `.mcp.json` provides MCP `<name>` → `lfg mcp <name>` → `lfg omnigraph mcp <name>`, only in LFG repos. Agents search with LFG's keyword queries in `plugin/omnigraph/{dev-graph,second-brain}.gq` (`find_*`, `save_note`; bm25, local, no API key); the cookbook's embedding `search_*` queries need an OpenAI/OpenRouter/Gemini key and are never used |
+| `lfg omnigraph setup [--no-launchd] \| status \| restart <name> \| serve <name> \| mcp <name> [--json]` | dev-graph + second-brain (Knowledge pack): creates the graphs from the pinned Omnigraph cookbooks (no seed data), generates per-machine tokens (never printed), runs each server on 127.0.0.1 under a launchd agent `dev.lfg.omnigraph.<name>` (in the ledger). `serve` clears a cluster lock left by a server that died (only when the pid in `__cluster/lock.json` is gone, via `omnigraph cluster force-unlock`) and, if another server already answers on the port, waits and takes over when it stops; `restart` reloads an agent launchd gave up on; `lfg doctor` flags a brain that answers but isn't kept running by its agent. The plugin's `.mcp.json` provides MCP `<name>` → `lfg mcp <name>` → `lfg omnigraph mcp <name>`, only in LFG repos. Agents search with LFG's keyword queries in `plugin/omnigraph/{dev-graph,second-brain}.gq` (`find_*`, `save_note`; bm25, local, no API key); the cookbook's embedding `search_*` queries need an OpenAI/OpenRouter/Gemini key and are never used |
 | `lfg headroom setup [--scope repos\|everywhere] [--upstream URL] \| status \| restart \| off \| serve [--json]` | Optional (Headroom pack, off by default): runs `headroom proxy` on 127.0.0.1:`headroom.port` under launchd `dev.lfg.headroom` (`headroom.mode`: `token` or `cache`; no rate limit, no response cache, telemetry off), forwarding to the previous `ANTHROPIC_BASE_URL` or api.anthropic.com. Routes Claude Code there only once the proxy answers: per LFG repo (`.claude/settings.local.json`, default) or everywhere (`~/.claude/settings.json`), all through the ledger. Refused on Bedrock/Vertex/Foundry. `off` undoes exactly that routing and unloads the agent. The SessionStart hook restarts a dead proxy |
 | `lfg feedback add <finding-id> accept\|reject [--note ...]` | Records your verdict on a review finding |
+| `lfg review context\|save\|show\|list\|mark\|post\|threads [<pr>] [ids…]` | Reviews of other people's PRs (`/lfg:review`). `<pr>` is a number (repo from this checkout), `owner/repo#12` or a PR URL. `context`: what the review reads (sources, the PR's AGENTS.md files, whether it is a re-review). `save [--file F] [--ticket ID]`: adds a pass from the skill's findings JSON. `mark <ids> --keep\|--drop\|--pending [--body\|--body-file]`: triage. `post --event approve\|request-changes\|comment [--body] [--dry-run]`: **user-only** (the guard blocks agents unless `--dry-run`); posts the kept findings as one GitHub review, inline where the line is in the diff, else in the body, and records each comment id. `threads`: read-only, for a re-review: each posted finding's thread (resolved, outdated, replies) and whether its file changed since |
 | `lfg usage [--json]` | Token/time summary from `usage.db` |
 | `lfg vendor status\|sync\|update` | Pinned mattpocock/skills source |
-| `lfg hook <session-start\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
+| `lfg hook <session-start\|prompt\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
 
 ## Skills
 
@@ -171,6 +176,7 @@ PreToolUse blocks with exit code 2 + a reason on stderr: `Blocked by LFG rule <N
 - `<run>/05-secure.json` — `{"ts", "mode", "target", "inventory", "scanners", "findings": [{"id","type","item","where","severity","blocking","evidence","fix","source"}], "verdict": "safe|safe with caveats|don't", "blocking", "offline", "licences_checked": [names]}`.
 - `<run>/05-pentest.json` — normalized Strix findings `{"id","title","severity","location","evidence","fix","false_positive"}` plus `summary` counts and `gate4: pass|fail` (fail on any critical/high).
 - `<run>/06-review.json` — expert-review findings; `lfg feedback add` records verdicts in `feedback/<rid>.json`.
+- `reviews/<owner>__<repo>/<number>.json` — `{"repo", "number", "title", "url", "author", "base", "branch", "ticket", "passes": [{"n", "kind": "first|re-review", "head_sha", "summary", "score", "approach_notes", "prior": [{"id", "state", "note"}], "findings": [{"id": "<pass>.<n>", "title", "severity": "blocker|major|minor|nitpick|note", "file", "line", "issue", "fix", "detail", "body", "origin": "introduced|exposed|pre-existing", "since": "first|new|missed", "status": "pending|keep|drop", "comment_id", "comment_url"}], "posted": {"review_id", "event", "url", "ts"}}]}`. What the review reads: `review.sources` in config.json (files or folders, read in place; default `plugin/review/`), then `overrides/review/`.
 - `<run>/07-shipcheck.json` — part A (Docker) checks, part B (10-item checklist), cleanup verification.
 
 ## Secrets in tool output

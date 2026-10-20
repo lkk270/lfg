@@ -13,7 +13,7 @@ os.environ.setdefault("LFG_HOME", tempfile.mkdtemp(prefix="lfg-test-home-"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "lib"))
 
 C = importlib.import_module("lfgcore.common")
-K = importlib.import_module("lfgcore.knowledge")
+K = importlib.import_module("lfgcore.teamknowledge")
 
 OTHER = [t for t in K.ALL_TYPES if t not in ("Decision", "Learning", "Component", "Issue", "PR")]
 SCHEMA = """

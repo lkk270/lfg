@@ -74,16 +74,19 @@ def doctor(selftest=False):
     if SU.pack_on("knowledge"):
         from . import omnigraph as OG
         for name, gs in OG.status()["graphs"].items():
-            row("omnigraph %s" % name, gs["ready"], gs["url"] if gs["ready"] else
+            row("omnigraph %s" % name, gs["ready"] and gs["launchd"],
                 ("not set up - run `lfg add knowledge`" if not gs["created"] else
-                 "server down - run `lfg omnigraph restart %s`" % name), False)
+                 "server down - run `lfg omnigraph restart %s`" % name) if not gs["ready"] else
+                gs["url"] if gs["launchd"] else
+                "%s, but not kept running by its login agent - run `lfg omnigraph restart %s`" % (gs["url"], name),
+                False)
     gh = C.run(["gh", "auth", "status"], timeout=15) if SU.which("gh") else None
     row("gh signed in", bool(gh and gh.returncode == 0), "" if gh and gh.returncode == 0 else
         "run `gh auth login` yourself", False)
     row("plugin hooks", os.path.exists(os.path.join(plugin_dir(), "hooks", "hooks.json")), plugin_dir())
     legacy = SU.legacy_items()
     row("no machine-wide leftovers from older LFG", not legacy,
-        "" if not legacy else "%d found - run `lfg setup` to clean up: %s" % (
+        "" if not legacy else "%d found - `lfg setup --migrate` would undo: %s" % (
             len(legacy), "; ".join(i["title"] for i in legacy)), False)
     row("change ledger", True, "%d change(s) outside ~/.lfg, all undoable (`lfg changes`)" % len(CC.entries()))
     for line in rows:
@@ -117,7 +120,7 @@ def cmd_setup(a):
         C.die("unknown pack(s): %s (choose from %s)" % (", ".join(unknown), ", ".join(SU.PACKS)), 2)
     here = os.getcwd() if a.here else None
     sc = SU.scan()
-    steps = SU.plan(packs, here=here, everywhere=a.everywhere, legacy=not a.no_migrate)
+    steps = SU.plan(packs, here=here, everywhere=a.everywhere, legacy=a.migrate)
     if a.json and a.dry_run:
         _print({"scan": sc, "plan": steps})
         return 0
@@ -137,6 +140,8 @@ def cmd_setup(a):
               % ", ".join("/" + n for n in sc["skill_collisions"]))
     print("  disk free       %s GB" % sc["disk_free_gb"])
     if not steps:
+        from . import updates as U
+        U.remember_source(C.LFG_ROOT)
         print("\nNothing to do: LFG is installed and up to date. `lfg enable` turns it on in a repo.")
         return 0
     print("\nPlan (nothing has changed yet):")
@@ -162,6 +167,8 @@ def cmd_setup(a):
     if not res["ok"]:
         print("\nSetup stopped; the changes it made outside %s were undone." % C.LFG_HOME)
         return 1
+    from . import updates as U
+    U.remember_source(C.LFG_ROOT)
     print("\nDone. Next:\n  cd <your repo> && lfg enable     turn LFG on there\n  lfg ui                         "
           "dashboard (packs, settings, skills)\n  lfg doctor                     check everything")
     return 0
@@ -347,7 +354,7 @@ def cmd_run(a):
     if a.action == "path":
         r = C.current_run(root)
         if not r:
-            from . import knowledge as K
+            from . import teamknowledge as K
             old = K.legacy_current(root)
             if old:
                 sys.stderr.write("the current run %s is still in ~/.lfg from before runs moved into the repo: run "
@@ -420,8 +427,18 @@ def _run_set(root, rid, a):
 
 
 def cmd_knowledge(a):
-    """`lfg knowledge sync | status | migrate [--dry-run] [--take-main-nodes]`: see knowledge.py."""
-    from . import knowledge as K
+    """`lfg knowledge sync | status | migrate [--dry-run] [--take-main-nodes]`: see teamknowledge.py.
+    `lfg knowledge tag <slug>`: the Knowledge page's repo, feature and topic tags, see knowledge.py."""
+    if a.action == "tag":
+        from . import knowledge as KN
+        if not a.slug:
+            C.die("tag needs the item's slug", 2)
+        try:
+            _print(KN.set_tags(a.slug, repo=a.repo, feature=a.feature, topic=a.topic))
+        except ValueError as e:
+            C.die(str(e), 2)
+        return 0
+    from . import teamknowledge as K
     root, rid = C.need_repo()
     if a.action == "status":
         last = K.last_sync(root)
@@ -512,15 +529,30 @@ def cmd_worktree(a):
 
 
 def cmd_issue(a):
-    """`lfg issue sync <ID|title> [--title ..] [--type ..] [--status ..] [--priority N]`: mirror into dev-graph."""
+    """`lfg issue sync <ID|title> [--title ..] [--type ..] [--status ..] [--priority N] [--description ..]
+    [--criteria ..]`, `lfg issue sync-tasks` (the current run's tasks.json) or `lfg issue sync-brief` (its brief):
+    mirror into dev-graph."""
     from . import tracker as T
+    if a.action in ("sync", "show") and not a.key:
+        C.die("usage: lfg issue %s <ID|title>" % a.action, 2)
     try:
         if a.action == "show":
             slug = T.resolve(a.key, new=False)  # never make up a key just to say it isn't there
             out = (T.lookup(slug) if slug else None) or {"slug": slug or T.slug_for(a.key), "found": False}
+        elif a.action in ("sync-tasks", "sync-brief"):
+            root, _ = C.need_repo()
+            run = C.current_run(root)
+            if not run:
+                C.die("no current run - start one with `lfg run new <slug>`", 1)
+            if a.action == "sync-brief":
+                out = T.sync_brief(run)
+            else:
+                rows = T.sync_tasks(run)
+                out = {"tasks": len(rows), "created": sum(r["action"] == "created" for r in rows),
+                       "done": sum(r.get("status") == "done" for r in rows)}
         else:
             out = T.sync(a.key, title=a.title, issue_type=a.type, status=a.status, priority=a.priority,
-                         description=a.description)
+                         description=a.description, criteria=a.criteria)
     except Exception as e:
         C.die("dev-graph: %s" % (getattr(e, "reason", None) or e))
     if a.json:
@@ -708,6 +740,163 @@ def cmd_feedback(a):
     return 0
 
 
+def cmd_review(a):
+    from . import review as R
+    try:
+        return _review(R, a)
+    except R.ReviewError as e:
+        C.die(str(e), 1)
+
+
+def _review(R, a):
+    if a.action == "list":
+        recs = [r for r in R.all_records() if not a.ticket or r.get("ticket") == a.ticket]
+        rows = [{"pr": "%s#%d" % (r["repo"], r["number"]), "title": r.get("title"), "author": r.get("author"),
+                 "ticket": r.get("ticket"), "passes": len(r["passes"]), "score": r["passes"][-1].get("score"),
+                 "posted": bool(r["passes"][-1].get("posted")), "updated": r.get("updated")} for r in recs]
+        C.emit(rows, a.json, lambda rs: [print("%-40s pass %d  %-8s %s" % (x["pr"], x["passes"], "posted" if
+                                                x["posted"] else "draft", x["title"] or "")) for x in rs]
+               or (None if rs else print("no reviews saved")))
+        return 0
+    if not a.pr:
+        C.die("usage: lfg review %s <pr>" % a.action, 2)
+    repo, number = R.parse_pr(a.pr)
+    if a.action == "context":
+        _print(R.context(repo, number))
+    elif a.action == "save":
+        raw = C.read_text(a.file) if a.file else sys.stdin.read()
+        try:
+            data = json.loads(raw)
+        except ValueError as e:
+            C.die("findings are not valid JSON: %s" % e, 2)
+        if isinstance(data, dict) and not data.get("reviewer"):
+            data["reviewer"] = R.me()
+        rec = R.save(repo, number, data, ticket=a.ticket)
+        p = rec["passes"][-1]
+        print("saved pass %d of %s#%d: %d findings (%s) -> %s" % (
+            p["n"], repo, number, len(p["findings"]), ", ".join(f["id"] for f in p["findings"]) or "none",
+            R.record_path(repo, number)))
+    elif a.action == "show":
+        rec = R.need(repo, number)
+        C.emit(rec, a.json, _review_human)
+    elif a.action == "mark":
+        if not a.ids or (a.status is None and a.body is None and a.body_file is None):
+            C.die("usage: lfg review mark <pr> <id>... [--keep|--drop|--pending] [--body TEXT|--body-file F]", 2)
+        body = C.read_text(a.body_file) if a.body_file else a.body
+        R.mark(repo, number, a.ids, status=a.status, body=body)
+        print("%s: %s" % (", ".join(a.ids), a.status or "comment updated"))
+    elif a.action == "post":
+        if not a.event:
+            C.die("usage: lfg review post <pr> --event approve|request-changes|comment [--body TEXT] [--dry-run]", 2)
+        out = R.post(repo, number, a.event, body=a.body or "", dry_run=a.dry_run)
+        if a.json or a.dry_run:
+            _print(out)
+        else:
+            print("posted %s with %d inline comments: %s" % (out["event"], len(out["comments"]), out["posted"]["url"]))
+    elif a.action == "threads":
+        _print(R.threads(repo, number))
+    elif a.action == "run":
+        j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh)
+        print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
+                                                  j["log"]))
+        return 0 if j["status"] == "done" else 1
+    elif a.action == "sessions":
+        rows = R.sessions_for(repo, number)
+        C.emit(rows, a.json, lambda rs: [print("%s  %s  %-50s %s" % (x["modified"][:16], "json" if x["has_json"]
+                                                else "    ", x["title"][:50], x["path"])) for x in rs]
+               or (None if rs else print("no sessions in the last 30 days mention %s#%d" % (repo, number))))
+    elif a.action == "import":
+        if not a.file:
+            C.die("usage: lfg review import <pr> --file <session .jsonl or review .log>  (`lfg review sessions <pr>` "
+                  "lists them)", 2)
+        rec = R.import_session(repo, number, os.path.expanduser(a.file), ticket=a.ticket)
+        p = rec["passes"][-1]
+        print("imported pass %d of %s#%d: %d findings" % (p["n"], repo, number, len(p["findings"])))
+    return 0
+
+
+def _review_human(rec):
+    print("%s#%d  %s  (by %s)%s" % (rec["repo"], rec["number"], rec.get("title", ""), rec.get("author", ""),
+                                    "  ticket " + rec["ticket"] if rec.get("ticket") else ""))
+    for p in rec["passes"]:
+        print("\npass %d (%s) at %s, %s%s" % (p["n"], p["kind"], p["head_sha"][:8],
+                                            "score %s" % p["score"] if p.get("score") is not None else "no score",
+                                            ", posted " + p["posted"]["event"] if p.get("posted") else ""))
+        if p.get("summary"):
+            print("  " + p["summary"].replace("\n", "\n  "))
+        for x in p.get("prior") or []:
+            print("  earlier %-5s %-18s %s" % (x["id"], x["state"], x["note"]))
+        for f in p["findings"]:
+            where = "%s:%s" % (f["file"], f["line"] or "") if f["file"] else "(general)"
+            print("  %-5s %-7s %-8s %s  %s" % (f["id"], f["status"], f["severity"], f["title"], where))
+
+
+def cmd_prefs(a):
+    from . import prefs as P
+    if a.action == "hook":
+        return P.hook(a.id or "")
+    try:
+        if a.action == "set":
+            if not a.id or a.value is None:
+                C.die("usage: lfg prefs set <id> <value> [--session ID]", 2)
+            _print(P.set_pref(a.id, a.value, session=a.session, by_agent=not a.by_user))
+        elif a.action == "clear":
+            _print(P.clear_session(a.session or a.id))
+        elif a.action == "install":
+            _print(P.install())
+        elif a.action == "status":
+            _print(P.installed())
+        else:
+            d = P.load()
+            vals = P.effective(a.session, d)
+            for p in P.catalog(d):
+                v = vals[p["id"]]
+                shown = ("on" if v else "off") if p["kind"] == "switch" else v
+                print("%-12s %-22s %-8s %s" % (p["group"], p["id"], shown, p["title"]))
+    except PermissionError as e:
+        C.die(str(e), 1)
+    except ValueError as e:
+        C.die(str(e), 2)
+    return 0
+
+
+def cmd_update(a):
+    from . import updates as U
+    if a.action == "apply":
+        return 0 if U.apply()["status"] == "done" else 1
+    d = U.check(max_age=0)
+    if a.json:
+        print(U.as_json(d))
+    else:
+        U.human(d)
+    return 0
+
+
+def cmd_sessions(a):
+    from . import sessions as SS
+    try:
+        if a.action == "name":
+            _print(SS.rename(a.id, " ".join(a.value)))
+            return 0
+        if a.action == "folder":
+            _print(SS.file_into(a.id, " ".join(a.value)))
+            return 0
+    except ValueError as e:
+        C.die(str(e), 2)
+    d = SS.listing(days=a.days)
+    rows = [r for r in d["sessions"] if not a.find or a.find.lower() in " ".join(
+        str(r.get(k) or "") for k in ("name", "repo", "branch", "ticket", "folder", "first", "cwd")).lower()]
+
+    def human(rs):
+        if not rs:
+            print("no sessions match")
+        for r in rs[:a.limit]:
+            print("%s  %-22s %-12s %s\n    %s" % (r["modified"][:16].replace("T", " "), (r["repo"] + (
+                "/" + r["worktree"] if r["worktree"] else ""))[:22], r["group"][:12], r["name"][:70], r["resume"]))
+    C.emit(rows[:a.limit], a.json, human)
+    return 0
+
+
 def cmd_usage(a):
     p = C.lfg_path("usage.db")
     rows = []
@@ -735,7 +924,7 @@ def cmd_headroom(a):
     if a.action == "serve":
         return HR.serve()
     if a.action == "restart":
-        return 0 if HR.restart() and HR.wait_live() else 1
+        return 0 if HR.revive(timeout=60) else 1
     try:
         out = {"setup": lambda: HR.setup(a.upstream, a.scope), "off": HR.off, "status": HR.status}[a.action]()
     except ValueError as e:  # a settings file that isn't valid JSON is left alone
@@ -822,7 +1011,9 @@ def main(argv=None):
     su.add_argument("--packs", help="comma list of extra packs: security,shipcheck,pentest,knowledge,linear,headroom")
     su.add_argument("--here", action="store_true", help="also turn LFG on in the current repo")
     su.add_argument("--everywhere", action="store_true", help="turn LFG on in every repo (not recommended)")
-    su.add_argument("--no-migrate", action="store_true", help="don't offer to clean up an older LFG install")
+    su.add_argument("--migrate", action="store_true",
+                    help="also undo what an older LFG changed machine-wide (CLAUDE.md block, MCP servers, Headroom)")
+    su.add_argument("--no-migrate", action="store_true", help=argparse.SUPPRESS)  # now the default
     su.add_argument("--dry-run", action="store_true", help="only show the plan")
     su.add_argument("--yes", "-y", action="store_true", help="apply without asking")
     su.add_argument("--json", action="store_true")
@@ -871,8 +1062,13 @@ def main(argv=None):
     r.add_argument("arg", nargs="?")
     r.add_argument("more", nargs="*", help="set: more key=value pairs")
     r.add_argument("--force", action="store_true", help="set: allow lowering the lane (only on the user's word)")
-    kn = sp.add_parser("knowledge", help="the repo's shared knowledge in .lfg/ (sync with dev-graph, migrate)")
-    kn.add_argument("action", choices=["sync", "status", "migrate"])
+    kn = sp.add_parser("knowledge", help="the repo's shared knowledge in .lfg/ (sync with dev-graph, migrate); "
+                                         "tag a saved decision or lesson with its repo, feature or topic")
+    kn.add_argument("action", choices=["sync", "status", "migrate", "tag"])
+    kn.add_argument("slug", nargs="?", help="tag: the item's slug (dev-graph Decision or Learning)")
+    kn.add_argument("--repo", help="tag")
+    kn.add_argument("--feature", help="tag")
+    kn.add_argument("--topic", choices=["setup", "gotcha", "incident_review", "retro", "hindsight", ""], help="tag")
     kn.add_argument("--dry-run", action="store_true", help="migrate: only say what would move")
     kn.add_argument("--take-main-nodes", action="store_true",
                     help="migrate: also copy every Decision, Learning, ... on dev-graph's main into this repo's files")
@@ -883,14 +1079,17 @@ def main(argv=None):
     wt.add_argument("name", nargs="?", help="new: branch; remove: folder name or branch")
     wt.add_argument("--from", dest="base", help="new: start a new branch from this ref (default HEAD)")
     iss = sp.add_parser("issue", help="mirror the run's issue into dev-graph (the Issues page)")
-    iss.add_argument("action", choices=["sync", "show"])
-    iss.add_argument("key", help="tracker id (ACME-4225) or a short title for an idea")
+    iss.add_argument("action", choices=["sync", "show", "sync-tasks", "sync-brief"],
+                     help="sync-tasks: one Issue per task in the current run's tasks.json (text, checks, done); "
+                          "sync-brief: the brief's Problem and Acceptance criteria onto the run's Issue")
+    iss.add_argument("key", nargs="?", help="tracker id (ACME-4225) or a short title for an idea")
     iss.add_argument("--title")
     iss.add_argument("--type", choices=["bug", "feature", "task", "chore", "question", "risk"])
     iss.add_argument("--status", choices=["backlog", "todo", "in_progress", "needs_review", "hold", "done",
                                           "canceled", "duplicate"])
     iss.add_argument("--priority", type=int, choices=range(0, 5))
     iss.add_argument("--description")
+    iss.add_argument("--criteria", help="acceptance criteria: what done looks like")
     iss.add_argument("--json", action="store_true")
     ru = sp.add_parser("rule")
     ru.add_argument("name")
@@ -933,6 +1132,40 @@ def main(argv=None):
     fb.add_argument("finding")
     fb.add_argument("verdict", choices=["accept", "reject"])
     fb.add_argument("--note")
+    rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
+    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "run", "sessions",
+                                       "import"])
+    rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
+    rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")
+    st = rv.add_mutually_exclusive_group()
+    for s_ in ("keep", "drop", "pending"):
+        st.add_argument("--" + s_, dest="status", action="store_const", const=s_)
+    rv.add_argument("--body", help="mark: new comment text; post: text above the inline comments")
+    rv.add_argument("--body-file")
+    rv.add_argument("--file", help="save: findings JSON (default: stdin); import: the session or log to import")
+    rv.add_argument("--ticket", help="save/run: the Linear ticket the PR belongs to; list: only that ticket")
+    rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
+    rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
+    rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
+    rv.add_argument("--json", action="store_true")
+    pf = sp.add_parser("prefs", help="your rules for Claude: defaults, per-session changes, hooks that enforce them")
+    pf.add_argument("action", nargs="?", default="list", choices=["list", "set", "clear", "install", "status", "hook"])
+    pf.add_argument("id", nargs="?", help="set: the preference; hook: session-start|prompt|pre-tool")
+    pf.add_argument("value", nargs="?", help="set: on/off, or one of the choices")
+    pf.add_argument("--session", help="one session (its id from lfg sessions); default: the defaults")
+    pf.add_argument("--by-user", action="store_true", help="allow loosening (your own terminal only)")
+    up = sp.add_parser("update", help="is there newer LFG (your fork, the original project)? apply installs it")
+    up.add_argument("action", nargs="?", default="check", choices=["check", "apply"])
+    up.add_argument("--json", action="store_true")
+    ss = sp.add_parser("sessions", help="every Claude Code session on this machine, with the command that resumes it")
+    ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder"])
+    ss.add_argument("id", nargs="?", help="name/folder: the session id")
+    ss.add_argument("value", nargs="*", help="name: your name for it; folder: your group for it, LFG only, nothing on "
+                    "disk moves (empty takes it out)")
+    ss.add_argument("--find", help="list: only sessions whose name, repo, branch, ticket or group has this")
+    ss.add_argument("--days", type=int, help="list: only the last N days")
+    ss.add_argument("--limit", type=int, default=30)
+    ss.add_argument("--json", action="store_true")
     us = sp.add_parser("usage")
     us.add_argument("--json", action="store_true")
     ve = sp.add_parser("vendor")
@@ -988,8 +1221,11 @@ def main(argv=None):
     return {"init": cmd_init, "graphs": cmd_graphs, "run": cmd_run, "rule": cmd_rule, "repo": cmd_repo,
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
-            "usage": cmd_usage, "vendor": cmd_vendor, "omnigraph": cmd_omnigraph, "headroom": cmd_headroom,
-            "playbooks": cmd_playbooks, "issue": cmd_issue, "worktree": cmd_worktree, "knowledge": cmd_knowledge,
-            "setup": cmd_setup,
-            "enable": cmd_enable, "disable": cmd_disable, "packs": cmd_packs, "changes": cmd_changes,
-            "uninstall": cmd_uninstall}[a.cmd](a)
+            "usage": cmd_usage, "sessions": cmd_sessions, "update": cmd_update, "knowledge": cmd_knowledge,
+            "prefs": cmd_prefs,
+            "vendor": cmd_vendor,
+            "omnigraph": cmd_omnigraph,
+            "headroom": cmd_headroom,
+            "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue,
+            "worktree": cmd_worktree, "setup": cmd_setup, "enable": cmd_enable, "disable": cmd_disable,
+            "packs": cmd_packs, "changes": cmd_changes, "uninstall": cmd_uninstall}[a.cmd](a)

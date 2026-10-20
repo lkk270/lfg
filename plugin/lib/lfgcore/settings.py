@@ -665,3 +665,177 @@ def pull_model(name):
     PULLS[name] = {"status": "starting", "completed": 0, "total": 0, "error": "", "done": False}
     threading.Thread(target=_pull_worker, args=(name,), daemon=True).start()
     return {"pulling": name, "note": "Downloading %s from the Ollama library in the background." % name}
+
+
+# ---------------------------------------------------------------- your own skills and references (~/.claude)
+
+TEXT_EXT = (".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".sh", ".js", ".ts", ".sql", ".csv")
+MAX_FILE = 400 * 1024
+
+
+def _claude_dirs():
+    base = os.path.join(C.HOME, ".claude")
+    return [os.path.realpath(os.path.join(base, d)) for d in ("skills", "references")]
+
+
+def _inside_claude(path):
+    p = os.path.realpath(os.path.expanduser(path or ""))
+    if os.sep + os.path.join("skills", "synced") + os.sep in p:
+        raise Invalid("skills/synced is kept in step with claude.ai by the Claude app; change those skills there")
+    if not any(p == d or p.startswith(d + os.sep) for d in _claude_dirs()):
+        raise Invalid("only files in ~/.claude/skills and ~/.claude/references can be read or changed here")
+    if not p.endswith(TEXT_EXT):
+        raise Invalid("only text files (%s) can be edited here" % " ".join(TEXT_EXT))
+    return p
+
+
+def _files_under(d):
+    out = []
+    for root, dirs, files in os.walk(d):
+        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        for f in sorted(files):
+            p = os.path.join(root, f)
+            if f.endswith(TEXT_EXT) and os.path.getsize(p) <= MAX_FILE:
+                out.append({"path": p, "rel": os.path.relpath(p, d), "bytes": os.path.getsize(p),
+                            "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(p)))})
+    return out
+
+
+def personal_library():
+    """Your skills with every file in them, the shared folders they read (skills/shared, ~/.claude/references), and
+    for each shared file which of your skills mention it."""
+    skills_dir, refs_dir = _claude_dirs()
+    skills, shared = [], []
+    for d in sorted(glob_dirs(skills_dir)):
+        name = os.path.basename(d)
+        files = _files_under(d)
+        if os.path.isfile(os.path.join(d, "SKILL.md")):
+            skills.append({"name": name, "dir": d, "files": files})
+        elif files and name != "synced":  # synced/ is the Claude app's copy of your claude.ai skills, not yours to edit
+            shared.append({"name": "skills/" + name, "dir": d, "files": files})
+    if os.path.isdir(refs_dir):
+        shared.append({"name": "references", "dir": refs_dir, "files": _files_under(refs_dir)})
+    texts = {s["name"]: "\n".join(C.read_text(f["path"]) for f in s["files"]) for s in skills}
+    for g in shared:
+        for f in g["files"]:
+            stem = os.path.basename(f["path"])
+            f["used_by"] = [] if stem == "SKILL.md" else sorted(n for n, t in texts.items() if stem in t)
+    return {"skills": skills, "shared": shared}
+
+
+def glob_dirs(d):
+    try:
+        return [os.path.join(d, x) for x in os.listdir(d)
+                if os.path.isdir(os.path.join(d, x)) and not x.startswith(".")]
+    except OSError:
+        return []
+
+
+def read_personal(path):
+    p = _inside_claude(path)
+    if not os.path.isfile(p):
+        raise Invalid("no such file: %s" % path)
+    return {"path": p, "text": C.read_text(p)[:MAX_FILE]}
+
+
+def save_personal(path, text):
+    """Save one of your skill or reference files. A copy of the old one goes to ~/.lfg/backups/personal/ first."""
+    p = _inside_claude(path)
+    if not os.path.isfile(p):
+        raise Invalid("only existing files can be changed here: %s" % path)
+    text = (text or "").replace("\r\n", "\n")
+    if not text.strip() or len(text) > MAX_FILE:
+        raise Invalid("the file is empty or too large")
+    if os.path.basename(p) == "SKILL.md":
+        fm = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+        if not fm or not re.search(r"^name:", fm.group(1), re.M) or not re.search(r"^description:", fm.group(1), re.M):
+            raise Invalid("keep the front matter: it must start with --- and have a name and a description")
+    kinds = _secret_kinds(text)
+    if kinds:
+        raise Invalid("the text looks like it contains a secret (%s); not saved" % ", ".join(kinds))
+    rel = os.path.relpath(os.path.dirname(p), os.path.realpath(os.path.join(C.HOME, ".claude")))
+    _backup(p, os.path.join("personal", rel if not rel.startswith("..") else "other"))
+    mode = os.stat(p).st_mode & 0o777
+    C.write_text(p, text, mode=mode)
+    return {"saved": p, "note": "Saved. New Claude Code sessions use it; a copy of the old version is in "
+                                "~/.lfg/backups/personal/."}
+
+
+# ---------------------------------------------------------------- skill groups (LFG only)
+
+def _groups_path():
+    return C.lfg_path("state", "skill-groups.json")
+
+
+def skill_groups():
+    return dict(C.read_json(_groups_path(), {}) or {})
+
+
+def set_skill_group(skill_id, group):
+    """Put a skill (any source, by its id from the Skills list) in one of your groups, or take it out (empty)."""
+    skill_id = str(skill_id or "")
+    if not re.match(r"^[\w@.:-]{1,120}$", skill_id):
+        raise Invalid("not a skill id: %r" % skill_id)
+    group = re.sub(r"\s+", " ", str(group or "")).strip()[:60]
+    g = skill_groups()
+    for k in list(g):
+        g[k] = [x for x in g[k] if x != skill_id]
+        if not g[k]:
+            del g[k]
+    if group:
+        g.setdefault(group, []).append(skill_id)
+    C.ensure_dir(os.path.dirname(_groups_path()))
+    C.write_json(_groups_path(), g)
+    return {"id": skill_id, "group": group}
+
+
+SKILL_TEMPLATE = """---
+name: {name}
+description: >
+  {description}
+---
+
+# {name}
+
+{body}
+"""
+
+
+def create_personal(kind, name, description="", body="", folder=""):
+    """A new skill (~/.claude/skills/<name>/SKILL.md) or a new file inside one of your skills or shared folders.
+    Never overwrites: an existing name is refused."""
+    skills_dir, refs_dir = _claude_dirs()
+    if kind == "skill":
+        if not re.match(r"^[a-z0-9][a-z0-9-]{1,60}$", name or ""):
+            raise Invalid("a skill name is lowercase letters, digits and dashes, e.g. review-terraform")
+        if not str(description or "").strip():
+            raise Invalid("say what the skill does and when Claude should use it: that line is how Claude finds it")
+        d = os.path.join(skills_dir, name)
+        if os.path.exists(d):
+            raise Invalid("there is already a skill called %s" % name)
+        text = SKILL_TEMPLATE.format(name=name, description=re.sub(r"\s+", " ", description).strip(),
+                                     body=(body or "").strip() or "What to do, step by step.")
+        path = os.path.join(d, "SKILL.md")
+    elif kind == "file":
+        base = os.path.realpath(os.path.expanduser(folder or ""))
+        if not any(base == x or base.startswith(x + os.sep) for x in (skills_dir, refs_dir)) or not os.path.isdir(base):
+            raise Invalid("pick one of your skills or shared folders to put the file in")
+        if os.sep + "synced" in base[len(skills_dir):]:
+            raise Invalid("skills/synced is the Claude app's; add files there on claude.ai")
+        if not re.match(r"^[\w.-]{1,80}$", name or "") or ".." in name:
+            raise Invalid("a file name is letters, digits, dots, dashes and underscores")
+        if not name.endswith(TEXT_EXT):
+            name += ".md"
+        path = os.path.join(base, name)
+        if os.path.exists(path):
+            raise Invalid("%s already exists" % path)
+        text = (body or "").strip() + "\n" if (body or "").strip() else "# %s\n" % name[:-3]
+    else:
+        raise Invalid("kind is skill or file")
+    kinds = _secret_kinds(text)
+    if kinds:
+        raise Invalid("the text looks like it contains a secret (%s); not saved" % ", ".join(kinds))
+    C.ensure_dir(os.path.dirname(path), 0o755)
+    C.write_text(path, text, mode=0o644)
+    return {"created": path, "note": "Created. New Claude Code sessions can use it%s." % (
+        " as /" + name if kind == "skill" else "")}

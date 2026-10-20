@@ -52,6 +52,7 @@ lfg watch                                    # follow CI read-only
 
 ## Rules
 
+- **A run filed under another repo** (this repo's tasks live in another repo's run, e.g. `/lfg` resumed that repo's handoff): write this repo's results as `ready-<repo>.json` and `07-shipcheck-<repo>.json`, with `<repo>` the repo's folder name (e.g. `aegis-compliance-portal`), never over the run's own files. The dashboard shows them under this repo, and the owner repo keeps its own.
 - Never deploy, `docker push`, `docker login`, or run deploy commands. The ship check is the only Docker work, through `lfg shipcheck`.
 - Never commit, push, stage, or run `gh pr create`; the user does. See `lfg rule git-guard`.
 - Never pass `.env` into a container or delete Docker resources without the run's `lfg.shipcheck` label.

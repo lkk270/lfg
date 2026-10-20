@@ -39,7 +39,7 @@ adapted-from: mattpocock/skills/grilling + grill-with-docs + domain-modeling (MI
    - **Express lane** (from `progress.md` or the caller): at most **3** questions total; record the rest as assumptions in the brief.
 4. **Sharpen language as you go.** Challenge a term that conflicts with the glossary ("the glossary defines Cancellation as X; you mean Y?"); turn vague words into one canonical term; probe boundaries with a concrete scenario; if the user's claim contradicts the code, say so with the `file:symbol`. Write each resolved term to the glossary immediately.
 5. **Offer an ADR** only when a decision is hard to reverse, surprising without context, and a real trade-off. On yes, write it per `domain-docs` and link it as a dev-graph `Decision`.
-6. **Stop** when the frontier is empty (or the Express cap is hit). Write `RUN/01-brief.md` and show it. **Checkpoint 1:** wait for the user's approval; apply edits they ask for.
+6. **Stop** when the frontier is empty (or the Express cap is hit). Write `RUN/01-brief.md` and show it. **Checkpoint 1:** wait for the user's approval; apply edits they ask for. Then run `lfg issue sync-brief` so the run's issue carries the brief's Problem and Acceptance criteria (if it says the run has no issue, skip it).
 
 ## Output
 

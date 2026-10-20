@@ -209,26 +209,57 @@ def _exec(argv, env):
     os.execvpe(argv[0], argv, env)
 
 
+def _alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def clear_stale_lock(name):
+    """A server killed without a clean shutdown (crash, kill -9, power loss) leaves __cluster/lock.json behind, and
+    omnigraph-server then refuses to start, so launchd retries until it gives up. The lock names the pid that took
+    it: clear it (the documented force-unlock) only when that process is gone. Returns the cleared lock id or None."""
+    try:
+        lock = json.loads(C.read_text(root(name, "__cluster", "lock.json")) or "null")
+    except ValueError:
+        return None
+    if not isinstance(lock, dict) or not lock.get("lock_id") or _alive(lock.get("pid")):
+        return None
+    exe = _which("omnigraph")
+    if not exe:
+        return None
+    cp = C.run([exe, "cluster", "force-unlock", lock["lock_id"], "--config", "."], cwd=root(name), timeout=120)
+    if cp.returncode:
+        C.die("force-unlock failed for %s: %s" % (name, (cp.stderr or "").strip()[-300:]))
+    sys.stderr.write("lfg: cleared stale lock %s left by pid %s\n" % (lock["lock_id"], lock.get("pid")))
+    return lock["lock_id"]
+
+
 def serve(name):
     """launchd entry point: run this graph's server on loopback with the per-machine tokens."""
     g = _graph(name)
     exe = _which("omnigraph-server")
     if not exe:
         C.die("omnigraph-server not found", 2)
+    while ready(name):  # a server started some other way already answers: take over when it stops, don't crash-loop
+        time.sleep(30)
+    clear_stale_lock(name)
     env = dict(os.environ, OMNIGRAPH_SERVER_BEARER_TOKENS_JSON=json.dumps(tokens()))
     os.chdir(root(name))
     _exec([exe, "--cluster", ".", "--bind", "127.0.0.1:%d" % g["port"]], env)
 
 
 def repo_branch(name, root=None):
-    """dev-graph keeps each repo on its own branch, repo/<repo-id> (knowledge.py); second-brain is one personal
+    """dev-graph keeps each repo on its own branch, repo/<repo-id> (teamknowledge.py); second-brain is one personal
     graph on main. None outside a repo."""
     if name != "dev-graph":
         return None
     root = root or C.repo_root()
     if not root:
         return None
-    from . import knowledge as K
+    from . import teamknowledge as K
     return K.branch_for(root)
 
 
@@ -244,7 +275,7 @@ def mcp(name):
     root = C.repo_root() if name == "dev-graph" else None
     branch = repo_branch(name, root)
     if branch:
-        from . import knowledge as K
+        from . import teamknowledge as K
         try:
             K.ensure_locked(root)
         except RuntimeError as e:  # the server is down: the bridge still starts and reports it on first use
@@ -274,7 +305,10 @@ def _rows(res):
     out = []
     for r in rows:
         d = r if isinstance(r, dict) else dict(zip(names, r))
-        out.append({k.rsplit(".", 1)[-1].lstrip("$"): v for k, v in d.items()})
+        row = {}
+        for k, v in d.items():  # the first variable is the subject (`i.slug` before a blocker's `b.slug`): keep it
+            row.setdefault(k.rsplit(".", 1)[-1].lstrip("$"), v)
+        out.append(row)
     return out
 
 
@@ -303,4 +337,5 @@ def mutate(name, query, qname, params=None, branch=None):
 
 def restart(name):
     uid = str(os.getuid())
+    install_agent(name)  # reloads an agent launchd gave up on, so restart works after a crash loop
     return C.run(["launchctl", "kickstart", "-k", "gui/%s/%s" % (uid, LABEL % name)]).returncode == 0

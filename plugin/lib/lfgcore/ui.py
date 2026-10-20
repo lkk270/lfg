@@ -13,6 +13,7 @@ import html
 import http.server
 import json
 import os
+import sys
 import threading
 import urllib.parse
 import webbrowser
@@ -89,10 +90,12 @@ def api(view, q):
         return dash.repos()
     if view == "tools":
         return dash.tools()
-    if view == "issues":
-        return dash.issues(_rid(q))
     if view == "knowledge":
-        return dash.knowledge(_rid(q))
+        from . import knowledge as KN
+        k = dash.knowledge(_rid(q))
+        if k.get("available"):
+            KN.enrich(k["decisions"], k["learnings"])
+        return k
     if view == "brain":
         return dash.brain()
     if view == "guide":
@@ -116,6 +119,41 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "prefs":
+        from . import prefs as P
+        d = P.load()
+        sid = _arg(q, "session") or None
+        return {"catalog": P.catalog(d), "defaults": P.effective(None, d), "values": P.effective(sid, d),
+                "overrides": d["sessions"].get(sid or "", {}), "session": sid, "installed": P.installed(),
+                "file": P.PREFS_MD, "sessions_with_changes": len(d["sessions"])}
+    if view == "mylibrary":
+        return S.personal_library()
+    if view == "myfile":
+        try:
+            return S.read_personal(_arg(q, "path"))
+        except S.Invalid as e:
+            return {"available": False, "why": str(e)}
+    if view == "skillgroups":
+        return S.skill_groups()
+    if view == "headroom":
+        return dash.headroom_detail(int(_arg(q, "days") or 30) if (_arg(q, "days") or "").isdigit() else 30)
+    if view == "environment":
+        from . import env as E
+        if _arg(q, "fresh") == "1":
+            dash.forget("environment")
+        return dash.in_background("environment", 300, E.snapshot, "looking at every repo and worktree")
+    if view == "update":
+        from . import updates as U
+        if _arg(q, "fresh") == "1":
+            dash.forget("update")
+        d = dash.in_background("update", 60, lambda: U.check(max_age=0), "checking for updates")  # one cache, not two
+        return dict(d, job=U.job())  # the job even while the check is still running, e.g. right after a restart
+    if view == "sessions":
+        from . import sessions as SS
+        return SS.listing(hidden=_arg(q, "hidden") == "1")
+    if view == "sessiondone":
+        from . import sessions as SS
+        return SS.group_cleanup(_arg(q, "repo"), _arg(q, "group"))
     if view == "claude":
         from . import control as K
         return K.claude_view()
@@ -125,12 +163,26 @@ def api(view, q):
     if view == "skilltext":
         from . import control as K
         return K.skill_text(_arg(q, "id"), _rid(q))
+    if view in ("prreviews", "prreview"):
+        from . import review as R
+        if view == "prreviews":
+            return R.dashboard(fresh=_arg(q, "fresh") == "1")
+        try:
+            repo, number = R.parse_pr(_arg(q, "pr"))
+            return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number,
+                    "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
+                    "sessions": [s for s in R.sessions_for(repo, number) if "Read %s" % os.path.join(
+                        C.PLUGIN_ROOT, "skills", "review") not in s["title"]][:8]}
+        except R.ReviewError as e:
+            return {"available": False, "why": str(e)}
     rid = _rid(q)
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
                                            "on the first session."}
     if view == "overview":
         return dash.overview(rid, _arg(q, "branch"))
+    if view == "issues":
+        return dash.issues(rid, _arg(q, "branch"))
     if view == "runs":
         return dash.runs(rid, _arg(q, "branch"))
     if view == "run":
@@ -154,7 +206,7 @@ def api(view, q):
     if view == "branches":
         return dash.branches(rid)
     if view == "usage":
-        return dash.usage(rid)
+        return dash.usage(rid, int(_arg(q, "days")) if (_arg(q, "days") or "").isdigit() else 30)
     if view == "graphs":
         return dash.graph_state(rid)
     return {"available": False, "why": "unknown view"}
@@ -181,8 +233,84 @@ def save(what, body):
         return S.save_rule(body.get("name"), body.get("text"))
     if what == "rule_reset":
         return S.reset_rule(body.get("name"))
+    if what == "run_checks":
+        return run_checks(_rid({"repo": [str(body.get("repo") or "")]}), body.get("run"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove"):
+        from . import prefs as P
+        try:
+            if what == "pref_set":
+                return P.set_pref(body.get("id"), body.get("value"), session=body.get("session") or None)
+            if what == "pref_clear":
+                return P.clear_session(str(body.get("session") or ""))
+            if what == "pref_add":
+                return P.add_custom(body.get("id"), body.get("group"), body.get("title"), body.get("text") or "",
+                                    body.get("off_text") or "", bool(body.get("default", True)))
+            if what == "pref_remove":
+                return P.remove_custom(body.get("id"))
+            return P.install()
+        except (ValueError, PermissionError) as e:
+            raise S.Invalid(str(e)) from None
+    if what in ("knowledge_tag", "knowledge_ask"):
+        from . import knowledge as KN
+        try:
+            if what == "knowledge_tag":
+                return KN.set_tags(body.get("slug"), repo=body.get("repo"), feature=body.get("feature"),
+                                   topic=body.get("topic"))
+            k, b = dash.knowledge(), dash.brain()
+            items = []
+            if k.get("available"):
+                d, ls = KN.enrich(k["decisions"], k["learnings"])
+                items += [dict(x, text=" ".join(filter(None, [x.get("decision"), x.get("context")]))) for x in d]
+                items += [dict(x, text=x.get("body") or "") for x in ls]
+                items += [dict(slug=p["slug"], kind="rule", title=p.get("statement"), text=p.get("rationale") or "")
+                          for p in k.get("principles") or []]
+            if b.get("available"):
+                items += [dict(slug=n["slug"], kind="note", title=n.get("name"), text=str(n.get("content") or ""))
+                          for n in b.get("notes") or []]
+            return KN.ask(body.get("question"), items)
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
+    if what == "my_file":
+        return S.save_personal(body.get("path"), body.get("text"))
+    if what == "skill_group":
+        return S.set_skill_group(body.get("id"), body.get("group"))
+    if what == "update_apply":
+        from . import updates as U
+        return U.start()
+    if what == "ui_restart":
+        threading.Timer(0.5, _restart).start()
+        return {"restarting": True}
+    if what == "worktree_prune":
+        from . import env as E
+        try:
+            res = E.prune(str(body.get("root") or ""))
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
+        dash.forget("environment")
+        return res
+    if what in ("session_name", "session_folder", "session_hide", "session_trash", "worktree_remove"):
+        from . import sessions as SS
+        try:
+            if what == "session_name":
+                return SS.rename(body.get("id"), body.get("name"))
+            if what == "session_hide":
+                ids = body.get("ids") or []
+                if not isinstance(ids, list):
+                    raise ValueError("ids must be a list")
+                return SS.hide(ids, on=body.get("on", True) is not False)
+            if what == "session_trash":
+                return SS.trash(body.get("id"))
+            if what == "worktree_remove":
+                res = SS.remove_worktree(str(body.get("path") or ""))
+                dash.forget("environment")
+                return res
+            return SS.file_into(body.get("id"), body.get("folder"))
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
+    if what.startswith("review_"):
+        return review_action(what, body)
     from . import control as K
     actions = {
         "repo_on": lambda: K.repo_on(body.get("root")), "repo_off": lambda: K.repo_off(body.get("root")),
@@ -196,6 +324,40 @@ def save(what, body):
         res = actions[what]()
         return res if isinstance(res, dict) else {"result": res}
     raise S.Invalid("unknown setting")
+
+
+def review_action(what, body):
+    """The Reviews page's buttons. Posting is here because a person pressed it with the edit key; the guard keeps
+    `lfg review post` away from agents."""
+    from . import review as R
+    try:
+        repo, number = R.parse_pr(str(body.get("pr") or ""))
+        if what == "review_mark":
+            ids = body.get("ids") or []
+            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                raise S.Invalid("ids must be a list of finding ids")
+            R.mark(repo, number, ids, status=body.get("status"), body=body.get("body"))
+            return {}
+        if what == "review_post":
+            return R.post(repo, number, str(body.get("event") or ""), body=str(body.get("body") or ""),
+                          dry_run=bool(body.get("dry_run")))
+        if what == "review_run":
+            return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")))
+        if what == "review_discard":
+            return R.discard(repo, number, int(body.get("pass") or 0))
+        if what == "review_rewrite":
+            return R.rewrite(repo, number, str(body.get("id") or ""), body.get("instruction"))
+        if what == "review_sessions":
+            return {"sessions": R.sessions_for(repo, number)}
+        if what == "review_import":
+            path = str(body.get("path") or "")
+            if path == "log":
+                path = (R.job(repo, number) or {}).get("log") or ""
+            rec = R.import_session(repo, number, path, ticket=body.get("ticket") or None)
+            return {"findings": len(rec["passes"][-1]["findings"])}
+    except R.ReviewError as e:
+        raise S.Invalid(str(e)) from None
+    raise S.Invalid("unknown action")
 
 
 def build_graphs(rid, what):
@@ -212,6 +374,30 @@ def build_graphs(rid, what):
     else:
         raise S.Invalid("unknown action")
     return {"started": what}
+
+
+def run_checks(rid, run):
+    """Re-run `lfg gate` (lint, types, tests, build) for the repo's current run, in the background, where the run's
+    code is: its worktree when it has one, else the repo. Only the current run, since that is where the gate
+    writes ready.json."""
+    import subprocess
+    import sys
+    root = dash.repo_root(rid) if rid in dash.repo_ids() else None
+    cur = C.current_run(root) if root else None
+    if not cur or os.path.basename(cur) != os.path.basename(str(run or "")):
+        raise S.Invalid("Checks can only be re-run here for the project's current run; for another run, run "
+                        "/lfg:check in it")
+    if dash.checks_running(cur):
+        return {"started": False, "running": True}
+    meta = C.read_json(os.path.join(cur, "run.json"), {}) or {}
+    where = next((w["path"] for w in meta.get("worktrees") or [] if os.path.isdir(w.get("path") or "")), root)
+    lfg = C.lfg_bin() if os.path.exists(C.lfg_bin()) else os.path.abspath(sys.argv[0])
+    logs = C.ensure_dir(os.path.join(cur, "gate-logs"))
+    with open(os.path.join(logs, "gate.out"), "wb") as out:
+        p = subprocess.Popen([sys.executable, lfg, "gate", "--json"], cwd=where, stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    C.write_json(os.path.join(cur, "gate-running.json"), {"pid": p.pid, "started": C.now_iso(), "where": where})
+    return {"started": True}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -344,6 +530,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with open(p, "rb") as fh:
                 return self._send(200, fh.read(), ASSET_TYPES[ext] + "; charset=utf-8", csp=STATIC_CSP)
         return self._send(404, "not found", "text/plain")
+
+
+def _restart():
+    """Start this dashboard again on the newly installed code, same port, without opening a new tab."""
+    from . import common as C2
+    os.execv(sys.executable, [sys.executable, os.path.join(C2.lfg_path("plugin"), "bin", "lfg"), "ui", "--port",
+                              str(Handler.port), "--no-open"])
 
 
 def open_editor(port):

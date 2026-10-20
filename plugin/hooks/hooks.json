@@ -1,8 +1,11 @@
 {
-  "description": "LFG hooks: guard tool calls, keep the code graphs fresh, warn on secret-looking output, log usage. Each exits at once in repos where LFG is off.",
+  "description": "LFG hooks: guard tool calls, keep the code graphs fresh, warn on secret-looking output, restart a downed Headroom proxy, log usage. Each exits at once in repos where LFG is off.",
   "hooks": {
     "SessionStart": [
       { "matcher": "startup|resume", "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/lfg\" hook session-start", "timeout": 30 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/lfg\" hook prompt", "timeout": 30 } ] }
     ],
     "PreToolUse": [
       { "matcher": "Bash|Read|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|WebFetch|mcp__.*", "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/lfg\" hook pre-tool", "timeout": 300 } ] }

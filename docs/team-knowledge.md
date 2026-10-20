@@ -125,7 +125,7 @@ Run 2026-10-18 on throwaway graphs initialized from the dev-graph schema, never 
 ## Where it lives in the code
 
 - `common.py`: `repo_id`, `knowledge_dir`, `runs_dir`, `current_run`, `scratch_dir`, `KNOWLEDGE_IGNORE`.
-- `knowledge.py`: node files, sync, the checkout branch, migration, taking over a run.
+- `teamknowledge.py`: node files, sync, the checkout branch, migration, taking over a run.
 - `omnigraph.py`: `repo_branch` and the MCP pin; `read`, `invoke` and `mutate` take a branch.
 - `tracker.py`: `resolve`, the suffixed free-text keys.
 - `hooks.py`: background sync at session start and Stop, the session-start notices.

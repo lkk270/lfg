@@ -33,7 +33,7 @@ LFG is built so that installing it can't disturb how you already use Claude Code
 - **Your setup is left alone.** Your `settings.json`, hooks, skills, MCP servers, `CLAUDE.md`, API endpoint and global git config aren't touched. Your own skills keep their names, and LFG's are `/lfg:<name>`.
 - **Every change is recorded and reversible.** Anything LFG changes outside `~/.lfg` goes into a change ledger with a backup. `lfg changes` lists the changes, `lfg changes undo <id>` reverts one, and `lfg uninstall` reverts them all. A value you changed afterwards is never overwritten.
 - **Only what you need.** Core is a few small tools. Security scanners, Docker, the pentest stack, knowledge graphs, Linear and the Headroom proxy are optional packs you add when you want them.
-- **Upgrading from an older LFG?** `lfg setup` finds what earlier versions changed machine-wide and offers to undo exactly that.
+- **Upgrading from an older LFG?** `lfg setup --migrate` finds what earlier versions changed machine-wide and offers to undo exactly that. Plain `lfg setup` leaves it alone.
 
 ## What you get
 

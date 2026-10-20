@@ -6,6 +6,8 @@ an older install, or a repo you never turned LFG on in, behaves exactly as if LF
 
 pre-tool   : lfg-guard (exit 2 blocks) + graph freshness before code-review-graph MCP calls.
 post-tool  : marks graphs dirty and syncs in the background after edits; warns on secret-looking output.
+prompt     : restarts the Headroom proxy if this session goes through it and it's down; tells the user if it stays
+             down.
 session-start, stop, pre-compact: context, usage logging, state snapshot.
 """
 import json
@@ -49,16 +51,25 @@ def _repo(data):
 
 # ---------------------------------------------------------------- pre-tool
 
+def _prefs(data):
+    """This session's Preferences, which can lift a guard rule. If they can't be read, every rule blocks."""
+    try:
+        from . import prefs as P
+        return P.effective(data.get("session_id"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def pre_tool(data):
     from . import graphs as G
     from . import guard
     tool, tin = data.get("tool_name", ""), data.get("tool_input") or {}
-    verdict = guard.check(tool, tin)
+    verdict = guard.check(tool, tin, prefs=_prefs(data), cwd=data.get("cwd"))
     if verdict:
         rule, why = verdict
         C.audit("blocked", {"rule": rule, "tool": tool, "why": why})
-        sys.stderr.write("Blocked by LFG rule %s (%s): %s. A human must do this in their own terminal.\n"
-                         % (rule, guard.rule_title(rule), why))
+        sys.stderr.write("Blocked by LFG rule %s (%s): %s. A human must do this in their own terminal, or lift it "
+                         "in lfg ui → Preferences → Safety rules.\n" % (rule, guard.rule_title(rule), why))
         return 2
     if GRAPH_TOOL_RX.match(tool):
         root, rid = _repo(data)
@@ -118,6 +129,10 @@ CONTEXT = [
     "Remember: when the user states a decision, constraint or preference, or work uncovers a root cause or landmine, "
     "offer to save it at the end of your reply and ask whether it goes to dev-graph or second-brain before writing "
     "anything (`lfg rule remember`; /lfg:note to save on request).",
+    "Ask with the AskUserQuestion tool, not plain text, whenever you need the user's answer (an LFG interview, "
+    "checkpoint or approval, or any other question): it shows clickable options. Give each question 2-4 options; for "
+    "an open-ended question, offer your best guesses from the code and the brief, since the user can always type "
+    "their own under Other. Still one question at a time in /lfg:grill. Subagents cannot ask; the main session does.",
 ]
 
 
@@ -135,7 +150,7 @@ def _gh_signed_in():
 def _knowledge_lines(root, rid, run):
     """The repo's shared knowledge (.lfg/, committed): sync dev-graph in the background, offer a run left unfinished
     on this branch, and point at state still in ~/.lfg from before it moved into the repo."""
-    from . import knowledge as K
+    from . import teamknowledge as K
     out = []
     try:
         if K.spawn_background(root):
@@ -168,6 +183,21 @@ def session_start(data):
     from . import graphs as G
     root, rid = _repo(data)
     lines = [CONTEXT[0] % C.VERSION] + CONTEXT[1:]
+    notice = None
+    from . import guard as GD
+    if GD._prefs_on():
+        lines[0] = ("LFG %s is on in this repo. Commits, pushes, amends, force-pushes and PR merges follow the user's "
+                    "Preferences (lfg-preferences.md, plus any rules changed for this session), which are checked "
+                    "before every command; do what they say, including committing or pushing on your own when they "
+                    "say so. Never read .env or keys, never deploy, no other GitHub writes." % C.VERSION)
+    elif C.config()["guard"].get("allow_commit") is True:
+        lines[0] = lines[0].replace("never commit/push/gh-write", "commit only when the user asks (never --amend), "
+                                    "never push/gh-write").replace("; leave changes unstaged", "")
+    vals = _prefs(data)
+    lifted = ["%s (%s)" % (r, t) for r, (t, _, _) in GD.RULES.items() if vals.get("rule_" + r) == "ask"]
+    if lifted:
+        lines.append("The user lifted LFG's block on safety rules %s: keep to them, but do what they forbid when the "
+                     "user asks you to (lfg-preferences.md has the wording)." % ", ".join(lifted))
     try:
         from . import settings as S
         own = S.own_rules()
@@ -180,8 +210,18 @@ def session_start(data):
         lines.append("GitHub CLI: NOT signed in - ask the user to run `gh auth login` themselves.")
     from . import headroom as HR
     if HR.routed(root):
-        down = "DOWN - tell the user to run `lfg headroom restart` or `lfg headroom off`"
-        lines.append("Headroom proxy: %s." % ("up" if HR.ensure_live(root) else down))
+        other = HR.bypassed()
+        if other:
+            why = (" because the Claude desktop app sets its own API address and ignores settings"
+                   if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "claude-desktop" else "")
+            lines.append("Headroom proxy: BYPASSED - settings route Claude Code through Headroom, but this session"
+                         " sends requests straight to %s%s. If the user asks about Headroom, say so; a terminal"
+                         " `claude` session goes through it." % (other, why))
+        elif HR.ensure_live(root):
+            lines.append("Headroom proxy: up.")
+        else:
+            notice = HR.down_message()
+            lines.append("Headroom proxy: DOWN. " + notice)
     if root:
         st = G.status(root, rid)
         if st["status"] != "fresh":
@@ -213,7 +253,28 @@ def session_start(data):
         if run and os.path.exists(os.path.join(run, "progress.md")):
             lines.append("Resume from %s/progress.md." % run)
         lines += _knowledge_lines(root, rid, run)
-    print("\n".join(lines))
+    if notice:  # the model can't answer while the proxy is down, so the user is told directly
+        print(json.dumps({"systemMessage": notice, "hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
+    else:
+        print("\n".join(lines))
+    return 0
+
+
+# ---------------------------------------------------------------- prompt
+
+def prompt(data):
+    """Every prompt, before it is sent: is the Headroom proxy this session goes through still answering? A crash is
+    restarted by launchd within seconds, but an unloaded agent or a proxy that keeps failing stays down, and Claude
+    Code would then retry for minutes with nothing on screen saying why. A refused connection fails at once, so
+    this costs a few milliseconds when the proxy is up."""
+    from . import headroom as HR
+    root, _rid = _repo(data)
+    if not HR.routed(root) or HR.bypassed() or HR.live(timeout=1):
+        return 0
+    back = HR.revive()
+    C.audit("headroom-down", {"restarted": back})
+    print(json.dumps({"systemMessage": "Headroom proxy was down; LFG restarted it." if back else HR.down_message()}))
     return 0
 
 
@@ -280,7 +341,7 @@ def stop(data):
                             model, t[0], t[1], t[2], t[3]))
         db.close()
     if root:  # what an agent saved to dev-graph this turn reaches .lfg/nodes/ before the user commits
-        from . import knowledge as K
+        from . import teamknowledge as K
         try:
             K.spawn_background(root)
         except Exception as e:
@@ -299,8 +360,8 @@ def pre_compact(data):
     return 0
 
 
-EVENTS = {"pre-tool": pre_tool, "post-tool": post_tool, "session-start": session_start, "stop": stop,
-          "pre-compact": pre_compact}
+EVENTS = {"pre-tool": pre_tool, "post-tool": post_tool, "session-start": session_start, "prompt": prompt,
+          "stop": stop, "pre-compact": pre_compact}
 
 
 def main(event):

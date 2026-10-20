@@ -83,6 +83,7 @@ Reply with the verdict first, then blocking items and their safer alternatives, 
 
 ## Rules
 
+- **A run filed under another repo** (this repo's tasks live in another repo's run, e.g. `/lfg` resumed that repo's handoff): write this repo's results as `05-secure-<repo>.json` and `05-secure-<repo>.md`, with `<repo>` the repo's folder name (e.g. `aegis-compliance-portal`), never over the run's own files. The dashboard shows them under this repo, and the owner repo keeps its own.
 - Online lookups go only through `lfg secure`. Never put code, file paths, internal hostnames or IPs, private package names or secrets into any web search or request.
 - Never install, import or run a suspicious package, image or model to inspect it.
 - Never build, test or run the target's code to confirm a code finding; that is `/pentest`'s job. Never probe deployed or shared services.

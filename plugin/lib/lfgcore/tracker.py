@@ -4,6 +4,7 @@
 `lfg run set` records lane, stage and issue in run.json, moving the linked Issue's status with the stage.
 Skills call these at fixed points; the dashboard only reads."""
 import datetime
+import os
 import re
 import secrets
 
@@ -79,7 +80,8 @@ def resolve(key, new=True):
 def _mutation(verb, fields, slug_param=True):
     """Build `query <name>(typed params) { insert|update Issue ... }` for just the fields given."""
     types = {"slug": "String", "title": "String", "description": "String", "status": "String",
-             "issueType": "String", "legacyRef": "String", "priority": "I32", "actor": "String", "at": "Date"}
+             "issueType": "String", "legacyRef": "String", "priority": "I32", "acceptanceCriteria": "String",
+             "actor": "String", "at": "Date"}
     names = list(fields) + ["actor", "at"]
     sig = ", ".join("$%s: %s" % (n, types[n]) for n in (["slug"] if slug_param else []) + names)
     stamp = "updatedAt: $at, updatedBy: $actor"
@@ -91,14 +93,15 @@ def _mutation(verb, fields, slug_param=True):
     return "query lfg_%s_issue(%s) {\n    %s\n}" % (verb, sig, stmt), "lfg_%s_issue" % verb
 
 
-def sync(key, title=None, issue_type=None, status=None, priority=None, description=None):
+def sync(key, title=None, issue_type=None, status=None, priority=None, description=None, criteria=None):
     """Create the Issue if it's missing, else update the fields given. Returns {slug, action, status}."""
     slug = resolve(key)
     if status and status not in STATUSES:
         C.die("status must be one of %s" % ", ".join(STATUSES), 2)
     if issue_type and issue_type not in TYPES:
         C.die("type must be one of %s" % ", ".join(TYPES), 2)
-    fields = {"title": title, "description": description, "status": status, "priority": priority}
+    fields = {"title": title, "description": description, "status": status, "priority": priority,
+              "acceptanceCriteria": criteria}
     found = lookup(slug)
     if found:
         fields = {k: v for k, v in fields.items() if v is not None}
@@ -122,3 +125,61 @@ def sync(key, title=None, issue_type=None, status=None, priority=None, descripti
 
 def set_status(key, status):
     return sync(key, status=status)
+
+
+def task_text(task):
+    """(description, done-when) for a tasks.json entry, as the Issues page shows them."""
+    desc = str(task.get("description") or "").strip()
+    steps = [str(x).strip() for x in task.get("steps") or [] if str(x).strip()]
+    if steps:
+        desc += ("\n\n" if desc else "") + "Steps:\n" + "\n".join("- " + x for x in steps)
+    return desc, str(task.get("verification") or "").strip()
+
+
+def task_key(task):
+    """The Issue key for a task: its tracker id when it has one, else iss-<task id>."""
+    ref = str(task.get("linear_id") or "").strip()
+    return ref if REF.match(ref) else "iss-" + str(task.get("id"))
+
+
+def sync_tasks(run_dir):
+    """Mirror RUN/tasks.json into dev-graph: one Issue per task with its description, steps and verification, and
+    status done once the task passes (an open task keeps whatever status it has). Returns one result per task."""
+    tasks = C.read_json(os.path.join(run_dir, "tasks.json"), []) or []
+    tasks = tasks.get("tasks", []) if isinstance(tasks, dict) else tasks
+    out = []
+    for t in tasks:
+        if not isinstance(t, dict) or not t.get("id"):
+            continue
+        desc, done_when = task_text(t)
+        title = desc.split("\n", 1)[0][:200] or str(t["id"])
+        key = task_key(t)
+        found = lookup(slug_for(key))
+        out.append(sync(key, title=None if found else title, description=desc or None, criteria=done_when or None,
+                        status="done" if t.get("passes") else (None if found else "todo"),
+                        priority=t.get("priority") if isinstance(t.get("priority"), int) and
+                        0 <= t["priority"] <= 4 else None))
+    return out
+
+
+def brief_section(run_dir, name):
+    """The body of the brief's section whose heading starts with `name` (e.g. "Problem"), as written."""
+    text = C.read_text(os.path.join(run_dir, "01-brief.md"))
+    m = re.search(r"^(#+)\s*%s[^\n]*\n" % re.escape(name), text, re.M | re.I)
+    if not m:
+        return ""
+    rest = text[m.end():]
+    end = re.search(r"^#{1,%d}\s" % len(m.group(1)), rest, re.M)
+    return (rest[:end.start()] if end else rest).strip()[:6000]
+
+
+def sync_brief(run_dir):
+    """Copy the brief's Problem and Acceptance criteria onto the run's Issue (run.json `issue`)."""
+    meta = C.read_json(os.path.join(run_dir, "run.json"), {}) or {}
+    if not meta.get("issue"):
+        raise RuntimeError("this run has no issue yet: `lfg run set issue=<ID or title>` first")
+    desc, crit = brief_section(run_dir, "Problem"), brief_section(run_dir, "Acceptance criteria")
+    if not desc and not crit:
+        raise RuntimeError("01-brief.md has no Problem or Acceptance criteria section")
+    return sync(meta["issue"], description=desc or None, criteria=crit or None)
+

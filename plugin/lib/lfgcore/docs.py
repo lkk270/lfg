@@ -432,7 +432,7 @@ def _test_gaps(rid, root, db):
 
 
 def _incidents(rid):
-    from . import knowledge as K
+    from . import teamknowledge as K
     from . import omnigraph as OG
     br = K.branch(rid)  # this repo's incidents: generated for the main checkout, whose branch this is
     try:

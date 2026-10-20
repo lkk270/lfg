@@ -1,0 +1,85 @@
+---
+name: review
+description: >
+  Reviews someone else's PR, or every PR on a Linear ticket, and saves all findings at once as a review record
+  you triage (keep, drop, edit) and then post yourself. Re-reviews check whether earlier comments were fixed,
+  answered or ignored, look for bugs in the new commits, and hunt for ones the first pass missed. Use when the
+  user says "/lfg:review 123", "review ATO-1234", "re-review this PR", "check if they fixed my comments".
+author: Varun Singh
+phase: prove
+lanes: [express, standard, full, hotfix]
+reads: [PR diff, Linear ticket, AGENTS.md, review sources, earlier review record]
+writes: [~/.lfg/reviews/<owner>__<repo>/<number>.json]
+auto-trigger: false
+preflight: graphs
+---
+
+# /lfg:review: review a PR, save every finding, let the user decide
+
+## Step 0: preflight
+
+1. If the current folder is a checkout of the PR's repo: `lfg graphs ensure`. Non-zero exit: stop and show its
+   output (continue on a stale graph only if the user typed `--allow-stale`). PRs in repos not checked out here are
+   reviewed from GitHub alone; say so.
+2. `lfg rule graph-first` and follow it for code lookups in a local checkout.
+
+## Steps
+
+1. **Targets.** A PR number, `owner/repo#12` or a PR URL is one target. A Linear ticket id: read the ticket
+   (Linear MCP) and its attachments, then `gh search prs <ID> --state open --json repository,number,title` for any
+   it doesn't link. Every PR is its own target, saved with `--ticket <ID>`.
+2. **Context, per target.** `lfg review context <pr>` (JSON). If `mine` is true, say so and stop for that PR
+   unless the user asked anyway: GitHub won't take an approval from its author.
+3. **Method.** Read every file in `sources`, in order; later files win. Use them for what to look for, how to
+   judge severity and score, and how to word comments. **Skip any step in them about presenting findings one at a
+   time, waiting for the user, paste blocks or posting:** this skill's Output replaces those. Paths inside a source
+   resolve against its own folder, then its parent folders. Name any `missing_sources` to the user.
+4. **Repo rules.** Read every file in `agents_md` with the `read_agents_md` command (the PR's version, not main's).
+   They outrank the sources.
+5. **Read the change.** `gh pr view <n> -R <repo> --json body,files` and `gh pr diff <n> -R <repo>`. Read the code
+   around each hunk at `head_sha`: from a worktree (`git fetch origin pull/<n>/head:review/pr-<n>` then
+   `lfg worktree new review/pr-<n>`) when the repo is local, else `gh api repos/<repo>/contents/<path>?ref=<sha>`.
+6. **First review** (`re_review` false): one full pass over the whole diff, following the method. Every finding
+   gets `since: "first"`.
+7. **Re-review** (`re_review` true): `lfg review show <pr> --json` and `lfg review threads <pr>`, then three passes:
+   - **Earlier findings.** For each row in `threads.posted`, read the code at the new head and set a state:
+     `fixed` (the problem is gone, verified in the code), `replied` (the author answered and the issue is still
+     open: say whether the answer holds up), `withdrawn` (their answer is right, or you were wrong),
+     `resolved-unchanged` (thread resolved but the problem is still there), `ignored` (no change, no reply) or
+     `open`. `file_changed` and `outdated` are hints only; the code decides.
+   - **New commits.** Review `last_reviewed_sha...head_sha` only (`gh api repos/<repo>/compare/<a>...<b>`).
+     Findings get `since: "new"`.
+   - **Missed.** One more pass over the whole PR for what earlier passes missed. Findings get `since: "missed"`.
+     Never re-file an earlier finding: track it in `prior` instead.
+8. **Save.** Write the JSON below to a scratch file and `lfg review save <pr> --file <path> [--ticket <ID>]`. Fix
+   and re-run on a validation error.
+
+## Output
+
+The file passed to `lfg review save`:
+
+```json
+{"summary": "two or three sentences: what the PR does and whether it is mergeable",
+ "score": 84, "approach_notes": ["..."],
+ "findings": [{"title": "short name", "severity": "blocker|major|minor|nitpick|note",
+   "file": "path/in/repo.ts", "line": 42, "issue": "one line", "fix": "one line",
+   "detail": "evidence for the reviewer: what you checked and where; not posted",
+   "body": "the comment the author reads, in the voice the sources describe",
+   "origin": "introduced|exposed|pre-existing", "since": "first|new|missed"}],
+ "prior": [{"id": "1.3", "state": "fixed|replied|withdrawn|resolved-unchanged|ignored|open", "note": "why"}]}
+```
+
+`line` is a line in the PR's version of the file, or null for a finding about the PR as a whole.
+
+Then show the user, per PR: the earlier-finding states (re-review), the score, then one row per finding: id,
+severity, title, `file:line`, the `issue` line. All at once, not one at a time. Then triage on their word:
+`lfg review mark <pr> <id>... --keep|--drop`, and for an edit `--body-file <path>` with the new comment. When every
+finding is decided, give the posting command for them to run, in a fenced block:
+`! lfg review post <pr> --event request-changes|approve|comment [--body "..."]` (`--dry-run` shows the payload).
+
+## Rules
+
+- Never post, comment, approve or request changes on GitHub yourself, by any route. Posting is the user's.
+- Never edit a review source or AGENTS.md during a review. When a dropped finding shows a source is wrong, propose
+  the exact change and let the user make it.
+- A finding the code doesn't support is dropped before saving, not saved and flagged.
