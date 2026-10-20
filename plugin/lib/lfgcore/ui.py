@@ -146,7 +146,7 @@ def api(view, q):
         from . import updates as U
         if _arg(q, "fresh") == "1":
             dash.forget("update")
-        d = dash.in_background("update", 600, U.check, "checking for updates")
+        d = dash.in_background("update", 60, lambda: U.check(max_age=0), "checking for updates")  # one cache, not two
         return dict(d, job=U.job())  # the job even while the check is still running, e.g. right after a restart
     if view == "sessions":
         from . import sessions as SS
