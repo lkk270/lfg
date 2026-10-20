@@ -724,6 +724,35 @@ def _review_human(rec):
             print("  %-5s %-7s %-8s %s  %s" % (f["id"], f["status"], f["severity"], f["title"], where))
 
 
+def cmd_prefs(a):
+    from . import prefs as P
+    if a.action == "hook":
+        return P.hook(a.id or "")
+    try:
+        if a.action == "set":
+            if not a.id or a.value is None:
+                C.die("usage: lfg prefs set <id> <value> [--session ID]", 2)
+            _print(P.set_pref(a.id, a.value, session=a.session, by_agent=not a.by_user))
+        elif a.action == "clear":
+            _print(P.clear_session(a.session or a.id))
+        elif a.action == "install":
+            _print(P.install())
+        elif a.action == "status":
+            _print(P.installed())
+        else:
+            d = P.load()
+            vals = P.effective(a.session, d)
+            for p in P.catalog(d):
+                v = vals[p["id"]]
+                shown = ("on" if v else "off") if p["kind"] == "switch" else v
+                print("%-12s %-22s %-8s %s" % (p["group"], p["id"], shown, p["title"]))
+    except PermissionError as e:
+        C.die(str(e), 1)
+    except ValueError as e:
+        C.die(str(e), 2)
+    return 0
+
+
 def cmd_knowledge(a):
     from . import knowledge as KN
     try:
@@ -1004,6 +1033,12 @@ def main(argv=None):
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
     rv.add_argument("--json", action="store_true")
+    pf = sp.add_parser("prefs", help="your rules for Claude: defaults, per-session changes, hooks that enforce them")
+    pf.add_argument("action", nargs="?", default="list", choices=["list", "set", "clear", "install", "status", "hook"])
+    pf.add_argument("id", nargs="?", help="set: the preference; hook: session-start|prompt|pre-tool")
+    pf.add_argument("value", nargs="?", help="set: on/off, or one of the choices")
+    pf.add_argument("--session", help="one session (its id from lfg sessions); default: the defaults")
+    pf.add_argument("--by-user", action="store_true", help="allow loosening (your own terminal only)")
     kn = sp.add_parser("knowledge", help="tag a saved decision or lesson with its repo, feature or topic")
     kn.add_argument("action", choices=["tag"])
     kn.add_argument("slug", help="the item's slug (dev-graph Decision or Learning)")
@@ -1078,6 +1113,7 @@ def main(argv=None):
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
             "usage": cmd_usage, "sessions": cmd_sessions, "update": cmd_update, "knowledge": cmd_knowledge,
+            "prefs": cmd_prefs,
             "vendor": cmd_vendor,
             "omnigraph": cmd_omnigraph,
             "headroom": cmd_headroom,

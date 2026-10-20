@@ -121,6 +121,13 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "prefs":
+        from . import prefs as P
+        d = P.load()
+        sid = _arg(q, "session") or None
+        return {"catalog": P.catalog(d), "defaults": P.effective(None, d), "values": P.effective(sid, d),
+                "overrides": d["sessions"].get(sid or "", {}), "session": sid, "installed": P.installed(),
+                "file": P.PREFS_MD, "sessions_with_changes": len(d["sessions"])}
     if view == "mylibrary":
         return S.personal_library()
     if view == "myfile":
@@ -228,6 +235,21 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove"):
+        from . import prefs as P
+        try:
+            if what == "pref_set":
+                return P.set_pref(body.get("id"), body.get("value"), session=body.get("session") or None)
+            if what == "pref_clear":
+                return P.clear_session(str(body.get("session") or ""))
+            if what == "pref_add":
+                return P.add_custom(body.get("id"), body.get("group"), body.get("title"), body.get("text") or "",
+                                    body.get("off_text") or "", bool(body.get("default", True)))
+            if what == "pref_remove":
+                return P.remove_custom(body.get("id"))
+            return P.install()
+        except (ValueError, PermissionError) as e:
+            raise S.Invalid(str(e)) from None
     if what in ("knowledge_tag", "knowledge_ask"):
         from . import knowledge as KN
         try:

@@ -2,6 +2,7 @@
 
 Tests run with LFG_HOME pointed at a temp dir so they never touch ~/.lfg."""
 import glob
+import io
 import json
 import os
 import subprocess
@@ -1180,6 +1181,66 @@ class KnowledgeTagsTest(unittest.TestCase):
         self.assertEqual(self.KN.tags(), {})
         with self.assertRaises(ValueError):
             self.KN.set_tags("dec-b", topic="nonsense")
+
+
+class PrefsTest(unittest.TestCase):
+    SID = "11111111-2222-3333-4444-555555555555"
+
+    def setUp(self):
+        from lfgcore import prefs as P
+        self.P = P
+        for f in (P._state_path(), P._seen_path()):
+            if os.path.exists(f):
+                os.remove(f)
+        self.md = os.path.join(tempfile.mkdtemp(), "lfg-preferences.md")
+        m = mock.patch.object(P, "PREFS_MD", self.md)
+        m.start()
+        self.addCleanup(m.stop)
+
+    def hook(self, event, data):
+        out = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(json.dumps(data))), mock.patch("sys.stdout", out), \
+                mock.patch("sys.stderr", io.StringIO()):
+            code = self.P.hook(event)
+        return code, out.getvalue()
+
+    def test_a_session_can_differ_and_an_agent_can_only_tighten(self):
+        P = self.P
+        with self.assertRaises(PermissionError):
+            P.set_pref("force_push", True, session=self.SID, by_agent=True)
+        P.set_pref("force_push", True, session=self.SID)  # the dashboard / your terminal
+        self.assertTrue(P.effective(self.SID)["force_push"])
+        self.assertFalse(P.effective()["force_push"])
+        P.set_pref("commits", "never", session=self.SID, by_agent=True)  # stricter is fine
+        code, out = self.hook("session-start", {"session_id": self.SID})
+        self.assertIn("Force-push", json.loads(out)["hookSpecificOutput"]["additionalContext"].replace("force-push",
+                                                                                                     "Force-push"))
+        self.assertEqual(self.hook("prompt", {"session_id": self.SID})[1], "")  # told once, not every message
+        code, _ = self.hook("pre-tool", {"session_id": self.SID, "tool_name": "Bash",
+                                         "tool_input": {"command": "git commit -m x"}})
+        self.assertEqual(code, 2)
+        code, _ = self.hook("pre-tool", {"session_id": "other", "tool_name": "Bash",
+                                         "tool_input": {"command": "git commit -m x"}})
+        self.assertEqual(code, 0)
+        P.clear_session(self.SID)
+        _, out = self.hook("prompt", {"session_id": self.SID})
+        self.assertIn("back to your default", out)
+
+    def test_defaults_file_and_hard_rules(self):
+        P = self.P
+        P.set_pref("merge_pr", "squash")
+        self.assertIn("--squash", open(self.md).read())
+        v = P.effective()
+        self.assertIsNotNone(P.check_command("gh pr merge 4", v))
+        self.assertIsNone(P.check_command("gh pr merge 4 --squash", v))
+        self.assertIsNotNone(P.check_command("sh -c 'git push --force origin x'", v))
+        v["force_push"] = True
+        self.assertIsNone(P.check_command("git push --force-with-lease origin feat", v))
+        self.assertIsNotNone(P.check_command("git push -f origin main", v))
+        self.assertIsNotNone(P.check_command("lfg prefs set force_push on --by-user", v))
+        code, _ = self.hook("pre-tool", {"session_id": self.SID, "tool_name": "Write",
+                                         "tool_input": {"file_path": P._state_path()}})
+        self.assertEqual(code, 2)
 
 
 class SessionsTest(unittest.TestCase):

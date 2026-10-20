@@ -802,7 +802,7 @@ async function showSkill(name) {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["prefs", "Preferences"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1107,6 +1107,58 @@ function wireKnowledge(root) {
     };
   });
 }
+/* Preferences: your rules for Claude. Defaults here; one session's changes from Sessions → Rules. */
+function prefControls(P, values, defaults, scope, unlocked) {
+  const groups = {};
+  for (const p of P.catalog) (groups[p.group] = groups[p.group] || []).push(p);
+  const changed = p => scope && values[p.id] !== defaults[p.id];
+  const ctl = p => {
+    const v = values[p.id], dis = unlocked ? "" : "disabled";
+    if (p.kind === "switch") return `<label class="row"><input type="checkbox" data-pref='${esc(JSON.stringify([p.id, scope || ""]))}' ${v ? "checked" : ""} ${dis}> <span>${v ? "On" : "Off"}</span></label><p class="muted small">${esc(v ? p.text || "" : p.off_text || "Not part of your rules.")}</p>`;
+    return `<div class="seg">${p.options.map(o => `<label class="${o.value === v ? "on" : ""}"><input type="radio" name="pref-${esc(p.id)}" data-pref='${esc(JSON.stringify([p.id, scope || ""]))}' value="${esc(o.value)}" ${o.value === v ? "checked" : ""} ${dis}>${esc(o.label)}</label>`).join("")}</div><p class="muted small">${esc((p.options.find(o => o.value === v) || {}).text || "")}</p>`;
+  };
+  return Object.entries(groups).map(([g, ps]) => section(g, `<div class="pref-grid">${ps.map(p => `<div class="box pad pref ${changed(p) ? "changed" : ""}"><div class="row"><b class="grow">${esc(p.title)}</b>${p.enforce ? '<span class="tag" title="Checked before every command, so it is kept even by mistake">enforced</span>' : '<span class="tag" title="Told to Claude as an instruction">instruction</span>'}${changed(p) ? ' <span class="tag warn">this session</span>' : ""}${p.custom && !scope && unlocked ? ` <a href="#" class="small" data-pref-rm="${esc(p.id)}">Remove</a>` : ""}</div>${ctl(p)}</div>`).join("")}</div>`)).join("");
+}
+function wirePrefs(root, after) {
+  $$("[data-pref]", root).forEach(el => el.onchange = async () => {
+    const [id, session] = JSON.parse(el.dataset.pref);
+    const value = el.type === "checkbox" ? el.checked : el.value;
+    const r = await save("pref_set", { id, value, session: session || null });
+    if (!r.ok) { alertMsg(el, r); return; }
+    after();
+  });
+  $$("[data-pref-rm]", root).forEach(a => a.onclick = async e => { e.preventDefault(); const r = await save("pref_remove", { id: a.dataset.prefRm }); if (r.ok) after(); });
+}
+PAGES.prefs = async () => {
+  const [P, unlocked] = await Promise.all([api("prefs"), isUnlocked()]);
+  const I = P.installed || {};
+  const on = I.hooks && I.import;
+  const banner = on ? "" : `<div class="callout warn">${dot("warn")}<span><b>Your rules aren't switched on yet.</b> This adds three small hooks to <code>~/.claude/settings.json</code> (one gives each session its rules, one checks commands before they run) and one line to your CLAUDE.md that reads the rules file. Both are backed up and listed under Settings → Claude Code, where they can be undone.</span> <button class="btn small primary" id="prefs-install" ${unlocked ? "" : "disabled"}>Switch on</button></div>`;
+  return `${head("Preferences", "Your rules for Claude. These are the defaults every new session starts with; Sessions → Rules changes them for one session. Enforced rules are checked before every command, so Claude keeps them even by mistake; the rest are instructions.")}
+    ${banner}
+    ${unlocked ? "" : `<div class="callout">Read-only. Run <code>lfg ui</code> in your terminal to change your rules here.</div>`}
+    ${prefControls(P, P.defaults, P.defaults, null, unlocked)}
+    <p class="muted small">Changes reach new sessions straight away (they're written to <code>${esc(P.file)}</code>, which your CLAUDE.md reads). Claude can make a session stricter but never looser; loosening is yours, here or with <code>! lfg prefs set &lt;id&gt; &lt;value&gt; --by-user</code>.</p>`;
+};
+function wirePrefsPage(root) {
+  const b = $("#prefs-install", root);
+  if (b) b.onclick = async () => { b.disabled = true; const r = await save("prefs_install", {}); if (!r.ok) { b.disabled = false; return alertMsg(b, r); } softRoute(); };
+  wirePrefs(root, softRoute);
+}
+async function sessionRules(sid) {
+  const s = (state.sessions.sessions || []).find(x => x.id === sid) || {};
+  const draw = async () => {
+    const [P, unlocked] = await Promise.all([api("prefs", { session: sid }), isUnlocked()]);
+    const n = Object.keys(P.overrides || {}).length;
+    openDrawer(`Rules: ${s.name || sid}`, `<div class="readable"><p class="muted">Starts from your defaults (Preferences). What you change here is for this session only and reaches it with your next message.${n ? ` <b>${plural(n, "rule")} differ${n === 1 ? "s" : ""} from your defaults.</b> <button class="btn small" id="sr-reset">Back to defaults</button>` : ""}</p>
+      ${(P.installed || {}).hooks ? "" : `<div class="callout warn">Your rules aren't switched on yet, so a session can't get its own. Switch them on under Preferences.</div>`}
+      ${prefControls(P, P.values, P.defaults, sid, unlocked)}</div>`);
+    wirePrefs($("#drawer-body"), draw);
+    const r = $("#sr-reset");
+    if (r) r.onclick = async () => { await save("pref_clear", { session: sid }); draw(); };
+  };
+  draw();
+}
 /* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
 PAGES.sessions = async () => {
   const [d, unlocked] = await Promise.all([api("sessions", state.showHidden ? { hidden: "1" } : {}), isUnlocked()]);
@@ -1125,6 +1177,7 @@ PAGES.sessions = async () => {
   const line = s => `<li class="sess" data-sid="${esc(s.id)}"><div class="grow"><div class="title">${esc(s.name)}</div>
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
+      <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
       <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
       ${s.folder ? `<span class="tag" title="Your group">${esc(s.folder)} <a href="#" data-sess-ungroup="${esc(s.id)}" title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
       <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Group sessions your own way, e.g. one feature across repos. Only LFG stores this; nothing on disk moves.">${s.folder ? "Change group" : "Group…"}</button>
@@ -1231,6 +1284,7 @@ function wireSessions(root) {
     };
   });
   $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
+  $$("[data-sess-rules]", root).forEach(b => b.onclick = () => sessionRules(b.dataset.sessRules));
   $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
 }
 /* Environment: every repo and worktree on this machine, and what LFG runs in the background. */
@@ -1688,12 +1742,13 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["prefs", "usage", "skills", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
   sessions: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
   environment: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
+  prefs: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
   runs: "M5 4l14 8-14 8z",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
@@ -1778,6 +1833,7 @@ async function route(opts) {
   if (key === "prs") wirePrs(view);
   if (key === "sessions") wireSessions(view);
   if (key === "knowledge") wireKnowledge(view);
+  if (key === "prefs") wirePrefsPage(view);
   if (key === "environment") wireEnvironment(view);
   if (key === "usage") loadHeadroom();
   const rf = $("#refreshed");
