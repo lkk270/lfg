@@ -621,7 +621,7 @@ function wireRules(root) {
 }
 function newRule() {
   const box = $("#rule-editor");
-  box.innerHTML = `<p><b>Add a rule</b></p><p class="muted small">Give it a short name (lowercase, dashes) and write it in Markdown. Agents read it with <code>lfg rule &lt;name&gt;</code>, and new sessions are told to follow it.</p>
+  box.innerHTML = `<p><b>Add a rule</b></p><p class="muted small">Give it a short name (lowercase, dashes) and write it in Markdown. Agents read it with <code>lfg rule &lt;name&gt;</code>. New sessions are told to follow it, and sessions already open are told with your next message to them.</p>
     <label class="set-label" for="rule-name">Name</label><input type="text" id="rule-name" placeholder="api-style" maxlength="41" style="width:100%;margin:4px 0 12px">
     <textarea class="editor" id="rule-text" spellcheck="false"># api-style: one line saying what this rule is about
 
@@ -1268,6 +1268,7 @@ PAGES.prefs = async () => {
   const banner = on ? "" : `<div class="callout warn">${dot("warn")}<span><b>Your rules aren't switched on yet.</b> This adds three small hooks to <code>~/.claude/settings.json</code> (one gives each session its rules, one checks commands before they run) and one line to your CLAUDE.md that reads the rules file. Both are backed up and listed under Settings → Claude Code, where they can be undone.</span> <button class="btn small primary" id="prefs-install" ${unlocked ? "" : "disabled"}>Switch on</button></div>`;
   return `${head("Preferences", "Your rules for Claude. These are the defaults every new session starts with; Sessions → Rules changes them for one session. Enforced rules are checked before every command, so Claude keeps them even by mistake; the rest are instructions.")}
     ${banner}
+    ${on ? `<div class="callout ok">${dot("ok")}<span><b>Changes apply to sessions already open, no restart needed.</b> Enforced rules are checked on the very next command; open sessions are told about any change with your next message to them.</span></div>` : ""}
     ${unlocked ? "" : `<div class="callout">Read-only. Run <code>lfg ui</code> in your terminal to change your rules here.</div>`}
     ${prefControls(P, P.defaults, P.defaults, null, unlocked)}
     <div class="box pad mt"><div class="k" style="margin-top:0">When a change takes effect</div>

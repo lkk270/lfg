@@ -1748,6 +1748,21 @@ class PrefsTest(unittest.TestCase):
         self.assertIn("changed their default rules", out)
         self.assertEqual(self.hook("prompt", {"session_id": "22222222-2222-3333-4444-555555555555"})[1], "")
 
+    def test_an_open_session_hears_about_a_rule_added_or_removed_once(self):
+        from lfgcore import settings as S
+        sid = "33333333-2222-3333-4444-555555555555"
+        self.addCleanup(lambda: os.path.exists(S._rule_override("zz-api-style"))
+                        and os.remove(S._rule_override("zz-api-style")))
+        self.hook("session-start", {"session_id": sid})
+        S.save_rule("zz-api-style", "# zz-api-style: name endpoints by noun\n")
+        out = json.loads(self.hook("prompt", {"session_id": sid})[1])["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("added rules of their own", out)
+        self.assertIn("zz-api-style", out)
+        self.assertNotIn("default rules", out)  # only what changed
+        self.assertEqual(self.hook("prompt", {"session_id": sid})[1], "")
+        os.remove(S._rule_override("zz-api-style"))
+        self.assertIn("removed these rules", self.hook("prompt", {"session_id": sid})[1])
+
     def test_review_fixes_only_small_amends_on_your_own_open_pr(self):
         P = self.P
         env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
