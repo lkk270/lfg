@@ -832,6 +832,45 @@ class SecurityAuditVendorTest(unittest.TestCase):
         self.assertIn("needs_validation", agent)
 
 
+class UsageTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import sessions as SS
+        self.SS = SS
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+        p = mock.patch.object(SS, "PROJECTS", self.dir)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_usage_counts_each_reply_once_and_prices_it(self):
+        u = {"input_tokens": 1000000, "output_tokens": 100000, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 0}
+        reply = {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                 "message": {"id": "msg_1", "model": "claude-opus-5-5", "usage": u}}
+        d = os.path.join(self.dir, "-nowhere-app")
+        os.makedirs(d)
+        with open(os.path.join(d, "%08d-0000-0000-0000-000000000000.jsonl" % 1), "w") as f:
+            f.write(json.dumps(reply) + "\n" + json.dumps(reply) + "\n")  # one reply, logged twice (two blocks)
+        with mock.patch.object(self.SS, "_usage_index_path", lambda: os.path.join(self.dir, "idx.json")):
+            d = self.SS.usage()
+        self.assertEqual(d["models"][0]["input"], 1000000)
+        self.assertEqual(d["spend"]["today"], 6.0)  # 1M in at $4 + 0.1M out at $20
+
+    def test_headroom_savings_add_up_per_day(self):
+        from lfgcore import hrstats
+        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        with open(os.path.join(self.dir, "savings_events.jsonl"), "w") as f:
+            for saved in (100, 300):
+                f.write(json.dumps({"ts": now, "model": "claude-opus-5-5", "before": 1000, "saved": saved,
+                                    "cost_usd": 0.5}) + "\n")
+            f.write("not json\n")
+        with mock.patch.object(hrstats, "HR_HOME", self.dir):
+            w = hrstats.when(30)
+        self.assertEqual(len(w["days"]), 1)
+        self.assertEqual((w["days"][0]["saved"], w["days"][0]["usd"], w["days"][0]["percent"]), (400, 1.0, 20.0))
+        self.assertEqual(sum(h["calls"] for h in w["today_by_hour"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 
