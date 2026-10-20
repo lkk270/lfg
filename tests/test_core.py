@@ -402,6 +402,7 @@ class HeadroomTest(unittest.TestCase):
         self.assertEqual(C.read_json(C.lfg_path("headroom", "state.json"), {})["mode"], "token")
 
     def session_start_text(self):
+        import io
         from contextlib import redirect_stdout
         from lfgcore import hooks
         buf = io.StringIO()
