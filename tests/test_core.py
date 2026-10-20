@@ -1367,6 +1367,16 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(E.prune(repo)["forgot"], 1)
         self.assertTrue(os.path.isdir(clean) and os.path.isdir(busy))
 
+    def test_a_session_that_starts_with_a_slash_command_is_listed(self):
+        a = "%08d-0000-0000-0000-000000000000" % 7
+        self.write(a, "/nowhere/app", "main", "<command-message>review-pr</command-message>\n"
+                   "<command-name>/review-pr</command-name>\n<command-args>1759</command-args>")
+        r = self.SS.listing()["sessions"][0]
+        self.assertEqual((r["first"], r["named"]), ("/review-pr 1759", False))
+        b = "%08d-0000-0000-0000-000000000000" % 8
+        self.write(b, "/nowhere/app", "main", "<command-name>/rename</command-name><command-args>x</command-args>")
+        self.assertNotIn(b, [x["id"] for x in self.SS.listing()["sessions"]])  # only a /rename: nothing done yet
+
     def test_names_and_folders_are_yours_and_reversible(self):
         a = "%08d-0000-0000-0000-000000000000" % 1
         self.write(a, "/nowhere/app", "main", "hello")

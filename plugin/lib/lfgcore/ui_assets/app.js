@@ -1264,7 +1264,7 @@ PAGES.sessions = async () => {
     if (!g.has(s.group)) g.set(s.group, []);
     g.get(s.group).push(s);
   }
-  const line = s => `<li class="sess" data-sid="${esc(s.id)}"><div class="grow"><div class="title">${esc(s.name)}</div>
+  const line = s => `<li class="sess" data-sid="${esc(s.id)}"><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
@@ -2044,14 +2044,14 @@ async function checkUpdate() {
     return;
   }
   const seen = localStorage.getItem("lfg.update.seen") === (j && j.ended);
-  if (j && j.status === "done" && !seen && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
+  if (j && j.status === "done" && !seen && !(d.available && d.ready) && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
     box.hidden = false;
     box.className = "callout ok";
     box.innerHTML = `${dot("ok")}<span><b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
     $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }
-  if (j && j.status === "failed" && !seen) {
+  if (j && j.status === "failed" && !seen && !(d.available && d.ready && Date.parse(j.ended) < Date.now() - 60e3)) {
     box.hidden = false;
     box.className = "callout bad";
     box.innerHTML = `${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span> <button class="btn small" id="update-ok">OK</button>`;

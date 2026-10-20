@@ -58,9 +58,30 @@ def _prompt_text(content):
     return ""
 
 
-def _is_real_prompt(text):
-    t = text.strip()
-    return bool(t) and not t.startswith(("<", "[Request interrupted", "Caveat:"))
+CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
+CMD_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+BASH_IN = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
+QUIET_CMDS = ("/rename", "/color", "/clear", "/compact", "/model", "/config", "/status", "/cost", "/help", "/exit")
+
+
+def _prompt_of(text):
+    """What you typed, as you'd recognize it: a message, a slash command with its arguments ("/review-pr 1759"), or a
+    `!` shell command. None for what Claude Code adds itself (command output, caveats, interrupts)."""
+    t = (text or "").strip()
+    if not t or t.startswith(("[Request interrupted", "Caveat:", "<local-command", "<bash-stdout", "<bash-stderr",
+                              "<task-notification", "<system-reminder")):
+        return None
+    m = CMD.search(t)
+    if m:
+        name = m.group(1) if m.group(1).startswith("/") else "/" + m.group(1)
+        if name in QUIET_CMDS:
+            return None
+        a = CMD_ARGS.search(t)
+        return (name + " " + (a.group(1).strip() if a else "")).strip()
+    m = BASH_IN.search(t)
+    if m:
+        return "! " + m.group(1).strip()
+    return None if t.startswith("<") else t
 
 
 def parse(path):
@@ -97,16 +118,16 @@ def parse(path):
             out["started"] = out["started"] or ts
             out["ended"] = ts or out["ended"]
             if t == "user" and not ev.get("isMeta") and not ev.get("isSidechain"):
-                text = _prompt_text((ev.get("message") or {}).get("content"))
-                if _is_real_prompt(text):
+                text = _prompt_of(_prompt_text((ev.get("message") or {}).get("content")))
+                if text:
                     out["prompts"] += 1
-                    out["first"] = out["first"] or text.strip()[:300]
+                    out["first"] = out["first"] or text[:300]
     return out
 
 
 def _load_index():
     d = C.read_json(_index_path(), {}) or {}
-    return d if d.get("v") == 2 else {"v": 2, "sessions": {}}
+    return d if d.get("v") == 3 else {"v": 3, "sessions": {}}
 
 
 def scan():
@@ -129,7 +150,7 @@ def scan():
             continue
     if changed or len(new) != len(old):
         C.ensure_dir(os.path.dirname(_index_path()))
-        C.write_json(_index_path(), {"v": 2, "sessions": new})
+        C.write_json(_index_path(), {"v": 3, "sessions": new})
     return [s for s in new.values() if not s["sidechain_only"] and s["prompts"]]
 
 
@@ -195,6 +216,7 @@ def listing(days=None, scripted=False, hidden=False):
                  app="desktop" if s["entrypoint"] == "claude-desktop" else "")
         r["name"] = name_for(r, p["names"].get(s["id"], ""))
         r["auto_name"] = name_for(r)
+        r["named"] = bool(p["names"].get(s["id"]) or s["title"])
         r["folder"] = folder_of.get(s["id"], "")
         r["hidden"] = s["id"] in hid
         r["group"] = r["folder"] or r["ticket"] or (r["branch"] if r["branch"] not in ("", "HEAD") else "") \
