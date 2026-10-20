@@ -742,9 +742,9 @@ def _lfg(argv):
         _block("13", "`lfg prefs set --by-user` loosens your rules; only you run it, in your own terminal", hard=True)
     if sub == "review" and "post" in rest and "--dry-run" not in argv:
         _block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
-    if sub == "update" and "apply" in rest:
-        _block("13", "`lfg update apply` merges, pushes and installs new LFG code; run it yourself "
-                    "(or use lfg ui)", hard=True)
+    if sub == "update" and ("apply" in rest or "fix" in rest):
+        _block("13", "`lfg update %s` merges, pushes and installs new LFG code; run it yourself "
+                    "(or use lfg ui)" % ("apply" if "apply" in rest else "fix"), hard=True)
     if sub == "review" and ("run" in rest or "import" in rest):
         _block("13", "`lfg review %s` can start another Claude Code session on your usage; start it yourself"
                     % ("run" if "run" in rest else "import"))
@@ -905,6 +905,7 @@ SELFTEST = [
     ("Bash", {"command": "lfg review mark 12 1.1 --drop"}, False),
     ("Bash", {"command": "lfg review run 12"}, True),
     ("Bash", {"command": "lfg update apply"}, True),
+    ("Bash", {"command": "lfg update fix"}, True),
     ("Bash", {"command": "lfg update check --json"}, False),
     ("Bash", {"command": "lfg changes undo 3"}, True),
     ("Bash", {"command": "lfg headroom setup --scope everywhere"}, True),

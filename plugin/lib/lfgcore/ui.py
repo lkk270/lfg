@@ -147,7 +147,8 @@ def api(view, q):
         if _arg(q, "fresh") == "1":
             dash.forget("update")
         d = dash.in_background("update", 60, lambda: U.check(max_age=0), "checking for updates")  # one cache, not two
-        return dict(d, job=U.job())  # the job even while the check is still running, e.g. right after a restart
+        # the jobs even while the check is still running, e.g. right after a restart
+        return dict(d, job=U.job(), fix=U.fix_job())
     if view == "sessions":
         from . import sessions as SS
         return SS.listing(hidden=_arg(q, "hidden") == "1")
@@ -276,9 +277,10 @@ def save(what, body):
         return S.save_personal(body.get("path"), body.get("text"))
     if what == "skill_group":
         return S.set_skill_group(body.get("id"), body.get("group"))
-    if what == "update_apply":
+    if what in ("update_apply", "update_fix"):
         from . import updates as U
-        return U.start()
+        dash.forget("update")
+        return U.start("fix" if what == "update_fix" else "apply")
     if what == "ui_restart":
         threading.Timer(0.5, _restart).start()
         return {"restarting": True}

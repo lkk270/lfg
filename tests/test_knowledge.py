@@ -76,6 +76,10 @@ class MigrateTest(unittest.TestCase):
     """The osi case: one run started before the repo had a remote and finished after, so it sits under two ids."""
 
     def setUp(self):
+        # a `.lfg/` line in the user's own global gitignore would look like the old exclude line
+        env = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull})
+        env.start()
+        self.addCleanup(env.stop)
         self.root = os.path.realpath(tempfile.mkdtemp(prefix="osi-"))
         self.addCleanup(shutil.rmtree, self.root, True)
         subprocess.run(["git", "init", "-q", "-b", "main", self.root], check=True)

@@ -1545,13 +1545,79 @@ class UpdatesTest(unittest.TestCase):
         self.assertEqual(j["status"], "done", j.get("why"))
         self.assertEqual(self.git(self.co, "show", "HEAD:a.txt"), "both\n")
 
-    def test_failing_upstream_tests_leave_no_branch_behind(self):
-        self.upstream_commit("tests/test_bad.py", "import unittest\nclass T(unittest.TestCase):\n"
-                                                  "    def test_x(self): self.fail('no')\n")
+    BAD = "import unittest\nclass T(unittest.TestCase):\n    def test_x(self): self.fail('no')\n"
+
+    def held(self):
+        self.U._CACHE.update(ts=0, data=None)
+        return self.U.check(max_age=0)["held"]
+
+    def test_failing_upstream_tests_stay_on_their_branch_to_fix(self):
+        self.upstream_commit("tests/test_bad.py", self.BAD)
+        before = self.head()
+        j = self.run_apply()
+        self.assertEqual((j["status"], self.head()), ("failed", before))
+        h = self.held()
+        self.assertEqual(h["state"], "tests")
+        self.assertTrue(h["branch"].startswith("lfg-update/upstream-"))
+        for s in (h["worktree"], "self.fail('no')", "unittest discover"):
+            self.assertIn(s, h["prompt"])
+        self.assertEqual(self.run_apply()["conflict"]["branch"], h["branch"])  # Update again: same branch, still red
+        os.remove(os.path.join(h["worktree"], "tests", "test_bad.py"))
+        self.git(h["worktree"], "commit", "-q", "-am", "fixed")
+        self.assertEqual(self.held()["state"], "ready")
+        self.assertEqual(self.run_apply()["status"], "done")
+        self.assertEqual(self.git(self.co, "branch", "--list", "lfg-update/*").strip(), "")
+
+    def test_failing_tests_from_the_fork_get_a_branch_of_their_own(self):
+        self.fork_commit("tests/test_bad.py", self.BAD)
         before = self.head()
         self.assertEqual(self.run_apply()["status"], "failed")
         self.assertEqual(self.head(), before)
-        self.assertEqual(self.git(self.co, "branch", "--list", "lfg-update/*").strip(), "")
+        h = self.held()
+        self.assertEqual(h["state"], "tests")
+        self.assertTrue(h["branch"].startswith("lfg-update/tests-"))
+        self.assertTrue(os.path.exists(os.path.join(h["worktree"], "tests", "test_bad.py")))
+
+    def run_fix(self, claude):
+        real = C.run
+
+        def fake(cmd, *a, **kw):  # as in run_apply: the install step only has to succeed
+            if "setup" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return real(cmd, *a, **kw)
+        with mock.patch.object(self.U, "_claude", side_effect=claude), \
+                mock.patch.object(C, "which", return_value="/bin/claude"), \
+                mock.patch.object(C, "run", side_effect=fake):
+            return self.U.fix(log=lambda m: None)
+
+    def test_fix_with_claude_commits_on_the_branch_then_finishes_the_update(self):
+        h = self.conflict()["conflict"]
+        seen = {}
+
+        def claude(prompt, cwd, log):
+            seen.update(prompt=prompt, cwd=cwd)
+            self.write(cwd, "a.txt", "both\n")
+            self.git(cwd, "add", "a.txt")
+            self.git(cwd, "commit", "-q", "--no-edit")
+            return "merged both sides"
+        j = self.run_fix(claude)
+        self.assertEqual(j["status"], "done", j.get("why"))
+        self.assertEqual(seen["cwd"], h["worktree"])
+        self.assertIn("unattended", seen["prompt"])
+        self.assertEqual(self.git(self.co, "show", "HEAD:a.txt"), "both\n")
+        self.assertEqual(self.U.fix_job()["status"], "done")
+
+    def test_fix_that_commits_nothing_stops_without_applying(self):
+        self.upstream_commit("tests/test_bad.py", self.BAD)
+        before = self.head()
+        self.run_apply()
+        j = self.run_fix(lambda prompt, cwd, log: "I couldn't find the cause")
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("couldn't find the cause", j["why"])
+        self.assertEqual((self.head(), self.held()["state"]), (before, "tests"))
+
+    def test_fix_with_nothing_held_does_nothing(self):
+        self.assertEqual(self.run_fix(lambda *a: self.fail("Claude ran"))["status"], "failed")
 
     def test_banner_notices_within_about_two_minutes(self):
         import inspect

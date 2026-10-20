@@ -7,7 +7,8 @@ installs it. Applying is yours: the guard keeps agents from running it.
 
 The upstream merge never happens on main: it runs on an `lfg-update/...` branch in its own worktree, and main only
 fast-forwards to that branch once it is merged and tested. A merge that conflicts stays there, half done, for you
-(or Claude) to finish; the next apply picks it up from that branch.
+(or Claude) to finish; the next apply picks it up from that branch. So does code whose tests fail: what was tested
+stays on a held branch, and `fix` has Claude fix it there, unattended, then applies again.
 """
 import json
 import os
@@ -76,8 +77,11 @@ def _repo_name(url):
 
 def _held_all(root):
     """Every lfg-update/ branch, newest first: {branch, worktree, state, files, prompt, ahead}. state is "conflict"
-    (a merge in progress), "uncommitted" (fixed but not committed) or "ready"; ahead is commits main doesn't have."""
+    (a merge in progress), "uncommitted" (fixed but not committed), "tests" (the last apply's tests failed on it and
+    nothing has been committed since) or "ready"; ahead is commits main doesn't have."""
     trees = {w["branch"]: w["path"] for w in W.listing(root) if os.path.isdir(w["path"])}
+    last = job() or {}
+    tested = last.get("tested") or {} if last.get("status") == "failed" else {}
     for b in _lines(_git(root, "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)",
                          "refs/heads/" + HELD)):
         wt = trees.get(b, "")
@@ -88,6 +92,8 @@ def _held_all(root):
         elif wt and (_git(wt, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
                      or _git(wt, "status", "--porcelain", "--untracked-files=no").stdout.strip()):
             h.update(state="uncommitted", files=_lines(_git(wt, "diff", "--name-only", "HEAD")))
+        elif tested.get("branch") == b and _git(root, "rev-parse", b).stdout.strip() == tested.get("head"):
+            h.update(state="tests", output=last.get("output") or "")
         if h["state"] != "ready":
             h["prompt"] = fix_prompt(h, _repo_name(_remote_url(root, "upstream")) or "the original LFG")
         yield h
@@ -100,10 +106,16 @@ def held(root):
 
 def fix_prompt(h, upstream):
     """One line to hand Claude: finish the merge on the held branch. Claude can commit there; it never merges."""
+    if h["state"] == "tests":
+        return ("In %s (branch %s), LFG's update stopped because its tests fail there:\n%s\nFind the cause and fix "
+                "it so `python3 -m unittest discover -s tests` passes there, then `git add` the files and `git commit` "
+                "the fix. Don't run git merge, rebase or push, and don't touch main; I'll finish the update after."
+                % (h["worktree"], h["branch"], h.get("output") or "(see the test run)"))
     files = ", ".join(h["files"][:20]) or "the files git status lists"
     where = "In %s (branch %s), LFG's update is part way through merging %s's main (upstream/main)" % (
         h["worktree"], h["branch"], upstream)
-    todo = ("and these files conflict: %s. Resolve each conflict keeping both sides' changes, run" % files
+    todo = ("and these files conflict: %s. Resolve each conflict keeping both sides' changes (once: if one side "
+            "already has the other's change, in its own words, keep that one), run" % files
             if h["state"] == "conflict" else "and the conflicts look resolved but aren't committed. Check them, run")
     return ("%s %s `python3 -m unittest discover -s tests` there until it passes, then `git add` the files and "
             "`git commit --no-edit` to finish the merge. Don't run git merge, rebase or push, and don't touch main; "
@@ -157,23 +169,34 @@ def _job_path():
     return C.lfg_path("state", "update-job.json")
 
 
-def job():
-    j = C.read_json(_job_path(), None)
+def _fix_path():
+    return C.lfg_path("state", "update-fix.json")
+
+
+def _read_job(path):
+    j = C.read_json(path, None)
     if j and j.get("status") == "running":
         try:
             os.kill(int(j.get("pid")), 0)
         except (OSError, TypeError, ValueError):
-            j.update(status="failed", why="the update stopped without finishing")
+            j.update(status="failed", why="it stopped without finishing")
     return j
 
 
-def start():
-    """Run `lfg update apply` detached (the dashboard's Update button)."""
-    j = job()
-    if j and j.get("status") == "running":
-        return {"started": False, "note": "An update is already running."}
+def job():
+    return _read_job(_job_path())
+
+
+def fix_job():
+    return _read_job(_fix_path())
+
+
+def start(action="apply"):
+    """Run `lfg update apply` (the dashboard's Update button) or `lfg update fix` (Fix with Claude) detached."""
+    if any((x or {}).get("status") == "running" for x in (job(), fix_job())):
+        return {"started": False, "note": "An update or a fix is already running."}
     with open(os.devnull, "wb") as dn:
-        subprocess.Popen([sys.executable, os.path.join(C.PLUGIN_ROOT, "bin", "lfg"), "update", "apply"],
+        subprocess.Popen([sys.executable, os.path.join(C.PLUGIN_ROOT, "bin", "lfg"), "update", action],
                          stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
     return {"started": True}
 
@@ -206,7 +229,8 @@ def apply(log=print):
         C.write_json(_job_path(), j)
         log("stopped: " + why)
         if conflict:
-            log("conflicting files: " + ", ".join(conflict["files"]))
+            if conflict["files"]:
+                log("conflicting files: " + ", ".join(conflict["files"]))
             log("hand this to Claude to fix it:\n" + conflict["prompt"])
         _CACHE.update(ts=0, data=None)
         return j
@@ -239,7 +263,7 @@ def apply(log=print):
     h = held(root)
     if h and h["state"] != "ready":
         return fail("the merge of %s's changes on %s isn't finished yet (%s)" % (up_name, h["branch"], h["state"]), h)
-    wt, branch, made = "", "", False
+    wt, branch = "", ""
     if h or (has_up and _count(root, BRANCH, "upstream/" + BRANCH)):
         if h:
             branch = h["branch"]
@@ -247,7 +271,7 @@ def apply(log=print):
             wt = h["worktree"] or W.new(root, branch)["path"]
         else:
             sha = _git(root, "rev-parse", "--short=7", "upstream/" + BRANCH).stdout.strip()
-            branch, made = HELD + "upstream-" + sha, True
+            branch = HELD + "upstream-" + sha
             say("Merging %s's new commits on %s, away from main" % (up_name, branch))
             try:
                 wt = W.new(root, branch, base=BRANCH)["path"]
@@ -265,13 +289,21 @@ def apply(log=print):
     # no __pycache__ left behind: an untracked file would stop the merge worktree being removed afterwards
     t = C.run(TESTS, cwd=wt or root, timeout=900, env={"PYTHONDONTWRITEBYTECODE": "1"})
     if t.returncode:
+        tested = _git(wt or root, "rev-parse", "HEAD").stdout.strip()
+        if not branch:  # main itself failed: keep what was tested on a branch of its own, where it can be fixed
+            branch = HELD + "tests-" + tested[:7]
+            try:
+                wt = W.new(root, branch, base=tested)["path"]
+            except (ValueError, RuntimeError):
+                branch = ""
         _git(root, "reset", "--keep", before)
-        if made:
-            _tidy(root, branch)
-            _git(root, "branch", "-D", branch)  # only the merge we just made, nothing of yours
-        tail = ((t.stderr or "") + (t.stdout or "")).strip().splitlines()[-12:]
-        return fail("tests failed%s, so the update was undone and nothing was installed:\n%s"
-                    % (" on %s" % branch if branch and not made else "", "\n".join(tail)))
+        tail = "\n".join(((t.stderr or "") + (t.stdout or "")).strip().splitlines()[-12:])
+        if not branch:
+            return fail("tests failed, so the update was undone and nothing was installed:\n" + tail)
+        j.update(status="failed", tested={"branch": branch, "head": tested}, output=tail)
+        C.write_json(_job_path(), j)  # what was tested, so the branch reads as "tests" until something is committed
+        return fail("tests failed on %s, so nothing changed on main and nothing was installed:\n%s" % (branch, tail),
+                    next((x for x in _held_all(root) if x["branch"] == branch), None))
     if branch:
         if _git(root, "merge", "--ff-only", "-q", branch).returncode:
             return fail("couldn't move main to %s; nothing was installed" % branch)
@@ -292,6 +324,79 @@ def apply(log=print):
     return j
 
 
+FIX_ALLOW = ["Read", "Grep", "Glob", "Edit", "Write", "Bash(git status)", "Bash(git status *)", "Bash(git diff)",
+             "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)", "Bash(git add *)", "Bash(git commit *)",
+             "Bash(python3 -m unittest *)"]
+FIX_DENY = ["Bash(git push *)", "Bash(git merge *)", "Bash(git rebase *)", "Bash(git reset *)",
+            "Bash(git checkout *)", "Bash(git switch *)", "Bash(git commit --amend *)", "Bash(lfg *)"]
+
+
+def _claude(prompt, cwd, log):
+    """Claude Code in print mode on the held branch, on your own login. Returns its last message."""
+    cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
+           "--allowedTools", ",".join(FIX_ALLOW), "--disallowedTools", ",".join(FIX_DENY)]
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        # no __pycache__ from its test runs: an untracked file would stop the worktree being removed afterwards
+        subprocess.run(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=3600,
+                       env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    said = ""
+    for ln in C.read_text(log).splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "result" and isinstance(ev.get("result"), str):
+            said = ev["result"]
+    return said
+
+
+def fix(log=print):
+    """Fix with Claude: hand the held branch's fix prompt to an unattended Claude Code session in its worktree, and
+    once it has committed, apply again (which re-runs the tests). Claude never touches main, merges or pushes."""
+    root = source()
+    j = {"status": "running", "pid": os.getpid(), "started": C.now_iso(), "why": ""}
+
+    def end(status, why=""):
+        j.update(status=status, why=why, ended=C.now_iso())
+        C.write_json(_fix_path(), j)
+        _CACHE.update(ts=0, data=None)
+        if why:
+            log("stopped: " + why)
+        return j
+
+    C.ensure_dir(os.path.dirname(_fix_path()))
+    C.write_json(_fix_path(), j)
+    h = held(root) if root else None
+    if not h or h["state"] == "ready":
+        return end("failed", "there's nothing for Claude to fix")
+    if not C.which("claude"):
+        return end("failed", "Claude Code (`claude`) is not on PATH")
+    if not h["worktree"]:  # pruned since; the branch is all that's needed
+        W.new(root, h["branch"])
+        h = next(x for x in _held_all(root) if x["branch"] == h["branch"])
+    j.update(branch=h["branch"], state=h["state"], log=C.lfg_path("state", "update-fix.log"))
+    C.write_json(_fix_path(), j)
+    log("Claude is fixing %s in %s" % (h["branch"], h["worktree"]))
+    try:
+        said = _claude(h["prompt"] + " You are running unattended from the LFG dashboard: nobody can answer "
+                       "questions. Run each shell command on its own, never chained with ; or &&. If you can't fix "
+                       "it, don't commit, and say why in your last message.", h["worktree"], j["log"])
+    except subprocess.TimeoutExpired:
+        return end("failed", "Claude didn't finish within an hour")
+    j["said"] = said[-2000:]
+    after = next((x for x in _held_all(root) if x["branch"] == h["branch"]), None)
+    if not after or after["state"] != "ready":
+        return end("failed", "Claude finished without committing a fix" + (": " + said[-600:] if said else ""))
+    log("Claude committed a fix; running the update again")
+    r = apply(log)  # the fix stays "running" until this ends, so the dashboard goes straight from one to the other
+    if r["status"] == "done":
+        end("done")
+    else:
+        end("failed", "Claude committed a fix, but the update still stopped: " + r.get("why", ""))
+    return r
+
+
 SOURCE_LABEL = {"upstream": "the original LFG", "origin": "your fork"}
 
 
@@ -310,10 +415,12 @@ def human(d):
         print("checkout  %d commit(s) on %s not installed yet" % (d["not_installed"], BRANCH))
     h = d.get("held")
     if h and h["state"] != "ready":
-        print("\nmerge not finished on %s (%s), in %s" % (h["branch"], h["state"], h["worktree"]))
+        print("\n%s on %s (%s), in %s" % ("tests fail" if h["state"] == "tests" else "merge not finished",
+                                           h["branch"], h["state"], h["worktree"]))
         for f in h["files"]:
             print("  conflict  " + f)
-        print("\nHand this to Claude to fix it, then run `lfg update apply`:\n\n" + h["prompt"])
+        print("\nRun `lfg update fix` to have Claude fix it and finish the update, or hand this to Claude yourself, "
+              "then run `lfg update apply`:\n\n" + h["prompt"])
     elif h:
         print("merged and committed on %s: `lfg update apply` finishes from it" % h["branch"])
     for e in d["errors"]:

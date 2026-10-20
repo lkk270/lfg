@@ -2112,21 +2112,43 @@ async function checkUpdate(fresh) {
     setTimeout(checkUpdate, 3000);
     return;
   }
+  const F = d.fix;
+  if (F && F.status === "running") {
+    box.hidden = false;
+    box.className = "callout";
+    box.innerHTML = fixingMsg(F);
+    watchUpdate();
+    return;
+  }
   const R = d.remotes || {}, H = d.held;
   const named = r => `${UPDATE_FROM[r]}${(R[r] || {}).name ? ` (${R[r].name})` : ""}`;
   if (H && H.state !== "ready") {
-    /* a merge from the original LFG that conflicted: it waits on its own branch until it's fixed and committed */
+    /* a merge that conflicted, or code whose tests failed: it waits on its own branch until it's fixed and committed */
     box.hidden = false;
     box.className = "callout bad";
     const ver = $("#lfg-version");
     if (ver) ver.textContent = "Update stopped";
-    box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> the changes from ${esc(named("upstream"))} ${H.state === "conflict" ? `conflict with yours in ${plural(H.files.length, "file")}` : "are merged but not committed yet"}. Nothing changed on main and nothing was installed; the half-done merge is on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
+    const what = H.state === "tests" ? "LFG's tests fail on the new code"
+      : `the changes from ${esc(named("upstream"))} ${H.state === "conflict" ? `conflict with yours in ${plural(H.files.length, "file")}` : "are merged but not committed yet"}`;
+    const tried = F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">Claude tried ${ago(F.ended)} and stopped: ${esc(F.why || "")}</span>` : "";
+    const unlocked = await isUnlocked();
+    box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
       ${H.files.length ? `<details class="more inline"><summary>${H.state === "conflict" ? "Conflicting files" : "Changed files"}</summary><ul>${H.files.map(f => `<li class="mono small">${esc(f)}</li>`).join("")}</ul></details>` : ""}
-      <button class="btn small primary" data-copy="${esc(H.prompt)}" title="${esc(H.prompt)}">Copy fix for Claude</button>
-      <span class="muted small">Paste it into Claude Code. Once it's committed there, press Update here or run <code>lfg update apply</code>.</span>`;
+      ${H.output ? `<details class="more inline"><summary>Test output</summary><pre class="raw mono small">${esc(H.output)}</pre></details>` : ""}
+      ${tried}
+      <button class="btn small primary" id="update-fix" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to fix from here\""}>${tried ? "Try again with Claude" : "Fix with Claude"}</button>
+      <button class="btn small" data-copy="${esc(H.prompt)}" title="${esc(H.prompt)}">Copy fix for Claude</button>
+      <span class="muted small">Fix with Claude runs Claude Code on that branch by itself, then runs the update again; it never touches main. Or paste the fix into Claude Code yourself and press Update once it's committed.</span>`;
     $$("[data-copy]", box).forEach(b => b.onclick = async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
     });
+    const fx = $("#update-fix");
+    if (fx) fx.onclick = async () => {
+      fx.disabled = true; fx.textContent = "Starting…";
+      const r = await save("update_fix", {});
+      if (!r.ok) { fx.disabled = false; fx.textContent = "Try again"; return alertMsg(fx, r); }
+      watchUpdate();
+    };
     return;
   }
   const seen = localStorage.getItem("lfg.update.seen") === (j && j.ended);
@@ -2168,15 +2190,23 @@ async function checkUpdate(fresh) {
     watchUpdate();
   };
 }
+const fixingMsg = F => `${dot("on")}Claude is fixing the stopped update${F.branch ? ` on <code>${esc(F.branch)}</code>` : ""}, started ${ago(F.started)}. Once it commits a fix, the update runs again by itself.`;
+let watching = false;  /* one watcher at a time: the banner re-checks every minute and would start another */
 async function watchUpdate() {
+  if (watching) return;
+  watching = true;
+  try { await watchLoop(); } finally { watching = false; }
+}
+async function watchLoop() {
   const box = $("#update-banner");
   for (;;) {
     await new Promise(r => setTimeout(r, 2500));
     let d;
     try { d = await api("update", { t: Date.now() }); } catch (e) { continue; }
-    const j = d.job || {};
+    const j = d.job || {}, F = d.fix || {};
     box.hidden = false;
     if (j.status === "running") { box.className = "callout"; box.innerHTML = `${dot("on")}Updating LFG… ${esc((j.steps || []).slice(-1)[0] || "")}`; continue; }
+    if (F.status === "running") { box.className = "callout"; box.innerHTML = fixingMsg(F); continue; }
     if (j.status === "done") {
       box.innerHTML = `${dot("on")}Installed. Reloading the dashboard on the new version…`;
       await save("ui_restart", {});
@@ -2186,7 +2216,7 @@ async function watchUpdate() {
       }
       return;
     }
-    return checkUpdate();
+    return checkUpdate(true);
   }
 }
 setInterval(checkUpdate, 60 * 1000);
