@@ -288,12 +288,29 @@ def status():
             "cloud_provider": cloud_provider()}
 
 
+def revive(timeout=8):
+    """Bring the proxy back: reload the login agent if something unloaded it, else restart it. True once it answers."""
+    if not _agent_loaded() and os.path.exists(_plist_path()):
+        C.run(["launchctl", "bootstrap", "gui/%d" % os.getuid(), _plist_path()])
+    else:
+        restart()
+    return wait_live(timeout=timeout)
+
+
 def ensure_live(root=None):
-    """Session start: if Claude Code is routed through the proxy but it's down, restart it (self-heal)."""
+    """Session start and every prompt: if Claude Code is routed through the proxy but it's down, restart it."""
     if not routed(root) or live(timeout=1):
         return True
-    restart()
-    return wait_live(timeout=8)
+    return revive()
+
+
+def down_message():
+    """What the user reads when the proxy is down and restarting it didn't help."""
+    return ("Headroom proxy is down, so this session can't reach Claude: it sends every request to %s and nothing "
+            "answers there (Claude Code retries for about 3 minutes, then fails with \"Connection refused\"). LFG "
+            "tried to restart it and it didn't come back. In a terminal, run `lfg headroom restart`; if that fails, "
+            "see %s, or run `lfg headroom off` and start `claude` again to go straight to Anthropic."
+            % (local_url(), C.lfg_path("headroom", "proxy.log")))
 
 
 def serve():

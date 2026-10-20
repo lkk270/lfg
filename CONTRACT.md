@@ -103,7 +103,7 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg review context\|save\|show\|list\|mark\|post\|threads [<pr>] [ids…]` | Reviews of other people's PRs (`/lfg:review`). `<pr>` is a number (repo from this checkout), `owner/repo#12` or a PR URL. `context`: what the review reads (sources, the PR's AGENTS.md files, whether it is a re-review). `save [--file F] [--ticket ID]`: adds a pass from the skill's findings JSON. `mark <ids> --keep\|--drop\|--pending [--body\|--body-file]`: triage. `post --event approve\|request-changes\|comment [--body] [--dry-run]`: **user-only** (the guard blocks agents unless `--dry-run`); posts the kept findings as one GitHub review, inline where the line is in the diff, else in the body, and records each comment id. `threads`: read-only, for a re-review: each posted finding's thread (resolved, outdated, replies) and whether its file changed since |
 | `lfg usage [--json]` | Token/time summary from `usage.db` |
 | `lfg vendor status\|sync\|update` | Pinned mattpocock/skills source |
-| `lfg hook <session-start\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
+| `lfg hook <session-start\|prompt\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
 
 ## Skills
 
