@@ -57,13 +57,13 @@ Blocks (gate 7) on: malware/compromised advisory, typosquat, package < 14 days o
 Cloudflare's full audit: reconnaissance, coverage-led hunting, fresh-verifier validation, `findings.json`, independent record verification, report. It runs many agents, so it is never automatic.
 
 1. **Agree the budget first.** From the graph (`get_architecture_overview_tool`, `list_communities_tool`) estimate entry surfaces × boundaries, pick a profile (`quick` for a first look or a small repo, `standard` by default, `deep` only when asked) and an optional scope (paths, one subsystem, or the diff since a ref). Propose a maximum number of agent invocations using the upstream "Cost budget" rules and wait for a yes. The user can narrow the scope or change the profile.
-2. **Set up.** Output directory `<run>/security-audit/` (`lfg run path`; start a run with `lfg run new audit-<repo>` if there is none). Never inside the repo. Record the commit and whether the tree is dirty.
+2. **Set up.** Output directory `<scratch>/security-audit/` (`lfg run scratch`, this machine only; start a run with `lfg run new audit-<repo>` if there is none). Never inside the repo, and never in the run folder, which is committed. Record the commit and whether the tree is dirty.
 3. **Run the six phases** exactly as `SKILL.md` § Full audit workflow says, reading `RECONNAISSANCE.md`, `HUNTING.md`, `ATTACK-CLASSES.md`, the selected companions and `VALIDATION-AND-REPORTING.md` from the vendor folder. LFG differences:
    - Reconnaissance is graph-first: `get_architecture_overview_tool`, `list_flows_tool`, `get_bridge_nodes_tool` and the dev-graph `Component`, `Invariant` and `Decision` nodes before any file reads.
    - Hunters and verifiers are `security-analyst` agents, each given its ledger unit, the vendor files it needs and the output path it may write.
    - **No target code is executed**: LFG has no OS sandbox that meets the upstream controls. Anything that needs runtime evidence stays `needs_validation` with "no OS sandbox" as the blocker and a safe validation plan. Offer `/pentest` (Strix, offline, local Ollama, localhost only) to confirm those.
    - Stop hunting when the budget is spent and record the run as incomplete with the upstream reason. Never exceed the agreed budget silently.
-4. **Validate** before reporting: `node ~/.lfg/plugin/vendor/cloudflare-security-audit/validate-findings.cjs <run>/security-audit/findings.json` and `node …/validate-coverage-ledger.cjs <run>/security-audit/coverage-ledger.json`. Both must exit 0. No `node` → say so and mark the run incomplete.
+4. **Validate** before reporting: `node ~/.lfg/plugin/vendor/cloudflare-security-audit/validate-findings.cjs <scratch>/security-audit/findings.json` and `node …/validate-coverage-ledger.cjs <scratch>/security-audit/coverage-ledger.json`. Both must exit 0. No `node` → say so and mark the run incomplete.
 5. **Bring it into LFG.** Copy each `confirmed` record into `05-secure.json` (`"source": "cloudflare-security-audit"`, severity as given, reachability from the graph) and each `needs_validation` record as a non-blocking caveat. Blocking findings go to checkpoint 3 as in step 6 above. Confirmed findings become dev-graph `Issue`s (type `risk`) pointing at `security-audit/FINDINGS-DETAIL.md`.
 6. Reply with the profile, the coverage statement (partial for `quick` or scoped runs), counts per state, the blocking items, and the path to `REPORT.md`.
 
@@ -77,7 +77,7 @@ Cloudflare's full audit: reconnaissance, coverage-led hunting, fresh-verifier va
 | Item | Finding | Where | Evidence (advisory IDs) | Reachable | Severity | Fix | Decision |
 ```
 
-- Audit mode only: `<run>/security-audit/` with the upstream files (`run-metadata.json`, `architecture.md`, `coverage-ledger.json`, `findings.json`, `REPORT.md`, `FINDINGS-DETAIL.md`, `NEEDS-VALIDATION.md`).
+- Audit mode only: `<scratch>/security-audit/` with the upstream files (`run-metadata.json`, `architecture.md`, `coverage-ledger.json`, `findings.json`, `REPORT.md`, `FINDINGS-DETAIL.md`, `NEEDS-VALIDATION.md`).
 
 Reply with the verdict first, then blocking items and their safer alternatives, then caveats.
 

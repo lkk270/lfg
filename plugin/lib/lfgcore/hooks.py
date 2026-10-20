@@ -147,6 +147,38 @@ def _gh_signed_in():
     return ok
 
 
+def _knowledge_lines(root, rid, run):
+    """The repo's shared knowledge (.lfg/, committed): sync dev-graph in the background, offer a run left unfinished
+    on this branch, and point at state still in ~/.lfg from before it moved into the repo."""
+    from . import teamknowledge as K
+    out = []
+    try:
+        if K.spawn_background(root):
+            out.append("Shared knowledge: dev-graph is this repo's branch %s, rebuilt from .lfg/nodes/; what you save"
+                       " there is copied into .lfg/nodes/ (lfg knowledge sync). Runs, glossary and ADRs are in .lfg/"
+                       " too. Leave .lfg/ changes unstaged: the user commits them with the work." % K.branch_for(root))
+        if not run:
+            others = K.unfinished_runs(root)
+            if others:
+                out.append("Unfinished run(s) on this branch: %s. Ask the user whether to pick one up (`lfg run use"
+                           " <run-id>`), e.g. a teammate's they are taking over." % ", ".join(others[:3]))
+        old = K.legacy(root)
+        old_current = K.legacy_current(root, old) if not run else None
+        if old_current:
+            out.append("STOP before starting a new run: this repo's current run %s is still in ~/.lfg from before runs"
+                       " moved into the repo, so `lfg run path` can't see it. Tell the user to run `lfg knowledge"
+                       " migrate` (try `--dry-run` first) and continue once it has moved." % old_current)
+        elif old:
+            out.append("This repo has LFG runs or docs in ~/.lfg from before they moved into the repo: tell the user"
+                       " once that `lfg knowledge migrate --dry-run` shows what would move.")
+        if K.hidden_by_exclude(root):
+            out.append("git ignores .lfg/ here (a line an older `lfg enable` put in .git/info/exclude), so the repo's"
+                       " knowledge can't be committed: tell the user `lfg knowledge migrate` takes that line back.")
+    except Exception as e:  # shared knowledge must never block a session; say so in its log
+        K.log(root, "session start: %s" % e)
+    return out
+
+
 def session_start(data):
     from . import graphs as G
     root, rid = _repo(data)
@@ -194,7 +226,7 @@ def session_start(data):
         st = G.status(root, rid)
         if st["status"] != "fresh":
             G.spawn_background(root)
-        run = C.current_run(rid)
+        run = C.current_run(root)
         lines.append("Repo %s: graphs %s%s. Current run: %s." % (
             rid, st["status"], " (syncing in the background)" if st["status"] != "fresh" else "",
             os.path.basename(run) if run else "none"))
@@ -220,6 +252,7 @@ def session_start(data):
             pass
         if run and os.path.exists(os.path.join(run, "progress.md")):
             lines.append("Resume from %s/progress.md." % run)
+        lines += _knowledge_lines(root, rid, run)
     if notice:  # the model can't answer while the proxy is down, so the user is told directly
         print(json.dumps({"systemMessage": notice, "hookSpecificOutput": {
             "hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
@@ -297,7 +330,7 @@ def _transcript_usage(path, session=""):
 
 def stop(data):
     root, rid = _repo(data)
-    run = C.current_run(rid) if rid else None
+    run = C.current_run(root) if rid else None
     totals = _transcript_usage(data.get("transcript_path"), data.get("session_id", ""))
     if totals:
         db = usage_db()
@@ -307,12 +340,18 @@ def stop(data):
                            (data.get("session_id", "?"), C.now_iso(), rid or "", os.path.basename(run or ""),
                             model, t[0], t[1], t[2], t[3]))
         db.close()
+    if root:  # what an agent saved to dev-graph this turn reaches .lfg/nodes/ before the user commits
+        from . import teamknowledge as K
+        try:
+            K.spawn_background(root)
+        except Exception as e:
+            K.log(root, "stop: %s" % e)
     return 0
 
 
 def pre_compact(data):
-    _root, rid = _repo(data)
-    run = C.current_run(rid) if rid else None
+    root, rid = _repo(data)
+    run = C.current_run(root) if rid else None
     if run:
         path = os.path.join(run, "progress.md")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

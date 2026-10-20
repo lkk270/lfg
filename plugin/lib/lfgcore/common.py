@@ -208,12 +208,40 @@ def main_root(root):
     return root
 
 
-def repo_id(root):
-    root = main_root(root)
-    remote = run(["git", "config", "--get", "remote.origin.url"], cwd=root).stdout.strip()
-    key = remote or os.path.realpath(root)
+REPO_ID_RX = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{8}$")
+# Committed with the repo's knowledge so every clone and teammate files it under one id; ignored lines are the
+# parts of a run that only make sense on one machine, plus security findings, which never go into the repo.
+# `runs/**/` matches at any depth: skills keep earlier loops' copies in subfolders (runs/<id>/loop0/05-pentest.json).
+KNOWLEDGE_IGNORE = ["runs/CURRENT", "runs/**/patches/", "runs/**/gate-logs/", "runs/**/ready.json",
+                    "runs/**/05-secure.*", "runs/**/05-pentest.json", "runs/**/security-audit/",
+                    "runs/**/COMMIT_MSG.md", "runs/**/PR_BODY.md"]
+
+
+def _name_hash(root, key):
     name = re.sub(r"[^A-Za-z0-9_.-]", "-", os.path.basename(root.rstrip("/"))) or "repo"
     return "%s-%s" % (name, hashlib.sha1(key.encode()).hexdigest()[:8])
+
+
+def derived_repo_id(root):
+    """The id LFG used before it was stored in the repo: hashed from the origin URL, else the main checkout path."""
+    root = main_root(root)
+    remote = run(["git", "config", "--get", "remote.origin.url"], cwd=root).stdout.strip()
+    return _name_hash(root, remote or os.path.realpath(root))
+
+
+def legacy_repo_ids(root):
+    """Every id this repo may have had: with its current remote and with none (a remote added later)."""
+    main = main_root(root)
+    return sorted({derived_repo_id(root), _name_hash(main, os.path.realpath(main))})
+
+
+def repo_id(root):
+    """The stored id in .lfg/repo-id (this checkout's, else the main checkout's), else the derived one."""
+    for d in (root, main_root(root)):
+        rid = read_text(os.path.join(d, ".lfg", "repo-id")).strip()
+        if REPO_ID_RX.match(rid):
+            return rid
+    return derived_repo_id(root)
 
 
 def need_repo():
@@ -223,10 +251,32 @@ def need_repo():
     return root, repo_id(root)
 
 
-def repo_docs_dir(rid):
-    d = lfg_path("repos", rid, "docs")
+def knowledge_dir(root, create=True):
+    """<checkout>/.lfg: the repo's shared knowledge, committed on the branch it was written on. A write stores the
+    repo id beside it, once, and keeps LFG's ignore lines in its .gitignore (adding any a newer LFG knows; lines
+    someone else added stay)."""
+    d = os.path.join(root, ".lfg")
+    if not create:
+        return d
+    if not os.path.isfile(os.path.join(d, "repo-id")):
+        write_text(os.path.join(d, "repo-id"), repo_id(root) + "\n")
+    ign = os.path.join(d, ".gitignore")
+    have = read_text(ign)
+    missing = [ln for ln in KNOWLEDGE_IGNORE if ln not in have.splitlines()]
+    if missing:
+        write_text(ign, have + ("" if not have or have.endswith("\n") else "\n") + "\n".join(missing) + "\n")
+    return d
+
+
+def repo_docs_dir(root):
+    d = os.path.join(knowledge_dir(root), "docs")
     ensure_dir(os.path.join(d, "adr"))
     return d
+
+
+def repo_file(root, name, create=False):
+    """A repo-level knowledge file (commands.json, shipcheck.json) in <checkout>/.lfg. create=True only to write it."""
+    return os.path.join(knowledge_dir(root, create), name)
 
 
 # ---------------------------------------------------------------- run folders
@@ -236,47 +286,60 @@ def _slug(s):
     return (s or "run")[:40]
 
 
-def runs_dir(rid):
-    return ensure_dir(lfg_path("runs", rid))
+def runs_dir(root, create=True):
+    """<checkout>/.lfg/runs. Reads pass create=False so looking never adds a folder to the user's repo."""
+    d = os.path.join(knowledge_dir(root, create), "runs")
+    return ensure_dir(d) if create else d
+
+
+def scratch_dir(root, run):
+    """~/.lfg/runs/<repo-id>/<run-id>: what a run needs on this machine only (/build's ticket worktrees), kept out of
+    the checkout so the code graphs never index a nested worktree."""
+    return ensure_dir(lfg_path("runs", repo_id(root), os.path.basename(run)))
 
 
 def git_branch(root):
     """The checked-out branch, `detached@<sha>` on a detached HEAD, or "" outside git."""
     if not root:
         return ""
+    b = run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root, timeout=10).stdout.strip()
+    if b:  # also names the branch of a repo with no commits yet, where rev-parse answers "HEAD"
+        return b
     b = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root, timeout=10).stdout.strip()
     if b == "HEAD":
         return "detached@" + run(["git", "rev-parse", "--short", "HEAD"], cwd=root, timeout=10).stdout.strip()
     return b
 
 
-def new_run(rid, slug, branch=""):
+def new_run(root, slug, branch=None):
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     base = "%s-%s" % (stamp, _slug(slug))
-    path, n = os.path.join(runs_dir(rid), base), 2
+    runs = runs_dir(root)
+    path, n = os.path.join(runs, base), 2
     while os.path.exists(path):
-        path, n = os.path.join(runs_dir(rid), "%s-%d" % (base, n)), n + 1
+        path, n = os.path.join(runs, "%s-%d" % (base, n)), n + 1
     ensure_dir(path)
-    write_text(os.path.join(runs_dir(rid), "CURRENT"), os.path.basename(path) + "\n")
+    write_text(os.path.join(runs, "CURRENT"), os.path.basename(path) + "\n")
     write_json(os.path.join(path, "run.json"), {"run_id": os.path.basename(path), "slug": slug,
-                                                "repo_id": rid, "branch": branch, "created": now_iso(),
-                                                "lane": None})
+                                                "repo_id": repo_id(root),
+                                                "branch": git_branch(root) if branch is None else branch,
+                                                "created": now_iso(), "lane": None})
     return path
 
 
-def current_run(rid):
-    try:
-        with open(os.path.join(runs_dir(rid), "CURRENT")) as f:
-            name = f.read().strip()
-    except OSError:
+def current_run(root):
+    """This checkout's current run (CURRENT is per checkout and never committed), or None."""
+    if not root:
         return None
-    path = os.path.join(runs_dir(rid), name)
+    runs = runs_dir(root, create=False)
+    name = read_text(os.path.join(runs, "CURRENT")).strip()
+    path = os.path.join(runs, name)
     return path if name and os.path.isdir(path) else None
 
 
-def run_file(rid, name):
+def run_file(root, name):
     """Path of a file in the current run folder, or None when there is no current run."""
-    r = current_run(rid)
+    r = current_run(root)
     return os.path.join(r, name) if r else None
 
 

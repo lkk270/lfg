@@ -127,11 +127,16 @@ PROTECTED_WRITE = [os.path.join(HOME, p) for p in (
     "Library/LaunchAgents")] + ["/etc", "/Library", "/System", "/usr", "/bin", "/sbin", "/opt/homebrew/etc"]
 
 
+# In any repo: the files that decide which dev-graph branch a repo uses and what of its knowledge stays out of git.
+# LFG writes them itself; an agent editing them could point a repo at another's knowledge or commit security reports.
+PROTECTED_IN_REPO = ("/.lfg/repo-id", "/.lfg/.gitignore")
+
+
 def is_protected_write(p):
     if not p:
         return False
     p = os.path.normpath(_expand(p))
-    return any(p == d or p.startswith(d + "/") for d in PROTECTED_WRITE)
+    return any(p == d or p.startswith(d + "/") for d in PROTECTED_WRITE) or p.endswith(PROTECTED_IN_REPO)
 
 
 # ------------------------------------------------------------------ helpers
@@ -611,7 +616,8 @@ def _rm(base, argv):
                 continue
             n = os.path.normpath(_expand(t))
             if n in ("/", HOME, os.path.dirname(HOME), "..", ".") or n.startswith(("/System", "/usr", "/bin")) \
-                    or n in (os.path.join(HOME, ".lfg"), os.path.join(HOME, ".claude")):
+                    or n in (os.path.join(HOME, ".lfg"), os.path.join(HOME, ".claude")) \
+                    or os.path.basename(n) == ".lfg":  # a repo's .lfg/ holds its uncommitted runs and knowledge
                 _block("13", "recursive delete of %s" % t, hard=n in (os.path.join(HOME, ".lfg"),
                                                                      os.path.join(HOME, ".claude")))
 
@@ -904,6 +910,11 @@ SELFTEST = [
     ("Bash", {"command": "lfg headroom setup --scope everywhere"}, True),
     ("Bash", {"command": "~/.local/bin/lfg add pentest -y"}, True),
     ("Write", {"file_path": "~/.lfg/enabled.json"}, True),
+    ("Write", {"file_path": "/r/app/.lfg/repo-id"}, True),
+    ("Edit", {"file_path": "/r/app/.lfg/.gitignore"}, True),
+    ("Write", {"file_path": "/r/app/.lfg/runs/x/01-brief.md"}, False),
+    ("Bash", {"command": "rm -rf .lfg"}, True),
+    ("Bash", {"command": "rm -rf .lfg/runs/x/scratch"}, False),
     ("Edit", {"file_path": "~/.lfg/state/ledger.json"}, True),
     ("Bash", {"command": "lfg prefs set rule_1 ask --by-user"}, True),
     ("Bash", {"command": "git merge --ff-only origin/main"}, True),

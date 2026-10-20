@@ -29,8 +29,8 @@ The guard exits 2 with: `Blocked by LFG rule <N>: <why>. A human must do this in
 
 1. Don't retry with a variant.
 2. Tell the user the exact command to run themselves, with paths filled in, e.g.
-   `git commit -F ~/.lfg/runs/<repo-id>/<run-id>/COMMIT_MSG.md`
-   `gh pr create --body-file ~/.lfg/runs/<repo-id>/<run-id>/PR_BODY.md`
+   `git commit -F .lfg/runs/<run-id>/COMMIT_MSG.md`
+   `gh pr create --body-file .lfg/runs/<run-id>/PR_BODY.md`
 3. Carry on with the read-only work that remains.
 
 ## Why two layers

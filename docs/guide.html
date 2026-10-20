@@ -303,7 +303,7 @@ lfg doctor</code></pre></div>
     </li>
     <li class="lfg"><span class="marker">7</span>
       <div class="step-head"><h4>The pipeline runs</h4><span class="who">LFG</span></div>
-      <p>Each stage writes its output to a run folder under <code>~/.lfg/runs/</code>, so any run can be resumed. LFG pauses at <a href="#checkpoints">checkpoints</a> for your approval. See <a href="#pipeline">How a run works</a>.</p>
+      <p>Each stage writes its output to a run folder under <code>.lfg/runs/</code> in the repo, so any run can be resumed. LFG pauses at <a href="#checkpoints">checkpoints</a> for your approval. See <a href="#pipeline">How a run works</a>.</p>
     </li>
     <li class="you"><span class="marker">8</span>
       <div class="step-head"><h4>Commit, push and open the pull request</h4><span class="who">You</span></div>
@@ -591,14 +591,15 @@ gh pr create --body-file "$(lfg run path PR_BODY.md)"</code></pre></div>
 <section id="files">
   <hr class="section">
   <h2>Files and folders</h2>
-  <p class="desc">LFG adds only its two git-ignored graph folders to your repositories. Everything else is stored in <code>~/.lfg</code> (mode 700) on your machine, with a 500 MB limit you can change under Settings → Disk space.</p>
+  <p class="desc">LFG adds its two git-ignored graph folders to your repositories, plus <code>.lfg/</code>, the repo's shared knowledge, which you commit. Everything else is stored in <code>~/.lfg</code> (mode 700) on your machine, with a 500 MB limit you can change under Settings → Disk space.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Location</th><th>Contents</th></tr></thead>
     <tbody>
-      <tr><td class="cmd"><code>~/.lfg/runs/&lt;repo-id&gt;/&lt;run-id&gt;/</code></td><td>Run outputs: <code>01-brief.md</code> to <code>07-shipcheck.json</code>, <code>tasks.json</code>, <code>progress.md</code>, <code>COMMIT_MSG.md</code>, <code>PR_BODY.md</code></td></tr>
+      <tr><td class="cmd"><code>&lt;repo&gt;/.lfg/runs/&lt;run-id&gt;/</code></td><td>Run outputs: <code>01-brief.md</code> to <code>07-shipcheck.json</code>, <code>tasks.json</code>, <code>progress.md</code> (committed; patches, logs, security reports and commit/PR text stay local)</td></tr>
+      <tr><td class="cmd"><code>&lt;repo&gt;/.lfg/nodes/</code></td><td>The team's dev-graph knowledge, one file per decision, gotcha, invariant or principle (committed)</td></tr>
       <tr><td class="cmd"><code>&lt;repo&gt;/.code-review-graph/</code>, <code>&lt;repo&gt;/graphify-out/</code></td><td>code-review-graph and graphify data (git-ignored; one graph for every branch and worktree)</td></tr>
       <tr><td class="cmd"><code>~/.lfg/graphs/&lt;repo-id&gt;/</code></td><td>Graph sync state, lock and log</td></tr>
-      <tr><td class="cmd"><code>~/.lfg/repos/&lt;repo-id&gt;/docs/</code></td><td>Glossary and architecture decision records</td></tr>
+      <tr><td class="cmd"><code>&lt;repo&gt;/.lfg/docs/</code></td><td>Glossary and architecture decision records (committed)</td></tr>
       <tr><td class="cmd"><code>~/.lfg/omnigraph/</code></td><td>dev-graph and second-brain data and server logs</td></tr>
       <tr><td class="cmd"><code>~/.lfg/config.json</code></td><td>Settings: models per role, lanes, pentest model, ports, Linear team</td></tr>
       <tr><td class="cmd"><code>~/.lfg/plugin/</code></td><td>Skills, agents, rules and hooks loaded by Claude Code</td></tr>

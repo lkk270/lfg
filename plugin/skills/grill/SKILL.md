@@ -3,7 +3,7 @@ name: grill
 description: >
   Interviews the user one question at a time, informed by the code graphs, until the
   goal, users, acceptance criteria and non-goals are sharp; records domain terms in the
-  glossary and hard-to-reverse decisions as ADRs (outside the repo), then writes the
+  glossary and hard-to-reverse decisions as ADRs (in the repo's .lfg/docs/), then writes the
   brief. Use when the user says "grill me", "poke holes in this", "what am I missing?",
   "stress-test this idea", "before we start…", or when a new feature request arrives
   with no brief in the current run.
@@ -21,7 +21,7 @@ adapted-from: mattpocock/skills/grilling + grill-with-docs + domain-modeling (MI
 
 1. Run `lfg graphs ensure`. If it exits non-zero, stop and show its output (only `--allow-stale` from the user overrides).
 2. Run `lfg run path`. If it fails, or the current run already has a `01-brief.md` for a different topic, run `lfg run new <slug>`. Call the run folder `RUN`.
-3. Run `lfg repo docs`; call the printed dir `DOCS`. Glossary = `DOCS/GLOSSARY.md`, ADRs = `DOCS/adr/`. Never write these into the repo.
+3. Run `lfg repo docs`; call the printed dir `DOCS`. Glossary = `DOCS/GLOSSARY.md`, ADRs = `DOCS/adr/`. They are committed with the repo's knowledge.
 4. Run `lfg rule domain-docs` and follow it for every glossary/ADR write.
 
 ## Steps

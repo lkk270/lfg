@@ -479,7 +479,7 @@ def secure(root, rid, target="diff", offline=False):
               "scanners": scanners, "findings": findings,
               "verdict": "don't" if blocking else ("safe with caveats" if warns else "safe"),
               "blocking": len(blocking), "offline": offline, "licences_checked": licences_checked}
-    run = C.current_run(rid)
+    run = C.current_run(root)
     if run and mode != "thing":
         C.write_json(os.path.join(run, "05-secure.json"), result)
     return result

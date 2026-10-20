@@ -92,7 +92,7 @@ def api(view, q):
         return dash.tools()
     if view == "knowledge":
         from . import knowledge as KN
-        k = dash.knowledge()
+        k = dash.knowledge(_rid(q))
         if k.get("available"):
             KN.enrich(k["decisions"], k["learnings"])
         return k
@@ -383,7 +383,7 @@ def run_checks(rid, run):
     import subprocess
     import sys
     root = dash.repo_root(rid) if rid in dash.repo_ids() else None
-    cur = C.current_run(rid) if root else None
+    cur = C.current_run(root) if root else None
     if not cur or os.path.basename(cur) != os.path.basename(str(run or "")):
         raise S.Invalid("Checks can only be re-run here for the project's current run; for another run, run "
                         "/lfg:check in it")

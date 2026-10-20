@@ -54,8 +54,8 @@ Trigger phrases, inputs and outputs for each: `lfg ui` → Skills, or the guide 
 
 ## Where things go
 
-- Every run writes numbered files to `~/.lfg/runs/<repo-id>/<run-id>/` (brief, design, build notes, QA, security, review, ship packet). Any skill can resume from them.
-- Graphs live in the repo's main checkout, in `.code-review-graph/` and `graphify-out/`. They're ignored through `.git/info/exclude`, never committed, and shared by every branch and worktree. Apart from those and the code changes, which are left unstaged, nothing is written into your repo.
+- Every run writes numbered files to the repo's `.lfg/runs/<run-id>/` (brief, design, build notes, QA, review), committed with the work so a teammate can pick it up; machine-only files (patches, logs, security reports, commit and PR text) are git-ignored there, and worktrees go to `lfg run scratch`. Any skill can resume from them.
+- Graphs live in the repo's main checkout, in `.code-review-graph/` and `graphify-out/`. They're ignored through `.git/info/exclude`, never committed, and shared by every branch and worktree. Apart from those, the repo's `.lfg/` knowledge and the code changes, all left unstaged, nothing is written into your repo.
 - Agents create worktrees next to the repo (`<repo>.worktrees/<branch>`, via `lfg worktree new`) when work needs another branch. Your checkout is never switched, and clean worktrees are removed after a day. See `lfg rule worktrees`.
 - `lfg ui` opens the local dashboard at http://127.0.0.1:7777.
 

@@ -85,6 +85,9 @@ def snapshot(root):
             i += 1
             if i < len(entries):
                 files[entries[i]] = None
+        if path == ".lfg/" or path.startswith(".lfg/"):  # LFG's own knowledge files, not code: never a reason to sync
+            i += 1
+            continue
         try:
             s = os.stat(os.path.join(root, path))
             files[path] = [s.st_mtime_ns, s.st_size]
@@ -195,8 +198,8 @@ def build_incremental(root, rid, files, timeout):
 # ---------------------------------------------------------------- lock
 
 class Lock(object):
-    def __init__(self, rid):
-        self.path = os.path.join(gdir(rid), ".lock")
+    def __init__(self, rid, name=".lock"):
+        self.path = os.path.join(gdir(rid), name)
         self.fd = None
 
     def acquire(self, blocking=True, timeout=None):

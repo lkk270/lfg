@@ -251,14 +251,36 @@ def serve(name):
     _exec([exe, "--cluster", ".", "--bind", "127.0.0.1:%d" % g["port"]], env)
 
 
+def repo_branch(name, root=None):
+    """dev-graph keeps each repo on its own branch, repo/<repo-id> (teamknowledge.py); second-brain is one personal
+    graph on main. None outside a repo."""
+    if name != "dev-graph":
+        return None
+    root = root or C.repo_root()
+    if not root:
+        return None
+    from . import teamknowledge as K
+    return K.branch_for(root)
+
+
 def mcp(name):
-    """Claude Code MCP entry point: the official stdio bridge, as the writer role, for this one graph."""
+    """Claude Code MCP entry point: the official stdio bridge, as the writer role, for this one graph. In a repo,
+    dev-graph is pinned to the repo's branch, created first so the agent's first query finds it."""
     g = _graph(name)
     npx = _which("npx")
     if not npx:
         C.die("npx not found (install node)", 2)
     env = dict(os.environ, OMNIGRAPH_BASE_URL=url(name), OMNIGRAPH_GRAPH_ID=g["graph"],
                OMNIGRAPH_TOKEN=tokens()["act-writer"])
+    root = C.repo_root() if name == "dev-graph" else None
+    branch = repo_branch(name, root)
+    if branch:
+        from . import teamknowledge as K
+        try:
+            K.ensure_locked(root)
+        except RuntimeError as e:  # the server is down: the bridge still starts and reports it on first use
+            sys.stderr.write("lfg: dev-graph branch %s not checked: %s\n" % (branch, e))
+        env["OMNIGRAPH_DEFAULT_BRANCH"] = branch
     env["PATH"] = env.get("PATH", "") + os.pathsep + os.pathsep.join(EXTRA_PATH)
     _exec([npx, "-y", cfg()["mcp_package"]], env)
 
@@ -290,19 +312,27 @@ def _rows(res):
     return out
 
 
-def read(name, query, qname, params=None):
-    """Ad-hoc read query (GQ text) on graph `name` (read-only route)."""
-    return _rows(_post(name, "/query", {"query": query, "name": qname, "params": params or {}}))
+def _on(body, branch):
+    if branch:
+        body["branch"] = branch
+    return body
 
 
-def invoke(name, stored, params=None):
+def read(name, query, qname, params=None, branch=None):
+    """Ad-hoc read query (GQ text) on graph `name` (read-only route), on `branch` (default main)."""
+    return _rows(_post(name, "/query", _on({"query": query, "name": qname, "params": params or {}}, branch)))
+
+
+def invoke(name, stored, params=None, branch=None):
     """Invoke a stored (read) query registered from the cookbook's queries/*.gq."""
-    return _rows(_post(name, "/queries/%s" % urllib.parse.quote(stored), {"params": params or {}}))
+    return _rows(_post(name, "/queries/%s" % urllib.parse.quote(stored), _on({"params": params or {}}, branch)))
 
 
-def mutate(name, query, qname, params=None):
-    """GQ mutation on `main` as the writer role. Only the lfg CLI calls this (run bookkeeping), never the UI."""
-    return _post(name, "/mutate", {"query": query, "name": qname, "params": params or {}}, role="act-writer")
+def mutate(name, query, qname, params=None, branch=None):
+    """GQ mutation as the writer role, on `branch` (default main). Only the lfg CLI calls this (run bookkeeping),
+    never the UI."""
+    return _post(name, "/mutate", _on({"query": query, "name": qname, "params": params or {}}, branch),
+                 role="act-writer")
 
 
 def restart(name):

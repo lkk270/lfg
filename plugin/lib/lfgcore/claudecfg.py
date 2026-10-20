@@ -248,6 +248,25 @@ def lines_add(path, lines, why, group, tag=None, **extra):
                         created_file=not existed))
 
 
+def lines_take_back(path, line, **match):
+    """Remove one line an earlier lines_add recorded (and only if it did), and drop it from that entry, so undo
+    stays exact. Returns True when the line was LFG's and is gone."""
+    d = _load()
+    hit = [e for e in d["entries"] if not e.get("undone") and e.get("kind") == "lines" and e.get("target") == path
+           and line in (e.get("added") or []) and all(e.get(k) == v for k, v in match.items())]
+    if not hit:
+        return False
+    for e in hit:
+        e["added"] = [ln for ln in e["added"] if ln != line]
+    _save(d)
+    if os.path.exists(path):
+        backup(path)
+        kept = [ln for ln in C.read_text(path).splitlines() if ln != line]
+        with open(path, "w") as f:
+            f.write("".join(ln + "\n" for ln in kept))
+    return True
+
+
 def link(path, to, why, group, tag=None):
     if os.path.islink(path) and os.readlink(path) == to:
         return None

@@ -29,9 +29,9 @@ Stop at the first tier that answers the question.
 
 Both run locally (`lfg omnigraph status`). The MCP `query` and `mutate` tools take the full GQ text in `query`, the query `name` and its `params`; they don't look up stored queries by name. Copy the query you need from `~/.lfg/plugin/omnigraph/<dev-graph|second-brain>.gq` (LFG's: `find_decisions`, `find_learnings`, `find_invariants`, `find_principles`, `find_gaps`, `find_issues`; `find_notes`, `save_note`) or from the cookbook's `~/.lfg/omnigraph/<graph>/queries/*.gq` (e.g. `unheld_invariants`, `record_decision`, `add_learning`), and call `schema_get` first if unsure of a type.
 
-Search with LFG's `find_*` queries: keyword search that runs inside the local server, with no API key. Never use the cookbook's `search_*` queries; they need an embedding API key that LFG does not use, and they fail without one. Writes go to `main` as the writer role.
+Search with LFG's `find_*` queries: keyword search that runs inside the local server, with no API key. Never use the cookbook's `search_*` queries; they need an embedding API key that LFG does not use, and they fail without one. Writes go to this repo's branch as the writer role: the dev-graph MCP is pinned to it, so never name a branch (above all not `main`). `lfg knowledge sync` copies what you save into the repo's `.lfg/nodes/`, where the user commits it. second-brain is personal, on `main`.
 
-`<repo-id>` is the parent folder name of `lfg run path`'s output (`~/.lfg/runs/<repo-id>/<run-id>`).
+`<repo-id>` is what `lfg repo id` prints (stored in the repo's `.lfg/repo-id`).
 
 ## Habits
 

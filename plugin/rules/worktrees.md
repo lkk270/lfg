@@ -14,7 +14,7 @@ Worktrees are your tool, not the user's chore. Decide on your own whether one is
 |---|---|
 | The work belongs on a branch other than the one checked out (the user named one, the issue/PR is on one, a bug only on `release/x`, reviewing a PR branch) | `lfg worktree new <branch>` (an existing branch is checked out as is) |
 | New, separate work while the checkout has uncommitted changes that belong to something else | `lfg worktree new lfg/<run-slug>` (a new branch from HEAD; `--from <ref>` for another base) so the two never mix |
-| Parallel `/build` tickets | `/build`'s own throwaway worktrees in `RUN/wt/<id>` (patches, cleaned up by `/build`); not `lfg worktree` |
+| Parallel `/build` tickets | `/build`'s own throwaway worktrees in `SCRATCH/wt/<id>` (patches, cleaned up by `/build`); not `lfg worktree` |
 | Work on the branch already checked out, on a clean checkout or on its own changes | No worktree |
 
 If `lfg worktree new` fails because the branch is already checked out elsewhere, work in that existing worktree (`lfg worktree list`).
@@ -36,4 +36,4 @@ In your final reply, one line: where the changes are (`<path>`, branch `<branch>
 
 - `lfg worktree list` shows every worktree; `*` marks the ones `lfg worktree` made.
 - When a task ends with no changes in its worktree, run `lfg worktree remove <name>` yourself. SessionStart already removes `*` worktrees that are clean and unused for 24 hours (for example, the user committed there), so nobody has to. `remove` is safe to call: it refuses when there are uncommitted or untracked changes, never forces, and keeps the branch. A refusal means the user's work is there, so leave it.
-- Never `git worktree remove --force` or delete a worktree folder by hand outside `/build`'s `RUN/wt/`.
+- Never `git worktree remove --force` or delete a worktree folder by hand outside `/build`'s `SCRATCH/wt/`.

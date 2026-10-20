@@ -25,7 +25,7 @@ preflight: graphs
 ## Steps
 
 1. **Scope the change.** `detect_changes_tool` on the working tree (uncommitted work included) → the changed nodes. Note the lane from `tasks.json` or `lfg lane --json`.
-2. **Lint, fixed by hand.** Run the repo's lint/format autofix command (from `~/.lfg/repos/<repo-id>/commands.json`, else the repo's own scripts). Then fix every remaining error and warning in the touched files by editing the code. The fix is always in the code: the lint config, rule list and inline directives stay as they were.
+2. **Lint, fixed by hand.** Run the repo's lint/format autofix command (from the repo's `.lfg/commands.json`, else the repo's own scripts). Then fix every remaining error and warning in the touched files by editing the code. The fix is always in the code: the lint config, rule list and inline directives stay as they were.
 3. **Types.** Run the repo's type-check command. Fix every error at its cause.
 4. **Affected tests first.** For each changed node: `query_graph_tool` with `tests_for`. Run just those tests for fast feedback. Changed nodes with no test → record as **untested** (gate 2) and tell the user; write the missing test if the seam is agreed in `tasks.json`.
 5. **The gate.** `lfg gate` (one line per check, output only for failures; full logs in `RUN/gate-logs/<check>.log`, read one only if the shown lines aren't enough): lint, types, full suite, build, gitleaks, new-suppression check, from exit codes. It writes `ready.json`. Read the per-check results from its output, never from memory.

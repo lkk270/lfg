@@ -432,11 +432,13 @@ def _test_gaps(rid, root, db):
 
 
 def _incidents(rid):
+    from . import teamknowledge as K
     from . import omnigraph as OG
+    br = K.branch(rid)  # this repo's incidents: generated for the main checkout, whose branch this is
     try:
         inc = OG.read("dev-graph", "query incidents() { match { $i: Incident } return { $i.slug, $i.title, "
                                    "$i.severity, $i.status, $i.summary, $i.startedAt } order { $i.startedAt desc } "
-                                   "limit 50 }", "incidents")
+                                   "limit 50 }", "incidents", branch=br)
     except Exception:
         return None
     if not inc:
@@ -450,7 +452,7 @@ def _incidents(rid):
         for name, title in (("incident_root_cause", "Root cause"), ("incident_components", "Components"),
                             ("learnings_for_incident", "Learnings")):
             try:
-                rows = OG.invoke("dev-graph", name, {"incident": slug})
+                rows = OG.invoke("dev-graph", name, {"incident": slug}, branch=br)
             except Exception:
                 rows = []
             if rows:

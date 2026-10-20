@@ -5,7 +5,7 @@ Rule module: domain-docs · LFG · author Varun Singh · adapted from mattpocock
 ## Location
 
 - Run `lfg repo docs` and use the printed dir (`DOCS`). Glossary: `DOCS/GLOSSARY.md`. ADRs: `DOCS/adr/NNNN-<slug>.md`.
-- **Never** write a glossary or ADR into the repo. If the repo already has its own `GLOSSARY.md` or `docs/adr/`, read them as input but write to `DOCS`.
+- Write only to `DOCS` (the repo's `.lfg/docs/`, committed with the repo's knowledge). If the repo already has its own `GLOSSARY.md` or `docs/adr/`, read them as input but write to `DOCS`.
 - Create files lazily: only when the first term or decision is resolved.
 - Multiple bounded contexts: `DOCS/GLOSSARY-MAP.md` lists each context, its code area, and how contexts relate; each context gets `DOCS/<context>/GLOSSARY.md`. Infer the context from the topic; ask if unclear.
 

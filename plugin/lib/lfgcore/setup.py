@@ -19,8 +19,11 @@ from . import common as C
 
 EXTRA_PATH = [os.path.join(C.HOME, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 PLUGIN_ID = "lfg@lfg"
-EXCLUDE_ENTRIES = ["graphify-out/", ".code-review-graph/", ".lfg/", "strix_runs/", ".headroom/", ".scratch/",
+# Never .lfg/: it holds the repo's shared knowledge, committed (its own .lfg/.gitignore keeps the machine-only parts
+# out). Older versions excluded it; `enable` takes that line back.
+EXCLUDE_ENTRIES = ["graphify-out/", ".code-review-graph/", "strix_runs/", ".headroom/", ".scratch/",
                    ".out-of-scope/"]
+SHARED_DIR_LINE = ".lfg/"
 
 # Deny rules for "hardened mode" (a second layer behind the guard hook, written to each LFG repo's
 # .claude/settings.local.json, never to your user settings). Older LFG versions wrote exactly these to
@@ -282,6 +285,8 @@ def enable(path, hardened=None, build=True):
     if os.path.isdir(os.path.join(root, ".git")) and CC.lines_add(
             exclude, EXCLUDE_ENTRIES, "Keep LFG's graph folders out of git status", "repo", tag="exclude", repo=root):
         done.append("graph folders ignored in .git/info/exclude")
+    if CC.lines_take_back(exclude, SHARED_DIR_LINE, tag="exclude", repo=root):
+        done.append(".lfg/ visible to git again (the repo's shared knowledge)")
     _set_enabled(root, True)
     if hardened if hardened is not None else C.config()["guard"].get("hardened"):
         if CC.json_list_add(_local_settings(root), ["permissions", "deny"], HARDENED_DENY,

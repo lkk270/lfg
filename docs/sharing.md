@@ -25,7 +25,7 @@ Got LFG as a zip instead? Unzip it, then from that folder run `xattr -dr com.app
 cd your-repo && lfg enable
 ```
 
-This switches the plugin on for that one repo, using Claude Code's own per-repo setting (`enabledPlugins` in `.claude/settings.local.json`, which git ignores). It also keeps LFG's graph folders out of `git status` through `.git/info/exclude`. In every other repo, Claude Code behaves as if LFG weren't installed. `lfg disable` undoes exactly what `enable` did. You can do both from `lfg ui` → Settings → Claude Code.
+This switches the plugin on for that one repo, using Claude Code's own per-repo setting (`enabledPlugins` in `.claude/settings.local.json`, which git ignores). It also keeps LFG's graph folders out of `git status` through `.git/info/exclude`, but not `.lfg/`, which holds the repo's shared knowledge (below). In every other repo, Claude Code behaves as if LFG weren't installed. `lfg disable` undoes exactly what `enable` did. You can do both from `lfg ui` → Settings → Claude Code.
 
 ## Feature packs
 
@@ -57,6 +57,25 @@ Core is all LFG needs. Add the rest when you want them, from the dashboard or wi
 4. With the Linear pack, run `/mcp` and sign in to **Linear**. With the Pentest pack, open **LuLu** once and approve its system extension.
 5. `lfg ui` opens the dashboard at http://127.0.0.1:7777. Help explains every page.
 6. Try `/lfg:which` (what to do next) or `/lfg:wizard <idea>` (a guided run).
+
+## Share a repo's knowledge
+
+What LFG learns about a repo lives in the repo, in `.lfg/`, and is committed with the work: each feature's run (brief,
+design, build notes, QA, review, progress), the glossary and ADRs, the lint/test/build commands, and the team's
+dev-graph knowledge (decisions, gotchas, invariants, principles) as one markdown file per item in `.lfg/nodes/`. Whoever
+checks out a branch gets that branch's context; a pull brings in teammates' additions.
+
+- **You commit it.** LFG writes into `.lfg/` and leaves the changes unstaged, like any other change. Commit them with
+  the feature.
+- **What stays on your machine:** which run is current, patches, gate logs, worktrees, commit and PR text, and
+  security and pentest reports (`.lfg/.gitignore`). Your second-brain is personal and never leaves your machine.
+- **Taking over a teammate's feature:** check out their branch and start Claude Code. LFG offers the unfinished run on
+  that branch; `lfg run use <run-id>` picks it up.
+- **dev-graph** keeps each repo on its own branch and rebuilds it from `.lfg/nodes/` at the start of every session. If
+  you and a teammate edit the same item, git shows a conflict in that one file; resolve it like code.
+- **Upgrading from 0.2:** runs and docs were in `~/.lfg`. `lfg knowledge migrate --dry-run` shows what would move into
+  the repo; drop `--dry-run` to move it (originals are backed up in `~/.lfg/backups/`).
+- A repo that can't hold LFG's folder isn't supported yet.
 
 ## Team settings worth agreeing on
 

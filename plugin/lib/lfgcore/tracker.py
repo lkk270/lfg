@@ -6,6 +6,7 @@ Skills call these at fixed points; the dashboard only reads."""
 import datetime
 import os
 import re
+import secrets
 
 from . import common as C
 
@@ -22,6 +23,11 @@ STAGES = {"grill": "todo", "plan": "todo", "fix": "in_progress", "build": "in_pr
 
 LOOKUP = """query issue_lookup($slug: String) {
     match { $i: Issue { slug: $slug } }
+    return { $i.slug, $i.title, $i.status, $i.legacyRef }
+}"""
+
+TITLE_LOOKUP = """query issue_by_title($title: String) {
+    match { $i: Issue { title: $title } }
     return { $i.slug, $i.title, $i.status, $i.legacyRef }
 }"""
 
@@ -44,9 +50,31 @@ def _og():
     return OG
 
 
+def _branch():
+    from . import omnigraph as OG
+    return OG.repo_branch(GRAPH)
+
+
 def lookup(slug):
-    rows = _og().read(GRAPH, LOOKUP, "issue_lookup", {"slug": slug})
+    rows = _og().read(GRAPH, LOOKUP, "issue_lookup", {"slug": slug}, branch=_branch())
     return rows[0] if rows else None
+
+
+def resolve(key, new=True):
+    """The Issue slug for a tracker id, a slug or a title. A title nobody used yet gets a short random suffix, so two
+    people's "fix login" stay two issues once the repo's knowledge is shared; new=False returns None for it instead.
+    With dev-graph down a title can't be matched, so it gets a fresh suffixed key."""
+    slug = slug_for(key)
+    if REF.match(key.strip()) or key.strip().startswith("iss-"):
+        return slug
+    try:
+        rows = _og().read(GRAPH, TITLE_LOOKUP, "issue_by_title", {"title": key.strip()}, branch=_branch())
+    except RuntimeError:
+        rows = []
+    for row in rows:
+        if str(row.get("slug", "")).startswith("iss-"):
+            return row["slug"]
+    return "%s-%s" % (slug, secrets.token_hex(2)) if new else None
 
 
 def _mutation(verb, fields, slug_param=True):
@@ -67,7 +95,7 @@ def _mutation(verb, fields, slug_param=True):
 
 def sync(key, title=None, issue_type=None, status=None, priority=None, description=None, criteria=None):
     """Create the Issue if it's missing, else update the fields given. Returns {slug, action, status}."""
-    slug = slug_for(key)
+    slug = resolve(key)
     if status and status not in STATUSES:
         C.die("status must be one of %s" % ", ".join(STATUSES), 2)
     if issue_type and issue_type not in TYPES:
@@ -90,7 +118,7 @@ def sync(key, title=None, issue_type=None, status=None, priority=None, descripti
         verb = "insert"
     query, name = _mutation(verb, list(fields))
     params = dict(fields, slug=slug, actor=ACTOR, at=datetime.date.today().isoformat())
-    _og().mutate(GRAPH, query, name, params)
+    _og().mutate(GRAPH, query, name, params, branch=_branch())
     return {"slug": slug, "action": "created" if verb == "insert" else "updated",
             "status": fields.get("status") or (found or {}).get("status")}
 

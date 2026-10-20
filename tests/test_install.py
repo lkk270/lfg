@@ -214,6 +214,21 @@ class SetupFlowTest(Sandbox):
         self.assertFalse(res["ok"])
         self.assertFalse(os.path.lexists(os.path.join(self.home, ".local", "bin", "lfg")))
 
+    def test_enable_shows_lfg_folder_to_git_again_but_only_lfgs_own_line(self):
+        ex = os.path.join(self.repo, ".git", "info", "exclude")
+        CC.lines_add(ex, ["graphify-out/", ".lfg/"], "Keep LFG's graph folders out of git status", "repo",
+                     tag="exclude", repo=os.path.realpath(self.repo))  # what an older `lfg enable` left
+        SU.enable(self.repo, build=False)
+        lines = C.read_text(ex).splitlines()
+        self.assertNotIn(".lfg/", lines)
+        self.assertIn("graphify-out/", lines)
+        SU.disable(self.repo)
+        self.assertNotIn("graphify-out/", C.read_text(ex).splitlines())
+        with open(ex, "a") as f:
+            f.write(".lfg/\n")  # the user's own line
+        SU.enable(self.repo, build=False)
+        self.assertIn(".lfg/", C.read_text(ex).splitlines())
+
     def test_enable_keeps_an_existing_claude_folder_and_your_local_settings(self):
         os.makedirs(os.path.join(self.repo, ".claude"))
         p = os.path.join(self.repo, ".claude", "settings.local.json")
