@@ -344,7 +344,8 @@ def usage(days=30):
             if day < since:
                 continue
             for model, t in models.items():
-                dd = per_day.setdefault(day, dict.fromkeys(FIELDS + ("usd",), 0))
+                dd = per_day.setdefault(day, dict(dict.fromkeys(FIELDS + ("usd",), 0), models={}))
+                dm = dd["models"].setdefault(model, dict.fromkeys(FIELDS + ("usd",), 0))
                 mm = per_model.setdefault(model, dict.fromkeys(FIELDS + ("usd",), 0))
                 usd = cost(model, t)
                 if usd is None:
@@ -353,11 +354,15 @@ def usage(days=30):
                 for k in FIELDS:
                     dd[k] += t[k]
                     mm[k] += t[k]
+                    dm[k] += t[k]
+                dm["usd"] += usd
                 dd["usd"] += usd
                 mm["usd"] += usd
                 spend["30d"] += usd
                 spend["7d"] += usd if day >= week else 0
                 spend["today"] += usd if day == today else 0
+    for dd in per_day.values():
+        dd["models"] = {m: dict(v, usd=round(v["usd"], 4)) for m, v in dd["models"].items()}
     as_rows = lambda d, k: [dict(v, **{k: n}) for n, v in sorted(d.items())]  # noqa: E731
     return {"days": [dict(r, cache_write=r["cache_write_5m"] + r["cache_write_1h"]) for r in as_rows(per_day, "day")],
             "models": sorted([dict(r, cache_write=r["cache_write_5m"] + r["cache_write_1h"])

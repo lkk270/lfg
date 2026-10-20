@@ -138,7 +138,7 @@ def api(view, q):
     if view == "skillgroups":
         return S.skill_groups()
     if view == "headroom":
-        return dash.headroom_detail()
+        return dash.headroom_detail(int(_arg(q, "days") or 30) if (_arg(q, "days") or "").isdigit() else 30)
     if view == "environment":
         from . import env as E
         if _arg(q, "fresh") == "1":
@@ -206,7 +206,7 @@ def api(view, q):
     if view == "branches":
         return dash.branches(rid)
     if view == "usage":
-        return dash.usage(rid)
+        return dash.usage(rid, int(_arg(q, "days")) if (_arg(q, "days") or "").isdigit() else 30)
     if view == "graphs":
         return dash.graph_state(rid)
     return {"available": False, "why": "unknown view"}

@@ -720,25 +720,27 @@ def _spend():
     return out
 
 
-def _all_usage():
+def _all_usage(days=30):
     from . import sessions as SS
-    d = SS.usage()
+    d = SS.usage(days=days)
     d["available"] = True
     return d
 
 
-def headroom_detail():
+def headroom_detail(days=30):
     from . import hrstats
-    return in_background("headroom_detail", 120, lambda: dict(hrstats.summary(), available=True),
+    days = 90 if days > 30 else 30
+    return in_background("headroom_detail_%d" % days, 120, lambda: dict(hrstats.summary(days), available=True),
                          "reading Headroom's logs")
 
 
-def usage(rid):
+def usage(rid, days=30):
     """Per day, per model and dollars from every Claude Code session's own log (whether or not LFG is on there);
     per-run and per-project rows from LFG's usage.db, which only records repos where LFG is on."""
     p = C.lfg_path("usage.db")
     out = {"rows": [], "days": [], "models": [], "headroom": headroom(), "spend": spend()}
-    every = in_background("all_usage", 120, _all_usage, "adding up usage")
+    days = 90 if days > 30 else 30
+    every = in_background("all_usage_%d" % days, 120, lambda: _all_usage(days), "adding up usage")
     if every.get("available"):
         out["days"], out["models"] = every["days"], every["models"]
         out["spend"] = {"available": True, "today": every["spend"]["today"], "7d": every["spend"]["7d"],

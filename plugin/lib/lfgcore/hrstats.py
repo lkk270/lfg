@@ -166,7 +166,7 @@ def where():
             "repos": sorted(repos.values(), key=lambda g: -g["saved"])}
 
 
-def summary():
+def summary(days=30):
     from . import headroom as HR
     return {"live": HR.live(timeout=1), "routed": HR.routed(), "scope": HR.scope(), "port": HR.port(),
-            "when": when(), "where": where()}
+            "when": when(days), "where": where()}

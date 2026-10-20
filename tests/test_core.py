@@ -1224,7 +1224,12 @@ class PrefsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         P.clear_session(self.SID)
         _, out = self.hook("prompt", {"session_id": self.SID})
-        self.assertIn("back to your default", out)
+        self.assertIn("default rules, with no session changes", out)
+        self.hook("prompt", {"session_id": "22222222-2222-3333-4444-555555555555"})  # an open session
+        P.set_pref("coauthor", True)  # a default changes in the dashboard
+        _, out = self.hook("prompt", {"session_id": "22222222-2222-3333-4444-555555555555"})
+        self.assertIn("changed their default rules", out)
+        self.assertEqual(self.hook("prompt", {"session_id": "22222222-2222-3333-4444-555555555555"})[1], "")
 
     def test_defaults_file_and_hard_rules(self):
         P = self.P

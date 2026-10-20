@@ -27,27 +27,27 @@ PROTECTED_BRANCHES = ("main", "master", "qa", "prod", "production")
 BUILTIN = [
     {"id": "commits", "group": "Git", "title": "Commits", "kind": "choice", "default": "ask", "enforce": True,
      "options": [
-         {"value": "never", "label": "Never, I commit", "text": "Never run `git commit`. Leave changes uncommitted and "
-          "give me the commit message to use."},
-         {"value": "ask", "label": "Only when I ask", "text": "Commit only when I ask you to in this session."},
-         {"value": "auto", "label": "When a change is done and checks pass", "text": "Commit on your own when a "
-          "change is complete and its tests and checks pass, one commit per logical change, without asking."}]},
+         {"value": "never", "label": "Never: I make every commit", "text": "Never run `git commit`. Leave changes "
+          "uncommitted and give me the commit message to use."},
+         {"value": "ask", "label": "When I say so", "text": "Commit only when I ask you to in this session."},
+         {"value": "auto", "label": "On its own, once tests pass", "text": "Commit on your own when a change is "
+          "complete and its tests and checks pass, one commit per logical change, without asking."}]},
     {"id": "amend", "group": "Git", "title": "Amend the last commit", "kind": "switch", "default": False,
      "enforce": True, "text": "You may amend the last commit (`git commit --amend`) when it is unpushed or on my own "
      "branch.", "off_text": "Never amend a commit; make a new one."},
     {"id": "push", "group": "Git", "title": "Push", "kind": "choice", "default": "ask", "enforce": True,
      "options": [
-         {"value": "never", "label": "Never, I push", "text": "Never run `git push`."},
-         {"value": "ask", "label": "Only when I ask", "text": "Push only when I ask you to in this session."},
-         {"value": "auto", "label": "After committing", "text": "Push right after each commit, to the branch you're "
-          "on."}]},
+         {"value": "never", "label": "Never: I push", "text": "Never run `git push`."},
+         {"value": "ask", "label": "When I say so", "text": "Push only when I ask you to in this session."},
+         {"value": "auto", "label": "After every commit", "text": "Push right after each commit, to the branch "
+          "you're on."}]},
     {"id": "force_push", "group": "Git", "title": "Force-push my own branch", "kind": "switch", "default": False,
      "enforce": True, "text": "You may force-push (prefer `--force-with-lease`) a branch that isn't main, master, "
      "qa or prod, e.g. after amending or rebasing my own work.", "off_text": "Never force-push."},
     {"id": "merge_pr", "group": "GitHub", "title": "Merging PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
-         {"value": "never", "label": "Never, I merge", "text": "Never merge a pull request."},
-         {"value": "squash", "label": "Squash-merge when I ask",
+         {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
+         {"value": "squash", "label": "When I say so, squashed",
           "text": "Merge a PR only when I ask, and always as one squashed commit (`gh pr merge --squash`)."}]},
     {"id": "coauthor", "group": "Git", "title": "Claude as co-author", "kind": "switch", "default": False,
      "text": "End commit messages with a Co-Authored-By line for Claude, and PR bodies with the Claude Code line.",
@@ -326,18 +326,30 @@ def hook(event):
     try:
         d = load()
         if event in ("session-start", "prompt"):
+            # A session read the defaults file when it started. Tell it again only when something changed since:
+            # its own rules (from Sessions → Rules) or the defaults (from Preferences).
             note = session_note(sid, d)
-            digest = hashlib.sha1(note.encode()).hexdigest()[:12]
+            dflt = render(effective(None, d), d, header="Your rules (defaults)")
+            digest = hashlib.sha1((note + "\0" + dflt).encode()).hexdigest()[:12]
             seen = _seen()
-            if event == "prompt" and seen.get(sid) == digest:
-                return 0
-            if event == "prompt" or note:
-                seen[sid] = digest
-                C.write_json(_seen_path(), dict(list(seen.items())[-500:]))
-            if note or (event == "prompt" and sid in seen):
+            prev = seen.get(sid)
+            seen[sid] = {"digest": digest, "defaults": hashlib.sha1(dflt.encode()).hexdigest()[:12]}
+            C.write_json(_seen_path(), dict(list(seen.items())[-500:]))
+            if event == "session-start":
+                out = note
+            else:
+                if not isinstance(prev, dict) or prev.get("digest") == digest:
+                    return 0
+                parts = []
+                if prev.get("defaults") != seen[sid]["defaults"]:
+                    parts.append(dflt + "\nThe user changed their default rules while this session was open; these "
+                                 "replace lfg-preferences.md as you read it at the start.")
+                parts.append(note or "This session now follows the user's default rules, with no session changes.")
+                out = "\n\n".join(parts)
+            if out:
                 print(json.dumps({"hookSpecificOutput": {
                     "hookEventName": "SessionStart" if event == "session-start" else "UserPromptSubmit",
-                    "additionalContext": note or "This session is back to your default rules (lfg-preferences.md)."}}))
+                    "additionalContext": out}}))
             return 0
         if event == "pre-tool":
             tool, ti = data.get("tool_name"), data.get("tool_input") or {}

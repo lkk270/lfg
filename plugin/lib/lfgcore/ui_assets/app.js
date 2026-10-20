@@ -181,6 +181,80 @@ function mountTabs(root = document) {
 }
 
 /* simple bar chart: data=[{label, values:[...]}], series=[[name,color]] */
+/* Interactive bars: hover or focus a day for its numbers, click it to pin it (onPick), click a legend key to hide a
+   series. data: [{label, values: [..], raw}], series: [[name, color, fmt]]. The y-axis gutter fits its labels. */
+const ICHARTS = {};
+let ICID = 0;
+function iChart(data, series, opts = {}) {
+  const id = "ic" + ++ICID;
+  ICHARTS[id] = { data, series, opts, hidden: new Set(opts.hidden || []), pick: opts.pick ?? null };
+  return `<div class="ichart" id="${id}">${iChartBody(id)}</div>`;
+}
+function iChartBody(id) {
+  const C = ICHARTS[id], { data, series, opts } = C, h = opts.h || 180;
+  if (!data.length) return '<div class="muted small">Nothing recorded in this period.</div>';
+  const fmt = series[0][2] || compact;
+  const shown = series.map((_, j) => !C.hidden.has(j));
+  const tot = d => d.values.reduce((a, v, j) => a + (shown[j] ? v || 0 : 0), 0);
+  const max = Math.max(...data.map(tot), 1);
+  const P = Math.max(34, 8 + 7 * fmt(max).length), W = 760, top = 14, base = h - 22;
+  const step = (W - P - 8) / data.length, bw = Math.max(3, Math.min(28, step - Math.max(2, step * 0.18)));
+  const x = i => P + 4 + i * step + (step - bw) / 2;
+  const every = Math.ceil(data.length / 9);
+  let bars = "";
+  data.forEach((d, i) => {
+    let y = base;
+    const segs = d.values.map((v, j) => {
+      if (!shown[j] || !v) return "";
+      const bh = Math.max(1, (v / max) * (base - top));
+      y -= bh;
+      return `<rect x="${x(i)}" y="${y}" width="${bw}" height="${bh}" rx="2" style="fill:${series[j][1]}"></rect>`;
+    }).join("");
+    bars += `<g class="bar ${C.pick === i ? "on" : ""}" data-i="${i}" tabindex="0" role="button" aria-label="${esc(d.label)}: ${esc(series.map((sr, j) => shown[j] ? sr[0] + " " + (sr[2] || compact)(d.values[j] || 0) : "").filter(Boolean).join(", "))}"><rect class="hit" x="${P + 4 + i * step}" y="${top}" width="${step}" height="${base - top}"></rect>${segs}</g>`;
+    if (i % every === 0 || data.length <= 10) bars += `<text x="${x(i) + bw / 2}" y="${h - 6}" text-anchor="middle">${esc(d.short || d.label.slice(5))}</text>`;
+  });
+  const grid = [0, 0.5, 1].map(t => `<line class="axis${t ? " faint" : ""}" x1="${P}" x2="${W}" y1="${base - t * (base - top)}" y2="${base - t * (base - top)}"/><text x="${P - 6}" y="${base - t * (base - top) + 4}" text-anchor="end">${esc(fmt(max * t))}</text>`).join("");
+  const legend = series.length > 1 ? `<div class="legend">${series.map(([nm, c], j) => `<button class="lkey ${shown[j] ? "" : "off"}" data-ic-key="${j}" title="Show or hide ${esc(nm)}"><i style="background:${c}"></i>${esc(nm)}</button>`).join("")}</div>` : "";
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${h}" role="img" aria-label="${esc(opts.title || "")}">${grid}${bars}</svg><div class="ic-tip" hidden></div></div>${legend}`;
+}
+function wireIChart(id) {
+  const el = document.getElementById(id), C = ICHARTS[id];
+  if (!el || !C) return;
+  const tip = $(".ic-tip", el), svg = $("svg", el);
+  const show = (g, ev) => {
+    const i = +g.dataset.i, d = C.data[i];
+    tip.textContent = "";
+    const t = document.createElement("div"); t.className = "ic-t"; t.textContent = d.label; tip.appendChild(t);
+    C.series.forEach(([nm, c, f], j) => {
+      if (C.hidden.has(j)) return;
+      const r = document.createElement("div"); r.className = "ic-r";
+      const k = document.createElement("i"); k.style.background = c;
+      const v = document.createElement("b"); v.textContent = (f || compact)(d.values[j] || 0);
+      const l = document.createElement("span"); l.textContent = nm;
+      r.append(k, v, l); tip.appendChild(r);
+    });
+    if (C.opts.onPick) { const h = document.createElement("div"); h.className = "ic-h"; h.textContent = "Click for the breakdown"; tip.appendChild(h); }
+    tip.hidden = false;
+    const box = el.querySelector(".chart").getBoundingClientRect(), gr = g.getBoundingClientRect();
+    const left = Math.min(Math.max(gr.left - box.left + gr.width / 2 - tip.offsetWidth / 2, 0), box.width - tip.offsetWidth);
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(0, gr.top - box.top - tip.offsetHeight - 6) + "px";
+  };
+  $$("g.bar", svg).forEach(g => {
+    g.onpointerenter = e => show(g, e);
+    g.onfocus = e => show(g, e);
+    g.onpointerleave = g.onblur = () => (tip.hidden = true);
+    const pick = () => { if (!C.opts.onPick) return; C.pick = C.pick === +g.dataset.i ? null : +g.dataset.i; el.innerHTML = iChartBody(id); wireIChart(id); C.opts.onPick(C.pick); };
+    g.onclick = pick;
+    g.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+  });
+  $$("[data-ic-key]", el).forEach(b => b.onclick = () => {
+    const j = +b.dataset.icKey;
+    if (C.hidden.has(j)) C.hidden.delete(j); else if (C.hidden.size < C.series.length - 1) C.hidden.add(j);
+    el.innerHTML = iChartBody(id); wireIChart(id);
+  });
+}
+function wireICharts(root) { $$(".ichart", root).forEach(el => wireIChart(el.id)); }
 function barChart(data, series, h = 160) {
   if (!data.length) return '<div class="muted small">Nothing recorded in this period.</div>';
   const W = 760, P = 34, bw = Math.max(4, Math.min(24, (W - P - 10) / data.length - 4));
@@ -1119,13 +1193,25 @@ function prefControls(P, values, defaults, scope, unlocked) {
   };
   return Object.entries(groups).map(([g, ps]) => section(g, `<div class="pref-grid">${ps.map(p => `<div class="box pad pref ${changed(p) ? "changed" : ""}"><div class="row"><b class="grow">${esc(p.title)}</b>${p.enforce ? '<span class="tag" title="Checked before every command, so it is kept even by mistake">enforced</span>' : '<span class="tag" title="Told to Claude as an instruction">instruction</span>'}${changed(p) ? ' <span class="tag warn">this session</span>' : ""}${p.custom && !scope && unlocked ? ` <a href="#" class="small" data-pref-rm="${esc(p.id)}">Remove</a>` : ""}</div>${ctl(p)}</div>`).join("")}</div>`)).join("");
 }
+function prefToast(msg, bad) {
+  let t = $("#pref-toast");
+  if (!t) { t = document.createElement("div"); t.id = "pref-toast"; document.body.appendChild(t); }
+  t.className = bad ? "bad" : "";
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(t._h);
+  t._h = setTimeout(() => (t.hidden = true), 5000);
+}
 function wirePrefs(root, after) {
   $$("[data-pref]", root).forEach(el => el.onchange = async () => {
     const [id, session] = JSON.parse(el.dataset.pref);
     const value = el.type === "checkbox" ? el.checked : el.value;
     const r = await save("pref_set", { id, value, session: session || null });
-    if (!r.ok) { alertMsg(el, r); return; }
-    after();
+    if (!r.ok) { prefToast("Not saved: " + (r.why || "error"), true); after(); return; }
+    prefToast(session ? "Saved for this session. It takes effect with your next message there." : "Saved. New sessions start with it; open sessions pick it up with your next message.");
+    await after();
+    const card = $(`[data-pref^='["${id}"']`)?.closest(".pref");
+    if (card) { card.classList.add("just-saved"); setTimeout(() => card.classList.remove("just-saved"), 1600); }
   });
   $$("[data-pref-rm]", root).forEach(a => a.onclick = async e => { e.preventDefault(); const r = await save("pref_remove", { id: a.dataset.prefRm }); if (r.ok) after(); });
 }
@@ -1138,7 +1224,11 @@ PAGES.prefs = async () => {
     ${banner}
     ${unlocked ? "" : `<div class="callout">Read-only. Run <code>lfg ui</code> in your terminal to change your rules here.</div>`}
     ${prefControls(P, P.defaults, P.defaults, null, unlocked)}
-    <p class="muted small">Changes reach new sessions straight away (they're written to <code>${esc(P.file)}</code>, which your CLAUDE.md reads). Claude can make a session stricter but never looser; loosening is yours, here or with <code>! lfg prefs set &lt;id&gt; &lt;value&gt; --by-user</code>.</p>`;
+    <div class="box pad mt"><div class="k" style="margin-top:0">When a change takes effect</div>
+      <ul class="small"><li><b>Enforced rules</b> apply at once, in every session, open or new: the next command is checked against them.</li>
+      <li><b>Instructions</b> reach new sessions when they start, and sessions already open with your next message in them. Nothing to restart.</li>
+      <li>Claude can make a session stricter, never looser. Loosening is yours: here, or <code>! lfg prefs set &lt;id&gt; &lt;value&gt; --by-user</code> in Claude Code.</li></ul>
+      <p class="muted small">Your defaults are written to <code>${esc(P.file)}</code>, which your CLAUDE.md reads.</p></div>`;
 };
 function wirePrefsPage(root) {
   const b = $("#prefs-install", root);
@@ -1358,40 +1448,82 @@ function wireEnvironment(root) {
     };
   };
 }
+/* Usage: range and measure in one row above everything they scope; each chart says what it counts. */
+const UR = { days: 30, by: "day", measure: "usd" };
+function weekOf(day) { const d = new Date(day + "T00:00"); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
+function bucket(rows, by, sum) {
+  if (by === "day") return rows.map(r => ({ ...r, key: r.day, label: r.day, short: r.day.slice(5) }));
+  const m = new Map();
+  for (const r of rows) { const k = weekOf(r.day); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+  return [...m].map(([k, rs]) => ({ ...sum(rs), key: k, days: rs, label: "Week of " + k, short: k.slice(5) }));
+}
+function addRows(rs, keys) {
+  const o = {};
+  for (const k of keys) o[k] = rs.reduce((a, r) => a + (r[k] || 0), 0);
+  const models = {};
+  for (const r of rs) for (const [m, v] of Object.entries(r.models || {})) { const t = models[m] || (models[m] = {}); for (const [k2, x] of Object.entries(v)) t[k2] = (t[k2] || 0) + x; }
+  return { ...o, models };
+}
 PAGES.usage = async () => {
-  const d = await api("usage");
-  const t = (d.days || []).reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
+  const d = await api("usage", { days: UR.days > 30 ? 90 : 30 });
+  const since = new Date(Date.now() - (UR.days - 1) * 864e5).toISOString().slice(0, 10);
+  const days = (d.days || []).filter(x => x.day >= since);
+  const t = days.reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
   const hit = pct(t.cache_read, t.cache_read + t.input + t.cache_write);
   const hr = d.headroom || {}, life = hr.lifetime || {}, sp = d.spend || {};
-  return `${head("Usage", "What Claude Code used and cost, across all your projects, over the last 30 days.")}
+  const seg = (key, opts) => `<div class="seg inline">${opts.map(([v, l]) => `<label class="${UR[key] === v ? "on" : ""}"><input type="radio" name="ur-${key}" data-ur="${key}" value="${v}" ${UR[key] === v ? "checked" : ""}>${l}</label>`).join("")}</div>`;
+  const rows = bucket(days, UR.by, rs => addRows(rs, ["input", "output", "cache_read", "cache_write", "usd"]));
+  const usdFmt = v => usd(v || 0);
+  const chart = UR.measure === "usd"
+    ? iChart(rows.map(r => ({ label: r.label, short: r.short, values: [r.usd] })), [["Cost at API prices", "var(--series-1)", usdFmt]], { title: "Cost per " + UR.by, onPick: i => usageDetail(rows, i) })
+    : iChart(rows.map(r => ({ label: r.label, short: r.short, values: [(r.input || 0) + (r.cache_write || 0), r.cache_read || 0, r.output || 0] })), [["Sent new", "var(--series-1)"], ["Reused from cache", "var(--series-2)"], ["Written by Claude", "var(--series-3)"]], { title: "Tokens per " + UR.by, hidden: [1], onPick: i => usageDetail(rows, i) });
+  state.usageRows = rows;
+  return `${head("Usage", "What Claude Code used and what it would cost at API prices, across every session on this computer.")}
     ${sp.available ? `<div class="cols">${stat("Spent today", usd(sp.today))}${stat("Last 7 days", usd(sp["7d"]))}${stat("Last 30 days", usd(sp["30d"]), sp.source === "lfg" ? "an estimate at API list prices, from every session's log; on a subscription you pay your plan, not this" : "at API prices, worked out by tokensave from Claude Code's logs")}</div>`
       : sp.pending ? `<p class="muted small" data-spend-pending>Working out costs…</p>` : `<p class="muted small">Cost isn't shown: ${fmtWhy(sp.why || "not available")}.</p>`}
-    <div class="cols">${stat("Tokens sent", compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs less`)}${stat("Tokens written", compact(t.output), "the AI's replies")}${stat("Saved by compression", hr.available && life.calls ? compact(life.tokens_saved) : "—", hr.available && life.calls ? `${life.savings_percent || 0}% smaller before sending${life.cost_usd ? ` · about ${usd(life.cost_usd)} saved, by Headroom's count` : ""}` : hr.pending ? `<span data-spend-pending>checking…</span>` : "not active yet")}</div>
-    ${section("Per day", `<div class="box pad">${barChart((d.days || []).map(x => ({ label: x.day, values: [(x.input || 0) + (x.cache_write || 0), x.output] })), [["Sent (not cached)", "var(--chart-1)"], ["Written", "var(--chart-2)"]])}</div>`)}
+    <div class="cols">${stat("Tokens sent", compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs less`)}${stat("Tokens written", compact(t.output), "Claude's replies")}${stat("Saved by Headroom", hr.available && life.calls ? compact(life.tokens_saved) : "—", hr.available && life.calls ? `${life.savings_percent || 0}% less sent, all time${life.cost_usd ? ` · about ${usd(life.cost_usd)} by Headroom's count` : ""}` : hr.pending ? `<span data-spend-pending>checking…</span>` : "not active yet")}</div>
+    <div class="row filters">${seg("days", [[7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"]])}${seg("by", [["day", "By day"], ["week", "By week"]])}${seg("measure", [["usd", "Dollars"], ["tokens", "Tokens"]])}</div>
+    ${section(UR.measure === "usd" ? `Cost per ${UR.by}` : `Tokens per ${UR.by}`, `<div class="box pad">${chart}<div id="usage-detail"></div></div>`, UR.measure === "usd" ? "what that " + UR.by + "'s work would cost at Anthropic's API prices; hover a bar for the number, click it for the breakdown by model" : "sent new = text Claude read for the first time; reused from cache = text it had already seen, about a tenth of the price (hidden; click its key to show it); written = Claude's replies")}
+    ${(d.models || []).length ? section("By model", `<div class="box">${table(d.models, [{ k: "model", label: "Model" }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0) + (r.cache_write || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }, { k: "usd", label: "Cost", num: true, html: r => r.usd != null ? usd(r.usd) : "" }], { filter: false })}</div>`, "last " + (d.days || []).length + " days") : ""}
     <div id="hr-detail"><div class="loading">Reading Headroom's logs…</div></div>
-    ${(d.models || []).length ? section("By model", `<div class="box">${table(d.models, [{ k: "model", label: "Model" }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }], { filter: false })}</div>`) : ""}
-    ${sp.available && (sp.models || []).length ? section("Cost by model, last 30 days", `<div class="box">${table(sp.models, [{ k: "model", label: "Model" }, { k: "usd", label: "Cost", num: true, html: r => usd(r.usd) }], { filter: false })}</div>`) : ""}
     ${(d.runs || []).length ? section(`${repoName()}, by run`, `<div class="box">${table(d.runs, [{ k: "run", label: "Run", html: r => r.run && r.run !== "(no run)" ? `<a href="#runs/${encodeURIComponent(r.run)}">${esc(runName({ slug: r.run.slice(14) }))}</a>` : '<span class="muted">Outside a run</span>' }, { k: "input", label: "Sent", num: true, html: r => compact((r.input || 0) + (r.cache_read || 0)) }, { k: "output", label: "Written", num: true, html: r => compact(r.output) }], { filter: false })}</div>`, "this project only, all time") : ""}`;
 };
+function usageDetail(rows, i) {
+  const box = $("#usage-detail");
+  if (!box) return;
+  if (i == null) { box.innerHTML = ""; return; }
+  const r = rows[i], ms = Object.entries(r.models || {}).map(([m, v]) => ({ model: m, ...v })).sort((a, b) => (b.usd || 0) - (a.usd || 0));
+  box.innerHTML = `<div class="k">${esc(r.label)}: ${usd(r.usd || 0)}, ${compact((r.input || 0) + (r.cache_read || 0) + (r.cache_write || 0))} tokens sent, ${compact(r.output || 0)} written</div>
+    <div class="box">${table(ms, [{ k: "model", label: "Model" }, { k: "usd", label: "Cost", num: true, html: x => usd(x.usd || 0) }, { k: "input", label: "Sent new", num: true, html: x => compact((x.input || 0) + (x.cache_write_5m || 0) + (x.cache_write_1h || 0)) }, { k: "cache_read", label: "Reused", num: true, html: x => compact(x.cache_read || 0) }, { k: "output", label: "Written", num: true, html: x => compact(x.output || 0) }], { filter: false, sort: "usd" })}</div>`;
+  mountTables(box);
+}
+function wireUsage(root) {
+  $$("[data-ur]", root).forEach(el => el.onchange = () => { const k = el.dataset.ur; UR[k] = k === "days" ? +el.value : el.value; softRoute(); });
+  wireICharts(root);
+}
 
 async function loadHeadroom() {
   const box = $("#hr-detail");
   if (!box) return;
-  const d = await api("headroom");
+  const d = await api("headroom", { days: UR.days > 30 ? 90 : 30 });
   if (d.pending) { setTimeout(loadHeadroom, 2000); return; }
   if (d.available === false) { box.innerHTML = ""; return; }
   const W = d.when || {}, X = d.where || {};
-  const state_ = d.routed ? `${dot(d.live ? "ok" : "bad")}Every Claude Code session goes through Headroom${d.live ? "" : ", but it isn't running right now, so sessions can't reach Claude"}.` : d.live ? `${dot("warn")}Headroom is running, but Claude Code doesn't go through it${d.scope === "repos" ? " except in repos where LFG is on" : ""}.` : `${dot("")}Headroom isn't on.`;
-  const days = (W.days || []);
-  const hours = (W.today_by_hour || []).filter(h => h.calls);
-  box.innerHTML = section("Headroom", `<p>${state_} It shrinks what's sent to Claude before it goes.</p>
-    ${days.length ? `<div class="box pad">${barChart(days.map(x => ({ label: x.day, values: [x.saved] })), [["Tokens Headroom saved", "var(--chart-1)"]])}</div>
-      <p class="muted small">Last 30 days: ${compact(days.reduce((a, x) => a + x.saved, 0))} tokens saved on ${n(days.reduce((a, x) => a + x.calls, 0))} requests, about ${usd(days.reduce((a, x) => a + x.usd, 0))} by Headroom's count.${hours.length ? ` Today it was busiest at ${hours.sort((a, b) => b.calls - a.calls).slice(0, 3).map(h => `${h.hour}:00 (${n(h.calls)} requests)`).join(", ")}.` : ""}</p>` : ""}
-    ${(X.sessions || []).length ? `<div class="k">Where, since ${ago(X.since)}</div>
-      <p class="muted small">Headroom's request log only keeps the last few hours. Requests are matched to a session by their token counts: ${n(X.matched)} of ${n(X.requests)} matched one session exactly; the rest are counted as not matched.</p>
-      <div class="box">${table(X.repos, [{ k: "repo", label: "Repo" }, { k: "sessions", label: "Sessions", num: true }, { k: "calls", label: "Requests", num: true }, { k: "saved", label: "Tokens saved", num: true, html: r => compact(r.saved) }], { filter: false })}</div>
-      <div class="box mt">${table(X.sessions, [{ k: "name", label: "Session", html: r => `${esc(r.name)}<div class="sub">${esc(r.repo)}${r.group ? " · " + esc(r.group) : ""} · last ${ago(r.last)}</div>` }, { k: "calls", label: "Requests", num: true }, { k: "saved", label: "Tokens saved", num: true, html: r => compact(r.saved) }, { k: "percent", label: "Smaller by", num: true, html: r => r.percent + "%" }], { filter: false, sort: "saved" })}</div>` : ""}`, "context compression");
+  const since = new Date(Date.now() - (UR.days - 1) * 864e5).toISOString().slice(0, 10);
+  const days = (W.days || []).filter(x => x.day >= since);
+  const rows = bucket(days, UR.by, rs => addRows(rs, ["saved", "calls", "usd", "before"]));
+  const status = d.routed ? `<span class="row" style="gap:8px">${dot(d.live ? "ok" : "bad")}<span>${d.live ? "On: every Claude Code session goes through it." : "Every session goes through it, but it isn't running right now, so sessions can't reach Claude."}</span></span>` : d.live ? `<span class="row" style="gap:8px">${dot("warn")}<span>Running, but Claude Code doesn't go through it.</span></span>` : `<span class="row" style="gap:8px">${dot("")}<span>Off.</span></span>`;
+  const hours = (W.today_by_hour || []).filter(h => h.calls).sort((a, b) => b.calls - a.calls).slice(0, 3);
+  box.innerHTML = section("Saved by Headroom", `<p class="muted">Headroom is a small program on this computer that every request from Claude Code passes through on its way to Anthropic. It removes repeated and unneeded text first, so less is sent and billed. Each bar is how many tokens it removed that ${UR.by}.</p>
+    <p>${status}</p>
+    ${rows.length ? `<div class="box pad">${iChart(rows.map(r => ({ label: r.label, short: r.short, values: [r.saved] })), [["Tokens removed", "var(--series-1)"]], { title: "Tokens Headroom removed per " + UR.by })}</div>
+      <p class="muted small">In this range: ${compact(rows.reduce((a, x) => a + (x.saved || 0), 0))} tokens removed from ${n(rows.reduce((a, x) => a + (x.calls || 0), 0))} requests, about ${usd(rows.reduce((a, x) => a + (x.usd || 0), 0))} by Headroom's count.${hours.length ? ` Busiest today: ${hours.map(h => `${h.hour}:00 (${n(h.calls)} requests)`).join(", ")}.` : ""}</p>` : ""}
+    ${(X.sessions || []).length ? `<div class="k">Where it saved the most, since ${ago(X.since)}</div>
+      <p class="muted small">Headroom's request log only keeps the last few hours. Requests are matched to a session by their token counts: ${n(X.matched)} of ${n(X.requests)} matched one session exactly.</p>
+      <div class="box">${table(X.repos, [{ k: "repo", label: "Repo" }, { k: "sessions", label: "Sessions", num: true }, { k: "calls", label: "Requests", num: true }, { k: "saved", label: "Tokens removed", num: true, html: r => compact(r.saved) }], { filter: false })}</div>
+      <div class="box mt">${table(X.sessions, [{ k: "name", label: "Session", html: r => `${esc(r.name)}<div class="sub">${esc(r.repo)}${r.group ? " · " + esc(r.group) : ""} · last ${ago(r.last)}</div>` }, { k: "calls", label: "Requests", num: true }, { k: "saved", label: "Tokens removed", num: true, html: r => compact(r.saved) }, { k: "percent", label: "Smaller by", num: true, html: r => r.percent + "%" }], { filter: false, sort: "saved" })}</div>` : ""}`);
   mountTables(box);
+  wireICharts(box);
 }
 PAGES.settings = async () => {
   const [cfg, sk, cm, unlocked] = await Promise.all([api("settings"), api("skills"), api("claudemd"), isUnlocked()]);
@@ -1835,7 +1967,7 @@ async function route(opts) {
   if (key === "knowledge") wireKnowledge(view);
   if (key === "prefs") wirePrefsPage(view);
   if (key === "environment") wireEnvironment(view);
-  if (key === "usage") loadHeadroom();
+  if (key === "usage") { wireUsage(view); loadHeadroom(); }
   const rf = $("#refreshed");
   if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (soft) {
