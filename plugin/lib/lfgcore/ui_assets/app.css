@@ -189,7 +189,10 @@ a.now:hover { background: var(--soft-2); }
 .table-tools { padding: 8px 0 10px; display: flex; gap: 10px; align-items: center; }
 .box > .table-tools { border-bottom: 0; }
 .table-tools input { flex: 1; max-width: 300px; }
-.table-tools .count { color: var(--muted); font-size: 13px; }
+.table-tools .count { color: var(--muted); font-size: 13px; white-space: nowrap; }
+/* a filter's name sits beside its dropdown, so every control in the row lines up with the search box */
+.table-tools { flex-wrap: wrap; }
+.table-tools > label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .table-wrap { overflow: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th { text-align: left; font-weight: 400; color: var(--muted); font-size: 13px; padding: 7px 10px; border-bottom: 1px solid var(--line);
