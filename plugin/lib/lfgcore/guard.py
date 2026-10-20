@@ -589,6 +589,9 @@ def _lfg(argv):
         raise Block("13", "`lfg %s` changes your setup; run it yourself (or use lfg ui)" % " ".join(args[:2]))
     if sub == "review" and "post" in rest and "--dry-run" not in argv:
         raise Block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
+    if sub == "update" and "apply" in rest:
+        raise Block("13", "`lfg update apply` merges, pushes and installs new LFG code; run it yourself "
+                    "(or use lfg ui)")
     if sub == "review" and ("run" in rest or "import" in rest):
         raise Block("13", "`lfg review %s` can start another Claude Code session on your usage; start it yourself"
                     % ("run" if "run" in rest else "import"))
@@ -742,6 +745,8 @@ SELFTEST = [
     ("Bash", {"command": "lfg review post 12 --event comment --dry-run"}, False),
     ("Bash", {"command": "lfg review mark 12 1.1 --drop"}, False),
     ("Bash", {"command": "lfg review run 12"}, True),
+    ("Bash", {"command": "lfg update apply"}, True),
+    ("Bash", {"command": "lfg update check --json"}, False),
     ("Bash", {"command": "lfg changes undo 3"}, True),
     ("Bash", {"command": "lfg headroom setup --scope everywhere"}, True),
     ("Bash", {"command": "~/.local/bin/lfg add pentest -y"}, True),

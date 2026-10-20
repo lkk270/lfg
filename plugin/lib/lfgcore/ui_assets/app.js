@@ -1508,6 +1508,7 @@ async function init() {
   $("#repo").innerHTML = state.repos.map(x => `<option value="${esc(x.id)}" title="${esc(x.root || x.id)}" ${x.id === state.repo ? "selected" : ""}>${esc(x.name || x.id)}</option>`).join("") || "<option>no projects yet</option>";
   $("#repo").onchange = async () => { state.repo = $("#repo").value; localStorage.setItem("lfg.repo", state.repo); await loadBranches(); refresh(); };
   $("#refresh").onclick = refresh;
+  checkUpdate();
   $("#branch").onchange = () => { state.branch = $("#branch").value; localStorage.setItem(branchPref(), state.branch); refresh(); };
   window.onhashchange = route;
   await loadBranches();
@@ -1529,6 +1530,76 @@ async function loadBranches() {
   sel.hidden = !B.branches.length && !B.unrecorded;
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
+/* "Update ready": newer LFG in your fork or the original project. Checked on load and every 10 minutes. */
+async function checkUpdate() {
+  const box = $("#update-banner");
+  if (!box) return;
+  let d;
+  try { d = await api("update"); } catch (e) { return; }
+  const j = d.job;
+  if (j && j.status === "running") {
+    box.hidden = false;
+    box.className = "callout";
+    box.innerHTML = `${dot("on")}Updating LFG… ${esc((j.steps || []).slice(-1)[0] || "")}`;
+    setTimeout(checkUpdate, 3000);
+    return;
+  }
+  if (j && j.status === "done" && !state.updateSeen && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
+    box.hidden = false;
+    box.className = "callout ok";
+    box.innerHTML = `${dot("ok")}LFG is updated. This page has reloaded on the new version. <b>Start a new Claude Code session</b> to get new or changed skills; sessions already open keep the old ones. <button class="btn small" id="update-ok">OK</button>`;
+    $("#update-ok").onclick = () => { state.updateSeen = true; box.hidden = true; };
+    return;
+  }
+  if (j && j.status === "failed" && !state.updateSeen) {
+    box.hidden = false;
+    box.className = "callout bad";
+    box.innerHTML = `${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span> <button class="btn small" id="update-ok">OK</button>`;
+    $("#update-ok").onclick = () => { state.updateSeen = true; box.hidden = true; };
+    return;
+  }
+  if (!d.available || !d.ready) { box.hidden = true; return; }
+  const R = d.remotes || {}, parts = [];
+  if ((R.upstream || {}).new) parts.push(`${plural(R.upstream.new, "change")} from the original LFG`);
+  if ((R.origin || {}).new) parts.push(`${plural(R.origin.new, "change")} from your fork`);
+  if (d.not_installed) parts.push(`${plural(d.not_installed, "change")} in your checkout not installed yet`);
+  const list = ["upstream", "origin"].flatMap(r => ((R[r] || {}).commits || []).map(c => `<li class="mono small">${esc(c)}</li>`)).concat((d.not_installed_commits || []).map(c => `<li class="mono small">${esc(c)}</li>`));
+  const blocked = d.current_branch && d.current_branch !== "main" ? `Switch ${esc(d.source)} to main first.` : d.dirty ? `${esc(d.source)} has uncommitted changes; commit or stash them first.` : "";
+  const unlocked = await isUnlocked();
+  box.hidden = false;
+  box.className = "callout warn";
+  box.innerHTML = `${dot("warn")}<b>LFG update ready:</b> ${esc(parts.join(", "))}. <details class="more inline"><summary>What's in it</summary><ul>${list.join("")}</ul></details>
+    ${blocked ? `<span class="muted small">${blocked}</span>` : `<button class="btn small primary" id="update-go" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to update from here\""}>Update</button><span class="muted small"> Tests run first; if they fail nothing changes.</span>`}`;
+  const go = $("#update-go");
+  if (go) go.onclick = async () => {
+    go.disabled = true; go.textContent = "Starting…";
+    const r = await save("update_apply", {});
+    if (!r.ok) { go.disabled = false; go.textContent = "Try again"; return alertMsg(go, r); }
+    watchUpdate();
+  };
+}
+async function watchUpdate() {
+  const box = $("#update-banner");
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2500));
+    let d;
+    try { d = await api("update", { t: Date.now() }); } catch (e) { continue; }
+    const j = d.job || {};
+    box.hidden = false;
+    if (j.status === "running") { box.className = "callout"; box.innerHTML = `${dot("on")}Updating LFG… ${esc((j.steps || []).slice(-1)[0] || "")}`; continue; }
+    if (j.status === "done") {
+      box.innerHTML = `${dot("on")}Installed. Reloading the dashboard on the new version…`;
+      await save("ui_restart", {});
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 750));
+        try { const r = await fetch("/api/unlocked", { headers: { "X-LFG": "1" } }); if (r.status) { location.reload(); return; } } catch (e) { /* restarting */ }
+      }
+      return;
+    }
+    return checkUpdate();
+  }
+}
+setInterval(checkUpdate, 10 * 60 * 1000);
 function refresh() { state.cache = {}; state.fresh = true; mapStatus(); route().finally(() => { state.fresh = false; }); }
 /* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
    drawer is open, so nothing you're in the middle of is thrown away. */

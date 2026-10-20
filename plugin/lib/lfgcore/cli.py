@@ -137,6 +137,8 @@ def cmd_setup(a):
               % ", ".join("/" + n for n in sc["skill_collisions"]))
     print("  disk free       %s GB" % sc["disk_free_gb"])
     if not steps:
+        from . import updates as U
+        U.remember_source(C.LFG_ROOT)
         print("\nNothing to do: LFG is installed and up to date. `lfg enable` turns it on in a repo.")
         return 0
     print("\nPlan (nothing has changed yet):")
@@ -162,6 +164,8 @@ def cmd_setup(a):
     if not res["ok"]:
         print("\nSetup stopped; the changes it made outside %s were undone." % C.LFG_HOME)
         return 1
+    from . import updates as U
+    U.remember_source(C.LFG_ROOT)
     print("\nDone. Next:\n  cd <your repo> && lfg enable     turn LFG on there\n  lfg ui                         "
           "dashboard (packs, settings, skills)\n  lfg doctor                     check everything")
     return 0
@@ -720,6 +724,18 @@ def _review_human(rec):
             print("  %-5s %-7s %-8s %s  %s" % (f["id"], f["status"], f["severity"], f["title"], where))
 
 
+def cmd_update(a):
+    from . import updates as U
+    if a.action == "apply":
+        return 0 if U.apply()["status"] == "done" else 1
+    d = U.check(max_age=0)
+    if a.json:
+        print(U.as_json(d))
+    else:
+        U.human(d)
+    return 0
+
+
 def cmd_sessions(a):
     from . import sessions as SS
     try:
@@ -978,6 +994,9 @@ def main(argv=None):
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--json", action="store_true")
+    up = sp.add_parser("update", help="is there newer LFG (your fork, the original project)? apply installs it")
+    up.add_argument("action", nargs="?", default="check", choices=["check", "apply"])
+    up.add_argument("--json", action="store_true")
     ss = sp.add_parser("sessions", help="every Claude Code session on this machine, with the command that resumes it")
     ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder"])
     ss.add_argument("id", nargs="?", help="name/folder: the session id")
@@ -1041,7 +1060,8 @@ def main(argv=None):
     return {"init": cmd_init, "graphs": cmd_graphs, "run": cmd_run, "rule": cmd_rule, "repo": cmd_repo,
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
-            "usage": cmd_usage, "sessions": cmd_sessions, "vendor": cmd_vendor, "omnigraph": cmd_omnigraph,
+            "usage": cmd_usage, "sessions": cmd_sessions, "update": cmd_update, "vendor": cmd_vendor,
+            "omnigraph": cmd_omnigraph,
             "headroom": cmd_headroom,
             "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue,
             "worktree": cmd_worktree, "setup": cmd_setup, "enable": cmd_enable, "disable": cmd_disable,

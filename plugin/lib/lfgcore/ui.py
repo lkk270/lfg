@@ -13,6 +13,7 @@ import html
 import http.server
 import json
 import os
+import sys
 import threading
 import urllib.parse
 import webbrowser
@@ -116,6 +117,10 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "update":
+        from . import updates as U
+        d = dash.in_background("update", 600, U.check, "checking for updates")
+        return dict(d, job=U.job()) if d.get("available") else d
     if view == "sessions":
         from . import sessions as SS
         return SS.listing(hidden=_arg(q, "hidden") == "1")
@@ -198,6 +203,12 @@ def save(what, body):
         return S.reset_rule(body.get("name"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
+    if what == "update_apply":
+        from . import updates as U
+        return U.start()
+    if what == "ui_restart":
+        threading.Timer(0.5, _restart).start()
+        return {"restarting": True}
     if what in ("session_name", "session_folder", "session_hide", "session_trash", "worktree_remove"):
         from . import sessions as SS
         try:
@@ -408,6 +419,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with open(p, "rb") as fh:
                 return self._send(200, fh.read(), ASSET_TYPES[ext] + "; charset=utf-8", csp=STATIC_CSP)
         return self._send(404, "not found", "text/plain")
+
+
+def _restart():
+    """Start this dashboard again on the newly installed code, same port, without opening a new tab."""
+    from . import common as C2
+    os.execv(sys.executable, [sys.executable, os.path.join(C2.lfg_path("plugin"), "bin", "lfg"), "ui", "--port",
+                              str(Handler.port), "--no-open"])
 
 
 def open_editor(port):

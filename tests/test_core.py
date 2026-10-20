@@ -1033,6 +1033,87 @@ class RunSummaryTest(unittest.TestCase):
         self.assertEqual(dash._blocking({"findings": [{"blocking": True}, {"blocking": False}]}), 1)
 
 
+class UpdatesTest(unittest.TestCase):
+    """A fake fork and upstream on disk: apply merges, tests, pushes, installs, and undoes itself on failing tests."""
+
+    def setUp(self):
+        from lfgcore import updates as U
+        self.U = U
+        U._CACHE.update(ts=0, data=None)
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+        self.env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                        GIT_COMMITTER_EMAIL="t@t")
+        up, fork, self.co = (os.path.join(self.dir, x) for x in ("up.git", "fork.git", "co"))
+        self.git(self.dir, "init", "-q", "--bare", "-b", "main", up)
+        seed = os.path.join(self.dir, "seed")
+        self.git(self.dir, "init", "-q", "-b", "main", seed)
+        os.makedirs(os.path.join(seed, "tests"))
+        self.write(seed, "tests/test_ok.py",
+                   "import unittest\nclass T(unittest.TestCase):\n    def test_x(self): pass\n")
+        self.git(seed, "add", "-A")
+        self.git(seed, "commit", "-q", "-m", "seed")
+        self.git(seed, "push", "-q", up, "main")
+        self.git(self.dir, "clone", "-q", "--bare", up, fork)
+        self.git(self.dir, "clone", "-q", fork, self.co)
+        self.git(self.co, "remote", "add", "upstream", up)
+        self.seed, self.up = seed, up
+        C.write_json(U._state_path(), {"path": self.co, "installed_head": self.head()})
+        self.addCleanup(lambda: os.path.exists(U._state_path()) and os.remove(U._state_path()))
+
+    def git(self, cwd, *a):
+        return subprocess.run(["git", *a], cwd=cwd, env=self.env, check=True, capture_output=True, text=True).stdout
+
+    def write(self, root, path, text):
+        with open(os.path.join(root, path), "w") as f:
+            f.write(text)
+
+    def head(self):
+        return self.git(self.co, "rev-parse", "HEAD").strip()
+
+    def upstream_commit(self, path, text):
+        self.write(self.seed, path, text)
+        self.git(self.seed, "add", "-A")
+        self.git(self.seed, "commit", "-q", "-m", "from upstream")
+        self.git(self.seed, "push", "-q", self.up, "main")
+
+    def run_apply(self):
+        real = C.run
+
+        def fake(cmd, *a, **kw):  # the install step is LFG's own setup; here it only has to succeed
+            if "setup" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return real(cmd, *a, **kw)
+        with mock.patch.object(C, "run", side_effect=fake):
+            return self.U.apply(log=lambda m: None)
+
+    def test_check_sees_upstream_then_apply_merges_tests_and_pushes(self):
+        self.upstream_commit("new.txt", "hi")
+        d = self.U.check(max_age=0)
+        self.assertEqual((d["remotes"]["upstream"]["new"], d["ready"]), (1, True))
+        j = self.run_apply()
+        self.assertEqual(j["status"], "done", j.get("why"))
+        self.assertTrue(os.path.exists(os.path.join(self.co, "new.txt")))
+        self.assertEqual(self.git(self.co, "rev-parse", "origin/main").strip(), self.head())  # pushed to the fork
+
+    def test_failing_tests_undo_the_update(self):
+        before = self.head()
+        self.upstream_commit("tests/test_bad.py", "import unittest\nclass T(unittest.TestCase):\n"
+                                                  "    def test_x(self): self.fail('no')\n")
+        j = self.run_apply()
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("tests failed", j["why"])
+        self.assertEqual(self.head(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.co, "tests", "test_bad.py")))
+
+    def test_refuses_a_checkout_with_uncommitted_work(self):
+        self.write(self.co, "tests/test_ok.py", "# my edit\n")
+        self.upstream_commit("new.txt", "hi")
+        j = self.run_apply()
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("uncommitted", j["why"])
+
+
 class SessionsTest(unittest.TestCase):
     def setUp(self):
         import tempfile
