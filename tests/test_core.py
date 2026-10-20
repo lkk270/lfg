@@ -417,6 +417,34 @@ class HeadroomTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--mode") + 1], "token")
         self.assertEqual(C.read_json(C.lfg_path("headroom", "state.json"), {})["mode"], "token")
 
+    def session_start_text(self):
+        from contextlib import redirect_stdout
+        from lfgcore import hooks
+        buf = io.StringIO()
+        with mock.patch.object(C, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                mock.patch.object(hooks, "_repo", return_value=(None, None)), \
+                mock.patch.object(HR, "ensure_live", return_value=True), redirect_stdout(buf):
+            hooks.session_start({})
+        return buf.getvalue()
+
+    def test_session_start_says_when_the_desktop_app_bypasses_the_proxy(self):
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        with mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                                          "CLAUDE_CODE_ENTRYPOINT": "claude-desktop"}):
+            self.assertEqual(HR.bypassed(), "https://api.anthropic.com")
+            out = self.session_start_text()
+        self.assertIn("Headroom proxy: BYPASSED", out)
+        self.assertIn("https://api.anthropic.com", out)
+        self.assertIn("Claude desktop app", out)
+        self.assertNotIn("Headroom proxy: up", out)
+
+    def test_session_start_says_up_when_the_session_goes_through_the_proxy(self):
+        self.write({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"}})
+        for env in ({"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787/"}, {"ANTHROPIC_BASE_URL": ""}):
+            with mock.patch.dict(os.environ, env):
+                self.assertIsNone(HR.bypassed())  # unset: no way to tell, so no warning
+                self.assertIn("Headroom proxy: up.", self.session_start_text())
+
 
 class TrackerTest(unittest.TestCase):
     def test_slugs(self):
