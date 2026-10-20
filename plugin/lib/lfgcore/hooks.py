@@ -118,6 +118,10 @@ CONTEXT = [
     "Remember: when the user states a decision, constraint or preference, or work uncovers a root cause or landmine, "
     "offer to save it at the end of your reply and ask whether it goes to dev-graph or second-brain before writing "
     "anything (`lfg rule remember`; /lfg:note to save on request).",
+    "Ask with the AskUserQuestion tool, not plain text, whenever you need the user's answer (an LFG interview, "
+    "checkpoint or approval, or any other question): it shows clickable options. Give each question 2-4 options; for "
+    "an open-ended question, offer your best guesses from the code and the brief, since the user can always type "
+    "their own under Other. Still one question at a time in /lfg:grill. Subagents cannot ask; the main session does.",
 ]
 
 
