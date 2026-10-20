@@ -1238,8 +1238,11 @@ class UpdatesTest(unittest.TestCase):
         U._CACHE.update(ts=0, data=None)
         self.dir = tempfile.mkdtemp()
         self.addCleanup(__import__("shutil").rmtree, self.dir, True)
-        self.env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
-                        GIT_COMMITTER_EMAIL="t@t")
+        ident = dict(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        self.env = dict(os.environ, **ident)
+        p = mock.patch.dict(os.environ, ident)  # apply's own merge commits need an identity too
+        p.start()
+        self.addCleanup(p.stop)
         up, fork, self.co = (os.path.join(self.dir, x) for x in ("up.git", "fork.git", "co"))
         self.git(self.dir, "init", "-q", "--bare", "-b", "main", up)
         seed = os.path.join(self.dir, "seed")
@@ -1253,7 +1256,9 @@ class UpdatesTest(unittest.TestCase):
         self.git(self.dir, "clone", "-q", "--bare", up, fork)
         self.git(self.dir, "clone", "-q", fork, self.co)
         self.git(self.co, "remote", "add", "upstream", up)
-        self.seed, self.up = seed, up
+        self.forkwork = os.path.join(self.dir, "forkwork")  # someone else's clone of the fork, e.g. a merged PR
+        self.git(self.dir, "clone", "-q", fork, self.forkwork)
+        self.seed, self.up, self.fork = seed, up, fork
         C.write_json(U._state_path(), {"path": self.co, "installed_head": self.head()})
         self.addCleanup(lambda: os.path.exists(U._state_path()) and os.remove(U._state_path()))
 
@@ -1272,6 +1277,13 @@ class UpdatesTest(unittest.TestCase):
         self.git(self.seed, "add", "-A")
         self.git(self.seed, "commit", "-q", "-m", "from upstream")
         self.git(self.seed, "push", "-q", self.up, "main")
+
+    def fork_commit(self, path, text):
+        self.git(self.forkwork, "pull", "-q", "--no-rebase", "origin", "main")
+        self.write(self.forkwork, path, text)
+        self.git(self.forkwork, "add", "-A")
+        self.git(self.forkwork, "commit", "-q", "-m", "from the fork")
+        self.git(self.forkwork, "push", "-q", "origin", "main")
 
     def run_apply(self):
         real = C.run
@@ -1308,6 +1320,116 @@ class UpdatesTest(unittest.TestCase):
         j = self.run_apply()
         self.assertEqual(j["status"], "failed")
         self.assertIn("uncommitted", j["why"])
+
+    def sources(self):
+        self.U._CACHE.update(ts=0, data=None)
+        d = self.U.check(max_age=0)
+        return d["sources"], {r: v["new"] for r, v in d["remotes"].items()}
+
+    def test_sources_name_where_each_new_commit_came_from(self):
+        self.assertEqual(self.sources(), ([], {"origin": 0, "upstream": 0}))
+        self.upstream_commit("up.txt", "u")
+        self.assertEqual(self.sources(), (["upstream"], {"origin": 0, "upstream": 1}))
+        self.fork_commit("fork.txt", "f")
+        self.assertEqual(self.sources(), (["upstream", "origin"], {"origin": 1, "upstream": 1}))
+
+    def test_fork_only_update_names_the_fork(self):
+        self.fork_commit("fork.txt", "f")
+        d = self.U.check(max_age=0)
+        self.assertEqual((d["sources"], d["ready"]), (["origin"], True))
+        self.assertIn("from the fork", d["remotes"]["origin"]["commits"][0])
+
+    def test_upstream_already_merged_on_the_fork_counts_once_as_the_forks(self):
+        self.upstream_commit("up.txt", "u")
+        self.git(self.forkwork, "pull", "-q", "--no-rebase", self.up, "main")  # merged on the fork, e.g. a PR
+        self.git(self.forkwork, "push", "-q", "origin", "main")
+        self.assertEqual(self.sources(), (["origin"], {"origin": 1, "upstream": 0}))
+
+    def test_repo_name_from_https_and_ssh(self):
+        self.assertEqual(self.U._repo_name("https://github.com/varun-singhh/lfg.git"), "varun-singhh/lfg")
+        self.assertEqual(self.U._repo_name("git@github.com:lkk270/lfg.git"), "lkk270/lfg")
+
+    def test_apply_with_both_installs_both_and_merges_off_main(self):
+        self.fork_commit("fork.txt", "f")
+        self.upstream_commit("up.txt", "u")
+        j = self.run_apply()
+        self.assertEqual(j["status"], "done", j.get("why"))
+        for f in ("fork.txt", "up.txt"):
+            self.assertTrue(os.path.exists(os.path.join(self.co, f)), f)
+        self.assertEqual(self.git(self.co, "rev-parse", "origin/main").strip(), self.head())
+        self.assertTrue(any("away from main" in s for s in j["steps"]))
+        self.assertEqual(self.git(self.co, "branch", "--list", "lfg-update/*").strip(), "")  # tidied away
+        self.assertEqual(len(self.U.W.listing(self.co)), 1)
+
+    def conflict(self):
+        self.fork_commit("a.txt", "fork side\n")
+        self.upstream_commit("a.txt", "upstream side\n")
+        return self.run_apply()
+
+    def test_conflict_stays_on_its_own_branch_and_says_how_to_fix_it(self):
+        j = self.conflict()
+        fork_head = self.git(self.co, "rev-parse", "origin/main").strip()
+        self.assertEqual(j["status"], "failed")
+        self.assertEqual(self.head(), fork_head)  # main has the fork's commits and no half merge
+        self.assertEqual(self.git(self.co, "status", "--porcelain").strip(), "")
+        h = j["conflict"]
+        self.assertEqual((h["state"], h["files"]), ("conflict", ["a.txt"]))
+        self.assertTrue(h["branch"].startswith("lfg-update/upstream-"))
+        self.assertTrue(os.path.exists(os.path.join(h["worktree"], ".git")))
+        for s in (h["worktree"], "a.txt", "git commit --no-edit"):
+            self.assertIn(s, h["prompt"])
+        self.U._CACHE.update(ts=0, data=None)
+        d = self.U.check(max_age=0)
+        self.assertEqual((d["held"]["state"], d["held"]["files"]), ("conflict", ["a.txt"]))
+        self.assertEqual(self.run_apply()["conflict"]["branch"], h["branch"])  # again: still stops, same branch
+
+    def test_once_the_conflict_is_committed_apply_finishes_from_that_branch(self):
+        h = self.conflict()["conflict"]
+        self.write(h["worktree"], "a.txt", "fork side\nupstream side\n")
+        self.git(h["worktree"], "add", "a.txt")
+        self.U._CACHE.update(ts=0, data=None)
+        self.assertEqual(self.U.check(max_age=0)["held"]["state"], "uncommitted")
+        self.git(h["worktree"], "commit", "-q", "--no-edit")
+        self.U._CACHE.update(ts=0, data=None)
+        d = self.U.check(max_age=0)
+        self.assertEqual((d["held"]["state"], d["ready"]), ("ready", True))
+        j = self.run_apply()
+        self.assertEqual(j["status"], "done", j.get("why"))
+        with open(os.path.join(self.co, "a.txt")) as f:
+            self.assertEqual(f.read(), "fork side\nupstream side\n")
+        self.assertEqual(self.git(self.co, "rev-parse", "origin/main").strip(), self.head())
+        self.assertFalse(os.path.exists(h["worktree"]))
+        self.assertEqual(self.git(self.co, "branch", "--list", "lfg-update/*").strip(), "")
+
+    def test_a_pruned_worktree_is_recreated_from_its_branch(self):
+        h = self.conflict()["conflict"]
+        self.write(h["worktree"], "a.txt", "both\n")
+        self.git(h["worktree"], "commit", "-q", "-am", "fixed")
+        self.U.W.remove(self.co, h["branch"])  # SessionStart prunes clean idle worktrees; the branch stays
+        j = self.run_apply()
+        self.assertEqual(j["status"], "done", j.get("why"))
+        self.assertEqual(self.git(self.co, "show", "HEAD:a.txt"), "both\n")
+
+    def test_failing_upstream_tests_leave_no_branch_behind(self):
+        self.upstream_commit("tests/test_bad.py", "import unittest\nclass T(unittest.TestCase):\n"
+                                                  "    def test_x(self): self.fail('no')\n")
+        before = self.head()
+        self.assertEqual(self.run_apply()["status"], "failed")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.git(self.co, "branch", "--list", "lfg-update/*").strip(), "")
+
+    def test_banner_notices_within_about_two_minutes(self):
+        import inspect
+        import re
+        self.assertLessEqual(inspect.signature(self.U.check).parameters["max_age"].default, 60)
+        here = os.path.dirname(ui.__file__)
+        with open(os.path.join(here, "ui.py")) as f:
+            self.assertRegex(f.read(), r'in_background\("update", 60, lambda: U.check\(max_age=0\)')
+        with open(os.path.join(here, "ui_assets", "app.js")) as f:
+            js = f.read()
+        self.assertRegex(js, r"setInterval\(checkUpdate, 60 \* 1000\)")
+        self.assertIn('addEventListener("visibilitychange"', js)
+        self.assertIsNotNone(re.search(r"checked_at", js))  # a stale answer asks again a few seconds later
 
 
 class PersonalSkillsTest(unittest.TestCase):

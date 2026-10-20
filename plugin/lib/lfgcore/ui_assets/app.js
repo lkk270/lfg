@@ -2090,18 +2090,43 @@ async function loadBranches() {
   sel.hidden = !B.branches.length && !B.unrecorded;
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
-/* "Update ready": newer LFG in your fork or the original project. Checked on load and every 10 minutes. */
+/* "Update ready": newer LFG in your fork or the original project. Checked on load, every minute and when the tab
+   comes back; the server caches for a minute, so a new merge shows within about two. */
+const UPDATE_FROM = { upstream: "the original LFG", origin: "your fork" };
+let updateRecheck = 0;
 async function checkUpdate(fresh) {
   const box = $("#update-banner");
   if (!box) return;
   let d;
   try { d = await api("update", fresh === true ? { fresh: "1" } : {}); } catch (e) { return; }
+  /* an answer older than the cache means the server only just started a new check: ask again once it's done */
+  if (d.checked_at && Date.now() - Date.parse(d.checked_at) > 70e3 && Date.now() - updateRecheck > 30e3) {
+    updateRecheck = Date.now();
+    setTimeout(checkUpdate, 5000);
+  }
   const j = d.job;
   if (j && j.status === "running") {
     box.hidden = false;
     box.className = "callout";
     box.innerHTML = `${dot("on")}Updating LFG… ${esc((j.steps || []).slice(-1)[0] || "")}`;
     setTimeout(checkUpdate, 3000);
+    return;
+  }
+  const R = d.remotes || {}, H = d.held;
+  const named = r => `${UPDATE_FROM[r]}${(R[r] || {}).name ? ` (${R[r].name})` : ""}`;
+  if (H && H.state !== "ready") {
+    /* a merge from the original LFG that conflicted: it waits on its own branch until it's fixed and committed */
+    box.hidden = false;
+    box.className = "callout bad";
+    const ver = $("#lfg-version");
+    if (ver) ver.textContent = "Update stopped";
+    box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> the changes from ${esc(named("upstream"))} ${H.state === "conflict" ? `conflict with yours in ${plural(H.files.length, "file")}` : "are merged but not committed yet"}. Nothing changed on main and nothing was installed; the half-done merge is on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
+      ${H.files.length ? `<details class="more inline"><summary>${H.state === "conflict" ? "Conflicting files" : "Changed files"}</summary><ul>${H.files.map(f => `<li class="mono small">${esc(f)}</li>`).join("")}</ul></details>` : ""}
+      <button class="btn small primary" data-copy="${esc(H.prompt)}" title="${esc(H.prompt)}">Copy fix for Claude</button>
+      <span class="muted small">Paste it into Claude Code. Once it's committed there, press Update here or run <code>lfg update apply</code>.</span>`;
+    $$("[data-copy]", box).forEach(b => b.onclick = async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+    });
     return;
   }
   const seen = localStorage.getItem("lfg.update.seen") === (j && j.ended);
@@ -2123,16 +2148,17 @@ async function checkUpdate(fresh) {
   if (ver && d.available) ver.textContent = d.ready ? "Update ready" : "LFG up to date";
   if (d.pending) { setTimeout(checkUpdate, 3000); return; }
   if (!d.available || !d.ready) { box.hidden = true; return; }
-  const R = d.remotes || {}, parts = [];
-  if ((R.upstream || {}).new) parts.push(`${plural(R.upstream.new, "change")} from the original LFG`);
-  if ((R.origin || {}).new) parts.push(`${plural(R.origin.new, "change")} from your fork`);
+  const src = d.sources || [], parts = src.map(r => src.length === 1 ? plural(R[r].new, "change") : `${plural(R[r].new, "change")} from ${named(r)}`);
   if (d.not_installed) parts.push(`${plural(d.not_installed, "change")} in your checkout not installed yet`);
-  const list = ["upstream", "origin"].flatMap(r => ((R[r] || {}).commits || []).map(c => `<li class="mono small">${esc(c)}</li>`)).concat((d.not_installed_commits || []).map(c => `<li class="mono small">${esc(c)}</li>`));
+  if (H) parts.push(`the merge on ${H.branch}, fixed and committed`);
+  const from = src.length === 2 ? "from both the original LFG and your fork" : src.length ? `from ${named(src[0])}` : "";
+  const li = c => `<li class="mono small">${esc(c)}</li>`, group = (title, cs) => cs.length ? `<li><b>${esc(title)}</b><ul>${cs.map(li).join("")}</ul></li>` : "";
+  const list = src.map(r => group(`From ${named(r)}`, R[r].commits || [])).concat(group("In your checkout, not installed yet", d.not_installed_commits || []));
   const blocked = d.current_branch && d.current_branch !== "main" ? `Switch ${esc(d.source)} to main first.` : d.dirty ? `${esc(d.source)} has uncommitted changes; commit or stash them first.` : "";
   const unlocked = await isUnlocked();
   box.hidden = false;
   box.className = "callout warn";
-  box.innerHTML = `${dot("warn")}<b>LFG update ready:</b> ${esc(parts.join(", "))}. <details class="more inline"><summary>What's in it</summary><ul>${list.join("")}</ul></details>
+  box.innerHTML = `${dot("warn")}<b>LFG update ready${from ? ` ${esc(from)}` : ""}:</b> ${esc(parts.join(", "))}. <details class="more inline"><summary>What's in it</summary><ul>${list.join("")}</ul></details>
     ${blocked ? `<span class="muted small">${blocked}</span>` : `<button class="btn small primary" id="update-go" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to update from here\""}>Update</button><span class="muted small"> Tests run first; if they fail nothing changes.</span>`}`;
   const go = $("#update-go");
   if (go) go.onclick = async () => {
@@ -2163,7 +2189,9 @@ async function watchUpdate() {
     return checkUpdate();
   }
 }
-setInterval(checkUpdate, 10 * 60 * 1000);
+setInterval(checkUpdate, 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
+window.addEventListener("focus", () => checkUpdate());
 function refresh() { state.cache = {}; state.fresh = true; mapStatus(); checkUpdate(true); route().finally(() => { state.fresh = false; }); }
 /* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
    drawer is open, so nothing you're in the middle of is thrown away. */
