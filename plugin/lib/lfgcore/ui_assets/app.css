@@ -428,3 +428,10 @@ input.wide { width: 100%; }
 .seg label.on { background: var(--blue-bg, var(--c-blue)); border-color: transparent; font-weight: 500; }
 .seg input { display: none; }
 #update-banner[hidden] { display: none; }
+.pr-status { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 16px; }
+.pr-status .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag + .tag { margin-left: 6px; }
+.pr-status .tags .tag + .tag { margin-left: 0; }
+.pr-actions { margin: 0 0 18px; gap: 8px; }
+.cols { margin-bottom: 14px; }
+.cols .box.stat { min-height: 92px; }
