@@ -117,6 +117,11 @@ def api(view, q):
         return S.rules()
     if view == "storage":
         return S.storage()
+    if view == "environment":
+        from . import env as E
+        if _arg(q, "fresh") == "1":
+            dash.forget("environment")
+        return dash.in_background("environment", 300, E.snapshot, "looking at every repo and worktree")
     if view == "update":
         from . import updates as U
         d = dash.in_background("update", 600, U.check, "checking for updates")
@@ -209,6 +214,14 @@ def save(what, body):
     if what == "ui_restart":
         threading.Timer(0.5, _restart).start()
         return {"restarting": True}
+    if what == "worktree_prune":
+        from . import env as E
+        try:
+            res = E.prune(str(body.get("root") or ""))
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
+        dash.forget("environment")
+        return res
     if what in ("session_name", "session_folder", "session_hide", "session_trash", "worktree_remove"):
         from . import sessions as SS
         try:
@@ -222,7 +235,9 @@ def save(what, body):
             if what == "session_trash":
                 return SS.trash(body.get("id"))
             if what == "worktree_remove":
-                return SS.remove_worktree(str(body.get("path") or ""))
+                res = SS.remove_worktree(str(body.get("path") or ""))
+                dash.forget("environment")
+                return res
             return SS.file_into(body.get("id"), body.get("folder"))
         except ValueError as e:
             raise S.Invalid(str(e)) from None

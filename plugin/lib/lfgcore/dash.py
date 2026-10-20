@@ -669,6 +669,12 @@ def _tokensave_uploads():
 _BUSY = {}
 
 
+def forget(key):
+    """Drop a cached in_background value, so the next read starts a fresh one."""
+    with _CLOCK:
+        _CACHE.pop(key, None)
+
+
 def in_background(key, ttl, fn, doing):
     """Cached value of fn(), refreshed in a background thread with at most one run per key in flight, so a slow or
     stuck external tool never holds up a page. Until the first run finishes, says it is pending."""

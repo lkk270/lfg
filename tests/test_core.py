@@ -1205,6 +1205,34 @@ class SessionsTest(unittest.TestCase):
             self.SS.remove_worktree(wt)
         self.assertTrue(os.path.isdir(wt))
 
+    def test_environment_marks_what_is_safe_and_prune_only_forgets_gone_folders(self):
+        from lfgcore import env as E
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        repo = os.path.join(self.dir, "repo")
+        run = lambda *a, cwd=repo: subprocess.run(a, cwd=cwd, env=env, check=True, capture_output=True)  # noqa: E731
+        os.makedirs(repo)
+        run("git", "init", "-q")
+        run("git", "commit", "-q", "--allow-empty", "-m", "x")
+        bare = os.path.join(self.dir, "remote.git")
+        run("git", "init", "-q", "--bare", bare, cwd=self.dir)
+        run("git", "remote", "add", "origin", bare)
+        run("git", "push", "-q", "origin", "HEAD")
+        clean, busy, gone = (os.path.join(self.dir, n) for n in ("clean", "busy", "gone"))
+        for i, p in enumerate((clean, busy, gone)):
+            run("git", "worktree", "add", "-q", "-b", "b%d" % i, p)
+        with open(os.path.join(busy, "f.txt"), "w") as f:
+            f.write("work")
+        __import__("shutil").rmtree(gone)
+        with mock.patch.object(E, "_roots", lambda: [repo]), mock.patch.object(E, "services", lambda: {}):
+            ws = {os.path.basename(w["path"]): w for w in E.snapshot()["repos"][0]["worktrees"]}
+        self.assertTrue(ws["clean"]["safe_to_delete"])
+        self.assertFalse(ws["busy"]["safe_to_delete"])
+        self.assertTrue(ws["gone"]["missing"])
+        self.assertFalse(ws["repo"]["safe_to_delete"])
+        self.assertEqual(E.prune(repo)["forgot"], 1)
+        self.assertTrue(os.path.isdir(clean) and os.path.isdir(busy))
+
     def test_names_and_folders_are_yours_and_reversible(self):
         a = "%08d-0000-0000-0000-000000000000" % 1
         self.write(a, "/nowhere/app", "main", "hello")

@@ -801,7 +801,7 @@ async function showSkill(name) {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["home", "Home"], ["sessions", "Sessions"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1144,6 +1144,77 @@ function wireSessions(root) {
   $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
   $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
 }
+/* Environment: every repo and worktree on this machine, and what LFG runs in the background. */
+const MB = b => b == null ? "?" : b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
+PAGES.environment = async () => {
+  const [d, unlocked] = await Promise.all([api("environment"), isUnlocked()]);
+  if (d.pending) {
+    setTimeout(() => { if ((location.hash.slice(1) || "").startsWith("environment")) route(); }, 2500);
+    return `${head("Environment", "Every repo and worktree on this computer, and what LFG runs in the background.")}<div class="loading">Looking at every repo and worktree… (about 10 seconds)</div>`;
+  }
+  if (d.available === false) return unavailable(d);
+  state.env = d;
+  const S = d.services || {};
+  const svc = section("Running in the background", `<ul class="items box">${(S.rows || []).map(r => `<li class="sess"><div class="grow">${dot(r.ok ? "ok" : "bad")}<b>${esc(r.name)}</b> <span class="muted small">${esc(r.detail)}</span></div>${r.ok ? "" : `<button class="btn small" data-copy="${esc(r.fix)}">Copy fix</button>`}</li>`).join("")}${(S.disk || []).map(x => `<li class="sess"><div class="grow muted small">${esc(x.what)}</div><span class="small">${MB(x.bytes)}</span></li>`).join("")}</ul>`);
+  const all = d.repos.flatMap(r => r.worktrees.filter(w => !w.main).map(w => Object.assign({ repo: r.name, root: r.root }, w)));
+  const old = all.filter(w => w.safe_to_delete && Date.now() - Date.parse(w.last_session || w.touched || 0) > 14 * 864e5);
+  const status = w => w.missing ? `<span class="muted">folder already gone</span>` : [w.dirty ? `<span class="bad-tx">${plural(w.dirty, "uncommitted file")}</span>` : "", w.unpushed ? `<span class="bad-tx">${plural(w.unpushed, "commit")} not pushed</span>` : "", !w.dirty && !w.unpushed ? "nothing unsaved" : ""].filter(Boolean).join(" · ");
+  const wtLine = w => `<li class="sess"><div class="grow"><div class="title">${esc(w.branch || (w.detached ? "detached at " + w.head : w.head))}${w.ticket && !(w.branch || "").toUpperCase().includes(w.ticket) ? ` <span class="tag">${esc(w.ticket)}</span>` : ""}${w.main ? ' <span class="tag">main checkout</span>' : ""}</div>
+      <div class="meta mono">${esc(w.path)}</div>
+      <div class="meta">${status(w)}${w.last_session ? ` · last session ${ago(w.last_session)}` : w.touched ? ` · touched ${ago(w.touched)}` : ""}${w.sessions ? ` · ${plural(w.sessions, "session")}` : ""}${w.last_subject ? ` · <span title="${esc(w.last_commit || "")}">${esc(w.last_subject.slice(0, 70))}</span>` : ""}</div></div>
+      ${w.missing ? "" : `<button class="btn small" data-copy="cd ${esc(w.path)}">Copy cd</button>`}
+      ${w.main || w.missing ? "" : `<button class="btn small" data-wt-del="${esc(w.path)}" ${unlocked && w.safe_to_delete ? "" : "disabled"} title="${w.safe_to_delete ? "Delete this worktree; the branch is kept" : "Has unsaved work, so it can't be deleted from here"}">Delete</button>`}</li>`;
+  const repos = d.repos.filter(r => r.worktrees.length > 1 || r.worktrees.some(w => w.dirty || w.unpushed)).map(r => {
+    const wt = r.worktrees.filter(w => !w.main), gone = wt.filter(w => w.missing).length;
+    const sub = `${plural(wt.length, "worktree")}${gone ? ` · ${gone} already gone` : ""}${r.enabled ? " · LFG on" : ""}`;
+    return `<details class="item" ${wt.some(w => w.dirty || w.unpushed) || wt.length <= 5 ? "open" : ""}><summary><span class="grow"><b>${esc(r.name)}</b> <span class="muted small">${sub}</span></span>${gone && unlocked ? `<button class="btn small" data-wt-prune="${esc(r.root)}" title="Forget worktrees whose folders were deleted by hand. No files are touched.">Forget ${gone} gone</button>` : ""}</summary><ul class="items sess-list">${r.worktrees.map(wtLine).join("")}</ul></details>`;
+  }).join("");
+  const quiet = d.repos.filter(r => r.worktrees.length <= 1 && !r.worktrees.some(w => w.dirty || w.unpushed)).map(r => r.name);
+  const lock = unlocked ? "" : `<div class="callout warn">Delete is locked. Run <code>lfg ui</code> in your terminal to open this page unlocked. Copy works either way.</div>`;
+  return `${head("Environment", `Every repo and worktree on this computer (${plural(all.length, "worktree")} in ${plural(d.repos.length, "repo")}), and what LFG runs in the background. Checked ${ago(d.checked_at)}.`)}
+    ${lock}${svc}
+    ${old.length && unlocked ? `<div class="callout">${plural(old.length, "worktree")} have nothing unsaved and no session or change in the last 14 days. <button class="btn small primary" id="wt-old">Review and delete…</button></div>` : ""}
+    ${section("Repos and worktrees", repos || empty("No worktrees", "None of your repos has a second worktree."), "worktrees with unsaved work first open")}
+    ${quiet.length ? `<p class="muted small">No worktrees and nothing unsaved: ${esc(quiet.join(", "))}.</p>` : ""}`;
+};
+function wireEnvironment(root) {
+  $$("[data-copy]", root).forEach(b => b.onclick = async () => {
+    const was = b.textContent;
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+    setTimeout(() => (b.textContent = was), 1500);
+  });
+  const del = async paths => {
+    const out = [];
+    for (const p of paths) { const r = await save("worktree_remove", { path: p }); out.push(r.ok ? null : `${p.split("/").pop()}: ${r.why}`); }
+    return out.filter(Boolean);
+  };
+  $$("[data-wt-del]", root).forEach(b => b.onclick = () => {
+    const p = b.dataset.wtDel;
+    openDrawer("Delete this worktree?", `<div class="readable"><p class="mono small">${esc(p)}</p><p>The folder goes, including files git ignores there (node_modules, a copied .env). The branch stays, so you can check it out again any time. LFG checks again just before deleting and refuses if anything is unsaved.</p>
+      <div class="set-actions"><button class="btn primary" id="wt-go">Delete worktree</button><span class="save-msg" id="wt-msg"></span></div></div>`);
+    $("#wt-go").onclick = async () => { $("#wt-go").disabled = true; const bad = await del([p]); $("#wt-msg").textContent = bad.length ? bad[0] : "Deleted."; if (!bad.length) setTimeout(() => { closeDrawer(); route(); }, 600); };
+  });
+  $$("[data-wt-prune]", root).forEach(b => b.onclick = async e => {
+    e.preventDefault(); e.stopPropagation(); b.disabled = true;
+    const r = await save("worktree_prune", { root: b.dataset.wtPrune });
+    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
+    route();
+  });
+  const oldBtn = $("#wt-old", root);
+  if (oldBtn) oldBtn.onclick = () => {
+    const all = state.env.repos.flatMap(r => r.worktrees.filter(w => !w.main && w.safe_to_delete && Date.now() - Date.parse(w.last_session || w.touched || 0) > 14 * 864e5).map(w => Object.assign({ repo: r.name }, w)));
+    openDrawer(`Delete ${plural(all.length, "old worktree")}?`, `<div class="readable"><p>Each has nothing uncommitted and nothing unpushed, and hasn't been used in 14 days. Branches are kept. Untick any you want to keep.</p>
+      <ul class="items box">${all.map(w => `<li><label class="row"><input type="checkbox" data-old="${esc(w.path)}" checked><span class="grow"><b>${esc(w.repo)}</b> · ${esc(w.branch || w.head)}<div class="meta mono small">${esc(w.path)} · ${ago(w.last_session || w.touched)}</div></span></label></li>`).join("")}</ul>
+      <div class="set-actions"><button class="btn primary" id="old-go">Delete ticked</button><span class="save-msg" id="old-msg"></span></div></div>`);
+    $("#old-go").onclick = async () => {
+      const go = $("#old-go"), msg = $("#old-msg"), paths = $$("[data-old]:checked").map(x => x.dataset.old);
+      go.disabled = true; msg.textContent = `Deleting ${paths.length}…`;
+      const bad = await del(paths);
+      msg.textContent = bad.length ? `Deleted ${paths.length - bad.length}; kept ${bad.length}: ${bad.join("; ")}` : `Deleted ${paths.length}.`;
+      setTimeout(() => { closeDrawer(); route(); }, bad.length ? 5000 : 900);
+    };
+  };
+}
 PAGES.usage = async () => {
   const d = await api("usage");
   const t = (d.days || []).reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
@@ -1389,11 +1460,12 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["usage", "skills", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
   sessions: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
+  environment: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   runs: "M5 4l14 8-14 8z",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
@@ -1472,6 +1544,7 @@ async function route() {
   if (key === "docs") wireDocs();
   if (key === "prs") wirePrs(view);
   if (key === "sessions") wireSessions(view);
+  if (key === "environment") wireEnvironment(view);
   const rf = $("#refreshed");
   if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (!arg) window.scrollTo(0, 0);
@@ -1603,7 +1676,7 @@ setInterval(checkUpdate, 10 * 60 * 1000);
 function refresh() { state.cache = {}; state.fresh = true; mapStatus(); route().finally(() => { state.fresh = false; }); }
 /* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
    drawer is open, so nothing you're in the middle of is thrown away. */
-const AUTO_REFRESH = ["home", "sessions", "prs", "checks", "runs", "issues"];
+const AUTO_REFRESH = ["home", "sessions", "environment", "prs", "checks", "runs", "issues"];
 setInterval(() => {
   const page = (location.hash.slice(1) || "home").split("/")[0];
   const busy = document.hidden || document.querySelector("#drawer:not([hidden])") ||
