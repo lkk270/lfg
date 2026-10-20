@@ -94,6 +94,14 @@ def routed(root=None):
     return base_url(root).rstrip("/") == local_url()
 
 
+def bypassed():
+    """The API address this session really uses, when it isn't the proxy. Settings can say Headroom while whatever
+    started Claude Code sets its own ANTHROPIC_BASE_URL (the Claude desktop app does, and ignores settings). None when
+    the session goes through the proxy, or when the variable is unset and there's no way to tell."""
+    actual = str(os.environ.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
+    return actual if actual and actual != local_url() else None
+
+
 def cloud_provider():
     """Bedrock / Vertex / Foundry sessions don't go through ANTHROPIC_BASE_URL, so Headroom can't sit in front."""
     env = dict(os.environ)

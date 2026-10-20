@@ -148,8 +148,16 @@ def session_start(data):
         lines.append("GitHub CLI: NOT signed in - ask the user to run `gh auth login` themselves.")
     from . import headroom as HR
     if HR.routed(root):
-        down = "DOWN - tell the user to run `lfg headroom restart` or `lfg headroom off`"
-        lines.append("Headroom proxy: %s." % ("up" if HR.ensure_live(root) else down))
+        other = HR.bypassed()
+        if other:
+            why = (" because the Claude desktop app sets its own API address and ignores settings"
+                   if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "claude-desktop" else "")
+            lines.append("Headroom proxy: BYPASSED - settings route Claude Code through Headroom, but this session"
+                         " sends requests straight to %s%s. If the user asks about Headroom, say so; a terminal"
+                         " `claude` session goes through it." % (other, why))
+        else:
+            down = "DOWN - tell the user to run `lfg headroom restart` or `lfg headroom off`"
+            lines.append("Headroom proxy: %s." % ("up" if HR.ensure_live(root) else down))
     if root:
         st = G.status(root, rid)
         if st["status"] != "fresh":
