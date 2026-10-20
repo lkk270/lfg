@@ -512,24 +512,43 @@ def hook(event):
         d = load()
         if event in ("session-start", "prompt"):
             # A session read the defaults file when it started. Tell it again only when something changed since:
-            # its own rules (from Sessions → Rules) or the defaults (from Preferences).
+            # its own rules (from Sessions → Rules), the defaults (from Preferences) or which of the user's own
+            # named rules exist (from Settings → Rules; their text is read on demand with `lfg rule`).
             note = session_note(sid, d)
             dflt = render(effective(None, d), d, header="Your rules (defaults)")
-            digest = hashlib.sha1((note + "\0" + dflt).encode()).hexdigest()[:12]
+            try:
+                from . import settings as S
+                own = sorted(S.own_rules())
+            except Exception:  # noqa: BLE001  a broken rule file must never block a session
+                own = []
+            h = lambda t: hashlib.sha1(t.encode()).hexdigest()[:12]  # noqa: E731
+            cur = {"digest": h(note + "\0" + dflt + "\0" + ",".join(own)), "defaults": h(dflt), "note": h(note),
+                   "own": own}
             seen = _seen()
             prev = seen.get(sid)
-            seen[sid] = {"digest": digest, "defaults": hashlib.sha1(dflt.encode()).hexdigest()[:12]}
+            seen[sid] = cur
             C.write_json(_seen_path(), dict(list(seen.items())[-500:]))
             if event == "session-start":
                 out = note
             else:
-                if not isinstance(prev, dict) or prev.get("digest") == digest:
+                if not isinstance(prev, dict) or prev.get("digest") == cur["digest"]:
                     return 0
+                prev = dict(cur, **prev)  # a session seen before a key was recorded: that part counts as unchanged
                 parts = []
-                if prev.get("defaults") != seen[sid]["defaults"]:
+                if prev["defaults"] != cur["defaults"]:
                     parts.append(dflt + "\nThe user changed their default rules while this session was open; these "
                                  "replace lfg-preferences.md as you read it at the start.")
-                parts.append(note or "This session now follows the user's default rules, with no session changes.")
+                if prev["note"] != cur["note"] or parts:
+                    parts.append(note or "This session now follows the user's default rules, with no session "
+                                 "changes.")
+                added = [n for n in own if n not in prev["own"]]
+                gone = [n for n in prev["own"] if n not in own]
+                if added:
+                    parts.append("The user added rules of their own while this session was open (follow them; read "
+                                 "each with `lfg rule <name>`): %s." % ", ".join(added))
+                if gone:
+                    parts.append("The user removed these rules of their own; stop following them: %s."
+                                 % ", ".join(gone))
                 out = "\n\n".join(parts)
             if out:
                 print(json.dumps({"hookSpecificOutput": {
