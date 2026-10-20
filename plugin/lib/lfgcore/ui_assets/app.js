@@ -1472,11 +1472,12 @@ function tallyLine(r) {
   return `<span class="st">${dot("on")}Ready to post</span>`;
 }
 async function prStart(pr, btn) {
+  const fresh = btn.dataset.fresh === "1";
   btn.disabled = true; btn.textContent = "Starting…";
-  const d = await save("review_run", { pr });
+  const d = await save("review_run", { pr, fresh });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
   btn.textContent = d.started ? "Started" : "Already running";
-  setTimeout(route, 1500);
+  setTimeout(softRoute, 1200);
 }
 /* Where a PR stands on GitHub, as a tag: Approved / Changes requested / Needs review / Merged / Closed. */
 const GH_DECISION = { APPROVED: ["Approved", "ok"], CHANGES_REQUESTED: ["Changes requested", "bad"], REVIEW_REQUIRED: ["Needs review", "warn"] };
@@ -1544,44 +1545,58 @@ async function prDetail(arg) {
   const rec = d.record, j = d.job;
   crumbs("prs", pr);
   const running = j && j.status === "running";
-  if (running) setTimeout(() => { if (location.hash === `#prs/${arg}`) route(); }, 5000);
+  if (running) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
-  const jobBox = j && j.status !== "done" ? `<div class="callout ${running ? "" : "bad"}">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}</div>` : "";
-  const startBtn = `<button class="btn" data-pr-start="${esc(pr)}" ${unlocked && !running ? "" : "disabled"}>${rec ? "Re-review" : "Review"}</button> <button class="btn" data-pr-sessions="${esc(pr)}" ${unlocked && !running ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>`;
-  const sess = (d.sessions || []).length ? section("Your sessions about this PR", `<ul class="items box">${d.sessions.map(s => `<li class="sess"><div class="grow"><div class="title">${esc(s.title)}</div><div class="meta">${ago(s.modified)} · ${esc(s.cwd || "")}${s.has_json ? " · review ready to import" : ""}</div></div><button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, s.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button></li>`).join("")}</ul>`, "e.g. a /review-pr you ran yourself") : "";
-  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}<div class="row">${startBtn}</div>${sess}`;
-  const last = rec.passes[rec.passes.length - 1];
-  const live = !last.posted;
-  const byId = Object.fromEntries(rec.passes.flatMap(p => p.findings).map(f => [f.id, f]));
-  const prior = (last.prior || []).length ? section("Earlier comments", `<div class="box items">${last.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
+  const kindOf = j && (j.fresh ? "new review" : j.re_review ? "re-review" : "review");
+  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>, started ${ago(j.started)}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
+    : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
+  const can = unlocked && !running;
+  const actions = `<div class="row wrap">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">New full review</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button></div>`;
+  const sess = (d.sessions || []).length ? section("Your sessions about this PR", `<ul class="items box">${d.sessions.map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json ? " · review ready to import" : ""}</div></div><button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button></li>`).join("")}</ul>`, "e.g. a /review-pr you ran yourself") : "";
+  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}${actions}${sess}`;
+  const passes = rec.passes, last = passes[passes.length - 1];
+  const key = "lfg.prpass." + pr;
+  let pick = Number(sessionStorage.getItem(key)) || last.n;
+  if (state.prSeen && state.prSeen[pr] && state.prSeen[pr] < last.n) pick = last.n;  // a new review just landed
+  (state.prSeen || (state.prSeen = {}))[pr] = last.n;
+  const p = passes.find(x => x.n === pick) || last;
+  const live = p === last && !p.posted;
+  const byId = Object.fromEntries(passes.flatMap(x => x.findings).map(f => [f.id, f]));
+  const label = x => `Review ${x.n}${x.kind === "re-review" ? " · re-review" : ""}`;
+  const passTabs = `<div class="tabs pr-passes">${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
+  const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
-  const fs = [...last.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
-  const pending = last.findings.filter(f => f.status === "pending").length;
-  const kept = last.findings.filter(f => f.status === "keep").length;
+  const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
+  const pending = p.findings.filter(f => f.status === "pending").length;
+  const kept = p.findings.filter(f => f.status === "keep").length;
   const postBar = live ? `<div class="panel"><div class="k" style="margin-top:0">Post to GitHub</div>
       <textarea class="editor small" id="pr-post-body" placeholder="Optional: a note above the comments"></textarea>
       <div class="row mt">${[["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]].map(([e, l]) => `<button class="btn${e === "request-changes" ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
-      <span class="muted small">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}</span></div></div>`
-    : `<div class="callout ok">${dot("ok")}Posted ${ago(last.posted.ts)}. <a href="${esc(last.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a> Re-review once the author has pushed changes.</div>`;
-  const earlier = rec.passes.length > 1 ? section("Earlier reviews", rec.passes.slice(0, -1).reverse().map(p => `<details class="more"><summary>Review ${p.n}, ${ago(p.ts)}${p.score != null ? `, score ${p.score}` : ""}${p.posted ? ", posted" : ""}</summary>${p.summary ? `<p>${txt(p.summary)}</p>` : ""}${p.findings.map(f => prFinding(f, pr, false, false)).join("")}</details>`).join("")) : "";
+      <span class="muted small" id="pr-post-hint">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}</span></div></div>`
+    : p.posted ? `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`
+    : `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
+  const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
   return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
     ${ghPanel(d.gh)}
     ${jobBox}
-    <div class="panel"><div class="row"><b>Review ${last.n}${last.kind === "re-review" ? " (re-review)" : ""}</b><span class="muted">${ago(last.ts)} · at commit <span class="mono">${esc(last.head_sha.slice(0, 8))}</span>${last.score != null ? ` · score ${esc(last.score)}` : ""}</span><span class="grow"></span>${startBtn}</div>
-      ${last.summary ? `<p>${txt(last.summary)}</p>` : ""}
-      ${(last.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${last.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}</div>
-    ${prior}
-    ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `${plural(last.findings.length, "finding")} · ${kept} kept · ${pending} to decide`)}
-    ${postBar}
-    ${sess}
-    ${earlier}`;
+    ${actions}
+    ${passTabs}
+    <div class="pr-pass-body">
+      <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span>${discard}</div>
+        ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
+        ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}</div>
+      ${prior}
+      ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `<span id="pr-tally">${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide</span>`)}
+      ${postBar}
+    </div>
+    ${sess}`;
 }
 async function prImport(pr, path, btn) {
   btn.disabled = true; btn.textContent = path === "log" ? "Saving…" : "Importing…";
   const d = await save("review_import", { pr, path });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; alertMsg(btn, d); return; }
   btn.textContent = `Saved ${plural(d.findings, "finding")}`;
-  setTimeout(() => { closeDrawer(); location.hash = `#prs/${pr.replace("#", "/")}`; route(); }, 900);
+  setTimeout(() => { closeDrawer(); const h = `#prs/${pr.replace("#", "/")}`; if (location.hash === h) softRoute(); else location.hash = h; }, 900);
 }
 async function prSessions(pr) {
   openDrawer(`Import a review of ${pr}`, '<div class="skeleton"></div>');
@@ -1601,7 +1616,7 @@ function wirePrs(root) {
     b.disabled = true;
     const d = await save("review_mark", { pr, ids: [id], status });
     if (!d.ok) { b.disabled = false; b.title = d.why || ""; alertMsg(b, d); return; }
-    route();
+    softRoute();
   });
   $$("[data-pr-edit]", root).forEach(b => b.onclick = () => {
     $(`[data-pr-editbox="${b.dataset.prEdit}"]`, root).hidden = false;
@@ -1612,6 +1627,16 @@ function wirePrs(root) {
     $(`[data-pr-body="${b.dataset.prEditcancel}"]`, root).hidden = false;
   });
   $$("[data-pr-importpath]", root).forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
+  $$("[data-pr-pass]", root).forEach(b => b.onclick = () => { const [pr, n] = JSON.parse(b.dataset.prPass); sessionStorage.setItem("lfg.prpass." + pr, n); softRoute(); });
+  $$("[data-pr-discard]", root).forEach(b => b.onclick = () => {
+    const [pr, n] = JSON.parse(b.dataset.prDiscard);
+    openDrawer(`Discard review ${n}?`, `<div class="readable"><p>Its findings and your keep/drop choices go. Nothing was posted, so GitHub isn't touched. Earlier reviews stay.</p><div class="set-actions"><button class="btn primary" id="pr-disc-go">Discard</button><span class="save-msg" id="pr-disc-msg"></span></div></div>`);
+    $("#pr-disc-go").onclick = async () => {
+      const r = await save("review_discard", { pr, pass: n });
+      saidMsg($("#pr-disc-msg"), r, "Discarded.");
+      if (r.ok) { sessionStorage.removeItem("lfg.prpass." + pr); setTimeout(() => { closeDrawer(); softRoute(); }, 500); }
+    };
+  });
   $$("[data-pr-askgo]", root).forEach(b => {
     const [pr, id] = JSON.parse(b.dataset.prAskgo), box = b.closest(".pr-edit"), input = $("[data-pr-ask]", box);
     const go = async () => {
@@ -1629,9 +1654,14 @@ function wirePrs(root) {
   });
   $$("[data-pr-editsave]", root).forEach(b => b.onclick = async () => {
     const [pr, id] = JSON.parse(b.dataset.prEditsave), box = b.closest(".pr-edit");
-    const d = await save("review_mark", { pr, ids: [id], body: $("textarea", box).value });
+    const text = $("textarea", box).value;
+    const d = await save("review_mark", { pr, ids: [id], body: text });
     if (!d.ok) return saidMsg($(".save-msg", box), d);
-    route();
+    const shown = $(`[data-pr-body="${id}"]`, root);
+    shown.innerHTML = md(text);
+    shown.hidden = false;
+    box.hidden = true;
+    saidMsg($(".save-msg", box), d, "");
   });
   $$("[data-pr-preview]", root).forEach(b => b.onclick = async () => {
     const [pr, event] = JSON.parse(b.dataset.prPreview), body = ($("#pr-post-body") || {}).value || "";
@@ -1648,7 +1678,7 @@ function wirePrs(root) {
       go.disabled = true; go.textContent = "Posting…";
       const r = await save("review_post", { pr, event: event, body });
       saidMsg($("#pr-post-msg"), r, "Posted.");
-      if (r.ok) { go.textContent = "Posted"; setTimeout(() => { closeDrawer(); route(); }, 900); } else { go.disabled = false; go.textContent = "Try again"; }
+      if (r.ok) { go.textContent = "Posted"; setTimeout(() => { closeDrawer(); softRoute(); }, 900); } else { go.disabled = false; go.textContent = "Try again"; }
     };
   });
 }
@@ -1723,7 +1753,11 @@ async function mapStatus() {
   } catch (e) { el.innerHTML = ""; }
 }
 let renderSeq = 0;
-async function route() {
+/* Re-draw the current page in place: no loading placeholder, same scroll position, open sections stay open. For
+   buttons that change one thing on the page (Keep, Save comment, Review); route() is for going to a page. */
+function softRoute() { return route({ soft: true }); }
+async function route(opts) {
+  const soft = !!(opts && opts.soft);
   let [page, ...rest] = (location.hash.slice(1) || "home").split("/");
   page = { overview: "home", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
   const key = PAGES[page] ? page : "home";
@@ -1731,8 +1765,9 @@ async function route() {
   renderNav(key);
   crumbs(key);
   document.title = `${TITLES[key]} · LFG`;
-  const seq = ++renderSeq, view = $("#view");
-  view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
+  const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
+  const open = soft ? $$("details[open]", view).map((d, i) => d.id || "i" + i) : [];
+  if (!soft) view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
   let html;
   try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); }
   if (seq !== renderSeq) return;
@@ -1747,7 +1782,10 @@ async function route() {
   if (key === "usage") loadHeadroom();
   const rf = $("#refreshed");
   if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (!arg) window.scrollTo(0, 0);
+  if (soft) {
+    $$("details", view).forEach((d, i) => { if (open.includes(d.id || "i" + i)) d.open = true; });
+    window.scrollTo(0, y);
+  } else if (!arg) window.scrollTo(0, 0);
 }
 function wireDocs() {
   const body = $("#doc-body");

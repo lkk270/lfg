@@ -689,7 +689,7 @@ def _review(R, a):
     elif a.action == "threads":
         _print(R.threads(repo, number))
     elif a.action == "run":
-        j = R.run(repo, number, ticket=a.ticket)
+        j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh)
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
                                                   j["log"]))
         return 0 if j["status"] == "done" else 1
@@ -1002,6 +1002,7 @@ def main(argv=None):
     rv.add_argument("--ticket", help="save/run: the Linear ticket the PR belongs to; list: only that ticket")
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
+    rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
     rv.add_argument("--json", action="store_true")
     kn = sp.add_parser("knowledge", help="tag a saved decision or lesson with its repo, feature or topic")
     kn.add_argument("action", choices=["tag"])

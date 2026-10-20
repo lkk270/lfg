@@ -318,7 +318,9 @@ def review_action(what, body):
             return R.post(repo, number, str(body.get("event") or ""), body=str(body.get("body") or ""),
                           dry_run=bool(body.get("dry_run")))
         if what == "review_run":
-            return R.start(repo, number, ticket=body.get("ticket") or None)
+            return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")))
+        if what == "review_discard":
+            return R.discard(repo, number, int(body.get("pass") or 0))
         if what == "review_rewrite":
             return R.rewrite(repo, number, str(body.get("id") or ""), body.get("instruction"))
         if what == "review_sessions":

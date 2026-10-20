@@ -270,6 +270,24 @@ def save(repo, number, data, ticket=None, meta=None):
     return rec
 
 
+def discard(repo, number, n):
+    """Throw away one review pass that was never posted. Only the latest can go, so later passes never point at a
+    missing one; discarding the only pass removes the record."""
+    rec = need(repo, number)
+    last = rec["passes"][-1]
+    if int(n) != last["n"]:
+        raise ReviewError("only the latest review (%d) can be discarded" % last["n"])
+    if last.get("posted"):
+        raise ReviewError("review %d is already on GitHub; it can't be discarded here" % last["n"])
+    rec["passes"].pop()
+    if rec["passes"]:
+        store(rec)
+    else:
+        os.remove(record_path(repo, number))
+    C.audit("review_discard", {"pr": "%s#%d" % (repo, number), "pass": int(n)})
+    return {"discarded": int(n), "left": len(rec["passes"])}
+
+
 def mark(repo, number, ids, status=None, body=None):
     if status is not None and status not in STATUSES:
         raise ReviewError("status must be one of %s" % ", ".join(STATUSES))
@@ -560,7 +578,7 @@ def _alive(pid):
         return False
 
 
-def start(repo, number, ticket=None):
+def start(repo, number, ticket=None, fresh=False):
     """Start `lfg review run` detached (the dashboard's Review / Re-review buttons)."""
     import subprocess
     import sys
@@ -569,13 +587,14 @@ def start(repo, number, ticket=None):
         return {"started": False, "note": "A review of this PR is already running."}
     args = [sys.executable, os.path.join(C.PLUGIN_ROOT, "bin", "lfg"), "review", "run", "%s#%d" % (repo, number)]
     args += ["--ticket", ticket] if ticket else []
+    args += ["--fresh"] if fresh else []
     with open(os.devnull, "wb") as dn:
         subprocess.Popen(args, stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True,
                          close_fds=True)
     return {"started": True}
 
 
-def run(repo, number, ticket=None):
+def run(repo, number, ticket=None, fresh=False):
     """Review one PR with Claude Code in print mode, on your own login, and wait for it."""
     import subprocess
     if not C.which("claude"):
@@ -584,15 +603,17 @@ def run(repo, number, ticket=None):
     cwd = local_checkout(repo) or C.ensure_dir(reviews_dir())
     log = job_path(repo, number)[:-5] + ".log"
     j = {"repo": repo, "number": number, "status": "running", "pid": os.getpid(), "started": C.now_iso(),
-         "cwd": cwd, "log": log, "re_review": before > 0}
+         "cwd": cwd, "log": log, "re_review": before > 0 and not fresh, "fresh": bool(fresh)}
     C.write_json(job_path(repo, number), j)
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     prompt = ("Read %s and follow it to review %s#%d%s. You are running unattended from the LFG dashboard: nobody "
               "can answer questions, so put anything you would have asked in the summary. Run each shell command on "
               "its own, never chained with ; or &&. Don't run `lfg review save` and don't write files: end your last "
               "message with the Output JSON in one ```json block, and LFG saves it. Skip the steps after saving "
-              "(showing the table, triage, the post command)."
-              % (skill, repo, number, " (Linear ticket %s)" % ticket if ticket else ""))
+              "(showing the table, triage, the post command).%s"
+              % (skill, repo, number, " (Linear ticket %s)" % ticket if ticket else "",
+                 " Do a full first review of the whole PR, as if there were no earlier reviews: no prior list, every "
+                 "finding since \"first\"." if fresh else ""))
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
            "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)]
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

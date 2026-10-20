@@ -1360,6 +1360,22 @@ class ReviewTest(unittest.TestCase):
         self.addCleanup(__import__("shutil").rmtree, d, True)
         return d
 
+    def test_discard_only_the_latest_unposted_review(self):
+        R.save("o/r", 7, {"findings": [self.finding()]}, meta=self.META)
+        R.save("o/r", 7, {"findings": [self.finding()]}, meta=self.META)
+        with self.assertRaises(R.ReviewError):
+            R.discard("o/r", 7, 1)
+        self.assertEqual(R.discard("o/r", 7, 2)["left"], 1)
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["posted"] = {"url": "u", "ts": "t"}
+        R.store(rec)
+        with self.assertRaises(R.ReviewError):
+            R.discard("o/r", 7, 1)
+        rec["passes"][0]["posted"] = None
+        R.store(rec)
+        R.discard("o/r", 7, 1)
+        self.assertIsNone(R.load("o/r", 7))
+
     def test_parse_pr_forms(self):
         self.assertEqual(R.parse_pr("o/r#12"), ("o/r", 12))
         self.assertEqual(R.parse_pr("https://github.com/o/r.js/pull/5/files"), ("o/r.js", 5))
