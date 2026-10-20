@@ -427,3 +427,4 @@ input.wide { width: 100%; }
 .seg label { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13.5px; }
 .seg label.on { background: var(--blue-bg, var(--c-blue)); border-color: transparent; font-weight: 500; }
 .seg input { display: none; }
+#update-banner[hidden] { display: none; }

@@ -1911,18 +1911,19 @@ async function checkUpdate() {
     setTimeout(checkUpdate, 3000);
     return;
   }
-  if (j && j.status === "done" && !state.updateSeen && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
+  const seen = localStorage.getItem("lfg.update.seen") === (j && j.ended);
+  if (j && j.status === "done" && !seen && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
     box.hidden = false;
     box.className = "callout ok";
     box.innerHTML = `${dot("ok")}<span><b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
-    $("#update-ok").onclick = () => { state.updateSeen = true; box.hidden = true; };
+    $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }
-  if (j && j.status === "failed" && !state.updateSeen) {
+  if (j && j.status === "failed" && !seen) {
     box.hidden = false;
     box.className = "callout bad";
     box.innerHTML = `${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span> <button class="btn small" id="update-ok">OK</button>`;
-    $("#update-ok").onclick = () => { state.updateSeen = true; box.hidden = true; };
+    $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }
   const ver = $("#lfg-version");
