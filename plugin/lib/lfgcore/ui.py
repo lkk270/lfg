@@ -47,6 +47,12 @@ def _arg(q, k):
     return (q.get(k) or [""])[0]
 
 
+def _only(q):
+    """The picked repo's main checkout for the pages that list every repo (Sessions, PR reviews, Environment), or
+    None when "Show all repos" is on or no repo is picked."""
+    return None if _arg(q, "all") == "1" else dash.repo_root(_rid(q)) if _rid(q) else None
+
+
 def graph_view(rid, kind):
     """URL of a tool-generated interactive view, generating it on first request. Graph views live in the repo's
     graph data (served by /graphdata/), the health report under ~/.lfg (served by /static/)."""
@@ -141,7 +147,8 @@ def api(view, q):
         from . import env as E
         if _arg(q, "fresh") == "1":
             dash.forget("environment")
-        return dash.in_background("environment", 300, E.snapshot, "looking at every repo and worktree")
+        snap = dash.in_background("environment", 300, E.snapshot, "looking at every repo and worktree")
+        return E.only(snap, _only(q))
     if view == "update":
         from . import updates as U
         if _arg(q, "fresh") == "1":
@@ -151,7 +158,7 @@ def api(view, q):
         return dict(d, job=U.job(), fix=U.fix_job())
     if view == "sessions":
         from . import sessions as SS
-        return SS.listing(hidden=_arg(q, "hidden") == "1")
+        return SS.listing(hidden=_arg(q, "hidden") == "1", only=_only(q))
     if view == "sessiondone":
         from . import sessions as SS
         return SS.group_cleanup(_arg(q, "repo"), _arg(q, "group"))
@@ -167,7 +174,7 @@ def api(view, q):
     if view in ("prreviews", "prreview"):
         from . import review as R
         if view == "prreviews":
-            return R.dashboard(fresh=_arg(q, "fresh") == "1")
+            return R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q))
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number,

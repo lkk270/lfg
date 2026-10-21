@@ -1619,6 +1619,19 @@ class UpdatesTest(unittest.TestCase):
     def test_fix_with_nothing_held_does_nothing(self):
         self.assertEqual(self.run_fix(lambda *a: self.fail("Claude ran"))["status"], "failed")
 
+    def test_check_says_when_the_checkout_is_off_main_or_has_changes_and_the_banner_says_what_to_do(self):
+        self.upstream_commit("new.txt", "hi")
+        d = self.U.check(max_age=0)
+        self.assertEqual((d["current_branch"], d["dirty"]), ("main", False))
+        self.git(self.co, "checkout", "-q", "-b", "agent/work")
+        self.write(self.co, "tests/test_ok.py", "# edited\n")
+        d = self.U.check(max_age=0)
+        self.assertEqual((d["current_branch"], d["dirty"], d["ready"]), ("agent/work", True, True))
+        with open(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        self.assertIn("git -C ${shq(d.source)} checkout main", js)  # off main: one command to copy
+        self.assertIn("has uncommitted changes", js)  # changes: say so, nothing to run
+
     def test_banner_notices_within_about_two_minutes(self):
         import inspect
         import re
@@ -2307,3 +2320,63 @@ class ReviewTest(unittest.TestCase):
     def test_dead_running_job_reads_as_failed(self):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
         self.assertEqual(R.job("o/r", 9)["status"], "failed")
+
+
+class RepoPickerTest(unittest.TestCase):
+    """Sessions, PR reviews and Environment show the repo picked top left, and every repo with "Show all repos"."""
+
+    def setUp(self):
+        from lfgcore import sessions as SS
+        self.SS = SS
+        self.a, self.rid = git_repo("lfg-pick-a-")
+        self.b, _ = git_repo("lfg-pick-b-")
+        for root, slug in ((self.a, "lkk270/lfg"), (self.b, "acme/api")):
+            subprocess.run(["git", "remote", "add", "origin", "git@github.com:%s.git" % slug], cwd=root, check=True)
+        subprocess.run(["git", "remote", "add", "upstream", "https://github.com/varun-singhh/lfg"], cwd=self.a,
+                       check=True)
+
+    def names(self, view, rows, key, **q):
+        q = {"repo": [self.rid], **{k: [v] for k, v in q.items()}}
+        return sorted(key(r) for r in rows(ui.api(view, q)))
+
+    def test_sessions(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        with mock.patch.object(self.SS, "PROJECTS", d):
+            for i, cwd in enumerate((self.a, self.b, self.a + ".worktrees/fix")):  # a gone worktree still counts
+                sd = os.path.join(d, cwd.replace("/", "-"))
+                os.makedirs(sd)
+                with open(os.path.join(sd, "%08d-0000-0000-0000-000000000000.jsonl" % i), "w") as f:
+                    f.write(json.dumps({"type": "user", "cwd": cwd, "gitBranch": "main", "entrypoint": "cli",
+                                        "timestamp": "2026-10-19T10:00:00Z",
+                                        "message": {"role": "user", "content": "hi"}}) + "\n")
+            rows = lambda v: v["sessions"]  # noqa: E731
+            key = lambda r: r["cwd"]  # noqa: E731
+            self.assertEqual(self.names("sessions", rows, key), [self.a, self.a + ".worktrees/fix"])
+            every = sorted([self.a, self.b, self.a + ".worktrees/fix"])
+            self.assertEqual(self.names("sessions", rows, key, all="1"), every)
+
+    def test_environment(self):
+        snap = {"repos": [{"name": "a", "root": self.a, "worktrees": []}, {"name": "b", "root": self.b,
+                                                                            "worktrees": []}], "services": {}}
+        with mock.patch.object(dash, "in_background", return_value=snap):
+            rows, key = (lambda v: v["repos"]), (lambda r: r["root"])
+            self.assertEqual(self.names("environment", rows, key), [self.a])
+            self.assertEqual(self.names("environment", rows, key, all="1"), sorted([self.a, self.b]))
+        pending = {"available": False, "pending": True, "why": "looking"}
+        with mock.patch.object(dash, "in_background", return_value=pending):
+            self.assertEqual(ui.api("environment", {"repo": [self.rid]}), pending)
+
+    def test_pr_reviews_match_every_github_remote_of_the_repo(self):
+        q = [{"repo": r, "number": 1, "title": "t", "author": "x", "url": "u", "updated": "", "draft": False}
+             for r in ("lkk270/lfg", "varun-singhh/LFG", "acme/api")]
+        with mock.patch.object(R, "queue", return_value=q), mock.patch.object(R, "all_records", return_value=[]), \
+                mock.patch.object(R, "gh_status", return_value={}):
+            rows, key = (lambda v: v["queue"]), (lambda r: r["repo"])
+            self.assertEqual(self.names("prreviews", rows, key), ["lkk270/lfg", "varun-singhh/LFG"])
+            self.assertEqual(len(self.names("prreviews", rows, key, all="1")), 3)
+            subprocess.run(["git", "remote", "remove", "origin"], cwd=self.a, check=True)
+            subprocess.run(["git", "remote", "remove", "upstream"], cwd=self.a, check=True)
+            d = ui.api("prreviews", {"repo": [self.rid]})
+            self.assertEqual((len(d["queue"]), d["no_remote"]), (3, True))  # no GitHub remote: everything, said so
+        self.assertNotIn("passes", q[0])  # the cached queue isn't changed by one page's view of it

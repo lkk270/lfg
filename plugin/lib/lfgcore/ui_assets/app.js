@@ -43,6 +43,14 @@ async function api(view, params = {}) {
 }
 
 const repoName = (id = state.repo) => (state.repos || []).find(x => x.id === id)?.name || id;
+/* Sessions, PR reviews and Environment list every repo on this computer: they show the picked repo unless "Show all
+   repos" is on, remembered per page like the branch. The server does the filtering. */
+const allRepos = page => !state.repo || localStorage.getItem("lfg.allrepos." + page) === "1";
+const scopeArgs = page => (allRepos(page) ? { all: "1" } : {});
+const scopeLine = page => !state.repo ? "" : allRepos(page)
+  ? `Showing <b>all repos</b>. <a href="#" data-scope="${page}">Show only ${esc(repoName())}</a>`
+  : `Showing <b>${esc(repoName())}</b> only. <a href="#" data-scope="${page}">Show all repos</a>`;
+const shq = p => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${String(p).replace(/'/g, "'\\''")}'`);  // a path, safe to paste in a shell
 const usd = v => "$" + (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
 // ------------------------------------------------------------------ plain words for tool status values
 /* Every status value the tools write, as [what a person reads, tone]. Unknown values show as written. */
@@ -460,6 +468,11 @@ document.addEventListener("click", openKnow);
 document.addEventListener("keydown", openKnow);
 
 function wire(root) {
+  $$("[data-scope]", root).forEach(a => a.onclick = e => {
+    e.preventDefault();
+    localStorage.setItem("lfg.allrepos." + a.dataset.scope, allRepos(a.dataset.scope) ? "" : "1");
+    route();
+  });
   $$("[data-run-file]", root).forEach(a => a.onclick = async e => {
     e.preventDefault();
     const [run, f] = JSON.parse(a.dataset.runFile);
@@ -1298,7 +1311,7 @@ async function sessionRules(sid) {
 }
 /* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
 PAGES.sessions = async () => {
-  const [d, unlocked] = await Promise.all([api("sessions", state.showHidden ? { hidden: "1" } : {}), isUnlocked()]);
+  const [d, unlocked] = await Promise.all([api("sessions", { ...(state.showHidden ? { hidden: "1" } : {}), ...scopeArgs("sessions") }), isUnlocked()]);
   state.sessions = d;
   const q = (state.sessionFind || "").toLowerCase();
   const hit = s => !q || [s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd].join(" ").toLowerCase().includes(q);
@@ -1322,7 +1335,7 @@ PAGES.sessions = async () => {
       <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></li>`;
   const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span>${repo !== "Your groups" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
   const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
-  return `${head("Sessions", "Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up.")}
+  return `${head("Sessions", `Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up. ${scopeLine("sessions")}`)}
     ${lock}
     <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span>${d.hidden_count ? `<label class="small"><input type="checkbox" id="sess-hidden" ${state.showHidden ? "checked" : ""}> Show ${plural(d.hidden_count, "hidden session")}</label>` : ""}</div>
     ${rows.length ? groups.join("") : empty("No sessions match", q ? "Try a ticket number, a branch or a repo name." : "No Claude Code sessions found in " + esc(d.projects_dir))}`;
@@ -1427,7 +1440,7 @@ function wireSessions(root) {
 /* Environment: every repo and worktree on this machine, and what LFG runs in the background. */
 const MB = b => b == null ? "?" : b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
 PAGES.environment = async () => {
-  const [d, unlocked] = await Promise.all([api("environment"), isUnlocked()]);
+  const [d, unlocked] = await Promise.all([api("environment", scopeArgs("environment")), isUnlocked()]);
   if (d.pending) {
     setTimeout(() => { if ((location.hash.slice(1) || "").startsWith("environment")) route(); }, 2500);
     return `${head("Environment", "Every repo and worktree on this computer, and what LFG runs in the background.")}<div class="loading">Looking at every repo and worktree… (about 10 seconds)</div>`;
@@ -1451,7 +1464,7 @@ PAGES.environment = async () => {
   }).join("");
   const quiet = d.repos.filter(r => r.worktrees.length <= 1 && !r.worktrees.some(w => w.dirty || w.unpushed)).map(r => r.name);
   const lock = unlocked ? "" : `<div class="callout warn">Delete is locked. Run <code>lfg ui</code> in your terminal to open this page unlocked. Copy works either way.</div>`;
-  return `${head("Environment", `Every repo and worktree on this computer (${plural(all.length, "worktree")} in ${plural(d.repos.length, "repo")}), and what LFG runs in the background. Checked ${ago(d.checked_at)}.`)}
+  return `${head("Environment", `Repos and worktrees on this computer (${plural(all.length, "worktree")} in ${plural(d.repos.length, "repo")}), and what LFG runs in the background. Checked ${ago(d.checked_at)}. ${scopeLine("environment")}`)}
     ${lock}${svc}
     ${old.length && unlocked ? `<div class="callout">${plural(old.length, "worktree")} have nothing unsaved and no session or change in the last 14 days. <button class="btn small primary" id="wt-old">Review and delete…</button></div>` : ""}
     ${section("Repos and worktrees", repos || empty("No worktrees", "None of your repos has a second worktree."), "worktrees with unsaved work first open")}
@@ -1748,7 +1761,7 @@ function ghPanel(g) {
 }
 PAGES.prs = async arg => {
   if (arg) return prDetail(arg);
-  const [d, unlocked] = await Promise.all([api("prreviews"), isUnlocked()]);
+  const [d, unlocked] = await Promise.all([api("prreviews", scopeArgs("prs")), isUnlocked()]);
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
   const qcols = [
     { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
@@ -1762,7 +1775,8 @@ PAGES.prs = async arg => {
     { k: "passes", label: "Reviews", num: true },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
   ];
-  return `${head("PR reviews", "Pull requests waiting on your review, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login.")}
+  return `${head("PR reviews", `Pull requests waiting on your review, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login. ${scopeLine("prs")}`)}
+    ${d.no_remote && !allRepos("prs") ? `<p class="muted small">${esc(repoName())} has no GitHub remote, so this shows PRs from every repo.</p>` : ""}
     ${lock}
     ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
     ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}`;
@@ -2179,12 +2193,20 @@ async function checkUpdate(fresh) {
   const from = src.length === 2 ? "from both the original LFG and your fork" : src.length ? `from ${named(src[0])}` : "";
   const li = c => `<li class="mono small">${esc(c)}</li>`, group = (title, cs) => cs.length ? `<li><b>${esc(title)}</b><ul>${cs.map(li).join("")}</ul></li>` : "";
   const list = src.map(r => group(`From ${named(r)}`, R[r].commits || [])).concat(group("In your checkout, not installed yet", d.not_installed_commits || []));
-  const blocked = d.current_branch && d.current_branch !== "main" ? `Switch ${esc(d.source)} to main first.` : d.dirty ? `${esc(d.source)} has uncommitted changes; commit or stash them first.` : "";
+  /* Update merges into main in the LFG checkout, so it waits while that checkout is on another branch or has
+     uncommitted changes. Say which, and give the one safe command when there is one. */
+  const onBranch = d.current_branch && d.current_branch !== "main" ? d.current_branch : "";
+  const toMain = `git -C ${shq(d.source)} checkout main`;
+  const blocked = d.dirty ? `<b>Can't update yet:</b> your LFG checkout <code>${esc(d.source)}</code> has uncommitted changes${onBranch ? ` on <code>${esc(onBranch)}</code>` : ""}. Commit or stash them there${onBranch ? " and switch it back to main" : ""}, then press Refresh.`
+    : onBranch ? `<b>Can't update yet:</b> your LFG checkout <code>${esc(d.source)}</code> is on <code>${esc(onBranch)}</code>, not main. Switch it back, then press Refresh. <button class="btn small primary" data-copy="${esc(toMain)}" title="${esc(toMain)}">Copy command</button>` : "";
   const unlocked = await isUnlocked();
   box.hidden = false;
   box.className = "callout warn";
   box.innerHTML = `${dot("warn")}<b>LFG update ready${from ? ` ${esc(from)}` : ""}:</b> ${esc(parts.join(", "))}. <details class="more inline"><summary>What's in it</summary><ul>${list.join("")}</ul></details>
-    ${blocked ? `<span class="muted small">${blocked}</span>` : `<button class="btn small primary" id="update-go" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to update from here\""}>Update</button><span class="muted small"> Tests run first; if they fail nothing changes.</span>`}`;
+    ${blocked ? `<span>${blocked}</span>` : `<button class="btn small primary" id="update-go" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to update from here\""}>Update</button><span class="muted small"> Tests run first; if they fail nothing changes.</span>`}`;
+  $$("[data-copy]", box).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+  });
   const go = $("#update-go");
   if (go) go.onclick = async () => {
     go.disabled = true; go.textContent = "Starting…";

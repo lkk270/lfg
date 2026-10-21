@@ -198,10 +198,12 @@ def resume_command(s):
     return "cd %s && claude --resume %s" % (shlex.quote(s["cwd"] or C.HOME), s["id"])
 
 
-def listing(days=None, scripted=False, hidden=False):
+def listing(days=None, scripted=False, hidden=False, only=None):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
-    by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`."""
+    by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`. `only`: a main
+    checkout; keeps the sessions that ran in it or one of its worktrees."""
     p = prefs()
+    want = os.path.realpath(only) if only else ""
     folder_of = {sid: f for f, ids in p["folders"].items() for sid in ids}
     hid = set(p["hidden"])
     cut = time.time() - days * 86400 if days else 0
@@ -210,6 +212,8 @@ def listing(days=None, scripted=False, hidden=False):
         if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted) or (s["id"] in hid and not hidden):
             continue
         repo, root, wt = _where(s["cwd"])
+        if want and (not root or os.path.realpath(root) != want):
+            continue
         r = dict(s, repo=repo, root=root, worktree=wt,
                  ticket=_ticket(s["branch"], s["title"], s["ai_title"], s["first"]),
                  folder_exists=bool(s["cwd"]) and os.path.isdir(s["cwd"]),
