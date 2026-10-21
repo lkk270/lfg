@@ -1986,13 +1986,13 @@ class PrefsTest(unittest.TestCase):
         os.remove(S._rule_override("zz-api-style"))
         self.assertIn("removed these rules", self.hook("prompt", {"session_id": sid})[1])
 
-    def test_style_rules_render_when_on_and_only_paste_markers_start_on(self):
+    def test_style_rules_render_when_on_and_only_paste_markers_and_ticket_titles_start_on(self):
         P = self.P
         d = P.load()
         style = P.style_ids(d)
-        self.assertEqual(len(style), 14)
+        self.assertEqual(len(style), 15)
         on = {p for p in style if P.effective(None, d)[p] not in (False, "none")}
-        self.assertEqual(on, {"style_paste_blocks"})
+        self.assertEqual(on, {"style_paste_blocks", "style_ticket_titles"})
         text = P.render(P.effective(None, d), d)
         self.assertIn("## How Claude talks to you\n- Anything I have to paste", text)
         self.assertNotIn("em dashes", text)
@@ -2608,6 +2608,29 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(R.mark_echoes("o/r", 7, said=[rabbit]), 0)  # never twice
         with self.assertRaises(R.ReviewError):
             R._clean_finding(self.finding(echoes=[{"url": "x"}]), 1)
+
+    def test_an_older_review_gets_its_session_from_the_job_log_and_can_be_asked_about(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
+        log = os.path.join(self.tmp_dir(), "run.log")
+        with open(log, "w") as f:
+            f.write(json.dumps({"type": "system", "subtype": "init", "session_id": sid}))
+        C.write_json(R.job_path("o/r", 7), {"status": "done", "started": "2000-01-01T00:00:00", "cwd": "/w",
+                                             "log": log})
+        with self.assertRaises(R.ReviewError):
+            R.ask("o/r", 7, 1, "why?")  # nothing to ask yet
+        p = R.backfill("o/r", 7)["passes"][-1]
+        self.assertEqual((p["run"]["session_id"], p["run"]["cwd"]), (sid, "/w"))
+        answer = subprocess.CompletedProcess([], 0, stdout=json.dumps({"result": "Because the caller passes None."}))
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", return_value=answer) as run:
+            self.assertEqual(R.ask("o/r", 7, 1, "why is it a blocker?")["a"], "Because the caller passes None.")
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--resume") + 1], sid)
+        self.assertEqual(run.call_args[1]["cwd"], "/w")
+        self.assertNotIn("review save", cmd[cmd.index("--allowedTools") + 1])
+        self.assertEqual(R.load("o/r", 7)["passes"][-1]["chat"][0]["q"], "why is it a blocker?")
 
     def test_links_go_both_ways_and_a_session_can_be_linked_by_hand(self):
         R.link("o/api#7", "https://github.com/o/web/pull/9")

@@ -156,7 +156,7 @@ function drawTable(id) {
   const cnt = document.getElementById(id + "-count");
   if (cnt) cnt.textContent = rows.length === t.rows.length ? plural(rows.length, "item") : `${n(rows.length)} of ${n(t.rows.length)}`;
   $$("th", el).forEach(th => th.onclick = () => { const k = th.dataset.k; t.dir = t.sort === k ? -t.dir : -1; t.sort = k; drawTable(id); });
-  if (t.opts.onRow) $$("tbody tr", el).forEach(tr => tr.onclick = () => t.opts.onRow(t.rows[+tr.dataset.i]));
+  if (t.opts.onRow) $$("tbody tr", el).forEach(tr => tr.onclick = e => { if (!e.target.closest("input, button, a, label, select, textarea")) t.opts.onRow(t.rows[+tr.dataset.i]); });
 }
 function mountTables(root = document) {
   $$("table[id^=t]", root).forEach(el => drawTable(el.id));
@@ -1972,13 +1972,14 @@ PAGES.prs = async arg => {
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
   state.prPick = state.prPick || new Set();
   const qcols = [
-    { k: "pick", label: "", html: x => `<input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} onclick="event.stopPropagation()" title="Pick several PRs, for example a backend and its frontend, and review them together" aria-label="Pick ${esc(prRef(x))}">` },
+    { k: "pick", label: "", html: x => `<input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} title="Pick several PRs, for example a backend and its frontend, and review them together" aria-label="Pick ${esc(prRef(x))}">` },
     { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}${linkTags(x.linked)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
     { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button> <button class="btn small" data-pr-sessions="${esc(prRef(x))}" ${unlocked ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
   ];
   const qopts = { onRow: x => (location.hash = prHash(x)) };
   const rcols = [
+    qcols[0],
     { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div><div class="sub">${x.gh ? ghTag(x.gh) : ""}${linkTags(x.linked)}</div>` },
     { k: "state", label: "Where it is", html: x => `${tallyLine(x)}${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}`, sort: x => (x.posted ? 2 : (x.tally || {}).pending ? 0 : 1) },
     { k: "score", label: "Score", num: true },
@@ -1996,7 +1997,7 @@ PAGES.prs = async arg => {
 };
 /* Linked PRs as tags. They can be in another repo than the one picked top left, so each says its repo, and opening
    one works whichever repo is picked. */
-const linkTags = prs => (prs || []).map(x => ` <a class="tag mono" href="#prs/${esc(x.replace("#", "/"))}" title="Linked: reviewed together, or linked by you" onclick="event.stopPropagation()">with ${esc(x)}</a>`).join("");
+const linkTags = prs => (prs || []).map(x => ` <a class="tag mono" href="#prs/${esc(x.replace("#", "/"))}" title="Linked: reviewed together, or linked by you">with ${esc(x)}</a>`).join("");
 /* Which files a review reads to decide what to look for, how to score and how to word comments. */
 function methodSection(m, unlocked) {
   if (!m) return "";
@@ -2125,7 +2126,9 @@ async function prDetail(arg) {
       <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
-        ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to talk to the session that did this review</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
+        ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
+        ${p.run.session_id ? `<div class="pr-chat mt"><div class="k">Ask the session that did this review</div>${(p.chat || []).map(x => `<div class="pr-q"><b>You:</b> ${txt(x.q)}</div><div class="pr-a">${txt(x.a)}</div>`).join("")}
+          <div class="row"><input type="text" class="grow" data-pr-chat placeholder="e.g. why is 1.2 a blocker? did you check the caller in billing.py?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Ask</button></div></div>` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
       ${prior}
       ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `<span id="pr-tally">${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide</span>`)}
@@ -2232,6 +2235,19 @@ function wirePrs(root) {
   $$("[data-pr-unlinksess]", root).forEach(b => b.onclick = async () => { const [pr, id] = JSON.parse(b.dataset.prUnlinksess); const r = await save("review_link_session", { pr, id, on: false }); if (!r.ok) return alertMsg(b, r); softRoute(); });
   $$("[data-pr-linkpr]", root).forEach(b => b.onclick = () => prLinkPr(b.dataset.prLinkpr));
   $$("[data-pr-linksess]", root).forEach(b => b.onclick = () => prLinkSession(b.dataset.prLinksess));
+  $$("[data-pr-chatgo]", root).forEach(b => {
+    const [pr, n] = JSON.parse(b.dataset.prChatgo), input = $("[data-pr-chat]", b.closest(".pr-chat"));
+    const go = async () => {
+      if (!input.value.trim()) return input.focus();
+      b.disabled = input.disabled = true; b.textContent = "Asking…";
+      const d = await save("review_ask", { pr, pass: n, question: input.value });
+      b.disabled = input.disabled = false; b.textContent = "Ask";
+      if (!d.ok) return alertMsg(b, d);
+      softRoute();
+    };
+    b.onclick = go;
+    input.onkeydown = e => { if (e.key === "Enter") go(); };
+  });
   $$("[data-pr-activity]", root).forEach(det => det.ontoggle = async () => {
     if (!det.open || det.dataset.loaded) return;
     det.dataset.loaded = "1";

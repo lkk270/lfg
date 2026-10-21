@@ -826,6 +826,60 @@ def resume(run):
     return SS.resume_command({"cwd": run.get("cwd"), "id": run["session_id"]}) if run.get("session_id") else ""
 
 
+def backfill(repo, number):
+    """Reviews run before passes kept their session: the job log of the last run still has it, so give it to the
+    latest pass if that pass came from that run."""
+    import shutil
+    rec, j = load(repo, number), job(repo, number) or {}
+    p = ((rec or {}).get("passes") or [None])[-1]
+    if not p or p.get("run") or j.get("status") != "done" or (p.get("ts") or "") < (j.get("started") or "~"):
+        return rec
+    sid = session_id(j.get("log") or "")
+    if not sid:
+        return rec
+    kept = record_path(repo, number)[:-5] + ".pass%d.log" % p["n"]
+    shutil.copyfile(j["log"], kept)
+    p["run"] = {"session_id": sid, "cwd": j.get("cwd") or "", "log": kept, "with": list(j.get("with") or [])}
+    store(rec)
+    return rec
+
+
+ASK = ("Lee is asking about the review you just did, from the LFG dashboard. Answer from what you found and what the "
+       "code says; read more of it if you need to. Don't save, post or change anything, and don't rewrite the review "
+       "unless asked: just answer, short and plain. If a finding was wrong, say so.\n\n%s")
+
+
+def ask(repo, number, n, question):
+    """Ask the very session that did a review about it (resumes it, read-only). The question and answer are kept on
+    the pass, so the conversation shows on the review's page."""
+    import subprocess
+    if not str(question or "").strip():
+        raise ReviewError("ask something, e.g. \"why is 1.2 a blocker?\"")
+    rec = need(repo, number)
+    p = next((x for x in rec["passes"] if x["n"] == int(n or 0)), None)
+    run_ = (p or {}).get("run") or {}
+    if not run_.get("session_id"):
+        raise ReviewError("this review has no session to ask: it was imported, or run before LFG kept sessions")
+    if not C.which("claude"):
+        raise ReviewError("Claude Code (`claude`) is not on PATH")
+    q = _text(question, "question", 4000)
+    cp = subprocess.run(["claude", "-p", ASK % q, "--resume", run_["session_id"], "--output-format", "json",
+                         "--permission-mode", "dontAsk", "--allowedTools",
+                         ",".join(x for x in RUN_ALLOW if "review save" not in x),
+                         "--disallowedTools", ",".join(RUN_DENY)],
+                        cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
+                        stdin=subprocess.DEVNULL)
+    try:
+        text = (json.loads(cp.stdout).get("result") or "").strip()
+    except ValueError:
+        text = ""
+    if not text:
+        raise ReviewError("Claude didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
+    p.setdefault("chat", []).append({"q": q, "a": text, "at": C.now_iso()})
+    store(rec)
+    return {"q": q, "a": text}
+
+
 def activity(path, limit=400):
     """What a review run did, in order, from its log: what it said and each tool it used."""
     out = []
