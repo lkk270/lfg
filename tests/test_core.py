@@ -1993,6 +1993,37 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(d["models"][0]["input"], 1000000)
         self.assertEqual(d["spend"]["today"], 6.0)  # 1M in at $4 + 0.1M out at $20
 
+    def replies(self, *rows):
+        """One session whose replies are (model, input, output, cache_read, days_ago); returns usage(days)."""
+        a = "%08d-0000-0000-0000-000000000000" % 7
+        self.write(a, "/nowhere/app", "main", "hello")
+        p = glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0]
+        with open(p, "a") as f:
+            for i, (model, inp, out, read, ago) in enumerate(rows):
+                u = {"input_tokens": inp, "output_tokens": out, "cache_read_input_tokens": read,
+                     "cache_creation_input_tokens": 0}
+                ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - ago * 86400))
+                f.write(json.dumps({"type": "assistant", "timestamp": ts,
+                                    "message": {"id": "m%d" % i, "model": model, "usage": u}}) + "\n")
+        return lambda days=30: self.usage(days)
+
+    def usage(self, days):
+        with mock.patch.object(self.SS, "_usage_index_path", lambda: os.path.join(self.dir, "idx.json")):
+            return self.SS.usage(days)
+
+    def test_fable_5_cache_reads_cost_a_dollar_a_million(self):
+        self.assertEqual(self.replies(("claude-fable-5", 0, 0, 1000000, 0))()["spend"]["today"], 1.0)
+        self.assertEqual(self.SS.cost("claude-fable-5-1", dict(dict.fromkeys(self.SS.FIELDS, 0), cache_read=4000000)),
+                         1.0)
+
+    def test_haiku_5_5_prompts_over_100k_cost_more_each_on_its_own(self):
+        # Two requests: 60K in (cheap tier) and 150K in (long tier). Together the day is over 100K, but only the
+        # second request is.
+        d = self.replies(("claude-haiku-5-5", 60000, 100000, 0, 0), ("claude-haiku-5-5", 120000, 100000, 30000, 0))()
+        cheap = 60000 * 0.10 + 100000 * 0.50
+        long = 120000 * 0.50 + 100000 * 2.50 + 30000 * 0.05
+        self.assertAlmostEqual(d["models"][0]["usd"], (cheap + long) / 1e6, places=6)
+
     def test_pr_review_sessions_and_their_subagents_count_as_reviews(self):
         u = {"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0,
              "cache_creation_input_tokens": 0}
