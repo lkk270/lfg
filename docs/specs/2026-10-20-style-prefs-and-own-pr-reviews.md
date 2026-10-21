@@ -1,6 +1,6 @@
-# Spec: PR reviews for your own PRs, and "How Claude talks to you" in Preferences
+# Spec: own-PR reviews, "How Claude talks to you" in Preferences, and Usage page costs
 
-Two independent changes, shipped as two PRs, part 2 first (it is smaller). Agreed with Lee on 2026-10-20.
+Three independent changes, one PR each: part 2 first (it is smaller), then part 1; part 3 in any order. Agreed with Lee on 2026-10-20.
 
 ## Part 2 (ship first): PR reviews page
 
@@ -100,3 +100,44 @@ LFG blocks agents from editing it). The agent's final message lists exactly whic
 - `gh pr create` is blocked unless Preferences → GitHub → "Opening PRs" is on. If it is off, give the user the exact
   command in paste markers: `gh pr create --repo lkk270/lfg --fill` (this repo has two remotes, so `--repo` is
   required).
+
+## Part 3 (independent of parts 1 and 2): Usage page costs
+
+The Usage page in `lfg ui` shows what Claude Code costs at API prices, worked out from every session's transcript
+under ~/.claude/projects. A review found four real problems and one decision to write down. Fix them on a new branch
+`fix/usage-costs` off `main` (base: main). Create its worktree with `lfg worktree new fix/usage-costs`; don't switch
+the main checkout.
+
+The code is in `plugin/lib/lfgcore/sessions.py` (`PRICES`, `cost()`, `_file_usage()`, `usage()`),
+`plugin/lib/lfgcore/dash.py` (`usage()`, around lines 990-1040), `plugin/lib/lfgcore/ui_assets/app.js` (the Usage
+page), and `docs/dashboard.md` (line 16).
+
+1. Two prices are wrong. Look up the published prices with the claude-api skill rather than trusting these notes or
+   memory.
+   - Claude Fable 5 (`claude-fable-5`) cache reads are $1.00 per million tokens, not $0.25. ($0.25 is right for
+     Fable 5.1 and Mythos 5.1.)
+   - Claude Haiku 5.5 costs $0.10 / $0.50 per million tokens when the prompt is 100K tokens or fewer, and $0.50 /
+     $2.50 above that. The code only has the lower price. The tier depends on each request's prompt size (input +
+     cache read + cache write), so it has to be decided per request in `_file_usage()`, not on the daily totals.
+     Check what the cache-read and cache-write prices are above 100K.
+   - While you're there, confirm the other cache-read prices. Opus 5.5 at $0.20 is correct and deliberate (5% of
+     input). Opus 5 $0.50, Sonnet 5 $0.20 and Haiku 5.5 $0.01 have not been checked.
+   - If what the usage index stores per file changes, bump its version (`"v"` in `usage()`) so old indexes are read
+     again.
+2. Models with no price count as $0 and the page never says so. `usage()` already returns `unpriced`. Show it on the
+   Usage page, e.g. "Not priced: <models>", so the total is not silently low.
+3. With the 90-day range selected, the "30d" spend figure covers 90 days, because it sums everything since the range
+   start. Make "30d" mean the last 30 days whatever the range. If the page needs a total for the selected range,
+   return it under its own name.
+4. `docs/dashboard.md`, Usage row: it still says costs come from `tokensave cost`. Rewrite it to say they come from
+   Claude Code's own session transcripts at API list prices. Add what Headroom's detail view shows (the `headroom`
+   API view: savings per day and per hour today, from ~/.headroom/savings_events.jsonl).
+5. Not a bug, just write it down. The page counts every Claude Code session on this computer, including repos where
+   LFG is off. Say so in the same docs row.
+
+Write a failing test first for 1, 2 and 3 in `tests/test_core.py`, class `SessionsTest`, next to
+`test_usage_counts_each_reply_once_and_prices_it`. Run `python3 -m unittest discover -s tests` until it passes. Then
+open `lfg ui` and check the Usage page on the 30-day and 90-day ranges.
+
+Commit one logical change at a time and push each commit to `fix/usage-costs`. Open a PR against main on origin
+(lkk270/lfg). Don't merge it. No em dashes, US spelling.
