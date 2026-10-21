@@ -2450,6 +2450,19 @@ class ReviewTest(unittest.TestCase):
             import shutil
             shutil.rmtree(C.lfg_path("graphs", "known-1"))
 
+    def test_sessions_about_a_pr_resume_and_name_the_dashboards_runs(self):
+        run = "Read %s/SKILL.md and follow it to review o/r#7. You are running unattended" % os.path.join(
+            ui.C.PLUGIN_ROOT, "skills", "review")
+        rows = ui.pr_sessions([{"id": "a" * 8, "title": run, "cwd": "/x/r", "path": "p1"},
+                               {"id": "b" * 8, "title": "/review-pr 7", "cwd": "/x/r", "path": "p2"}])
+        self.assertEqual([(r["dashboard"], r["title"]) for r in rows],
+                         [(True, "Review run from the dashboard"), (False, "/review-pr 7")])
+        self.assertEqual(rows[0]["resume"], "cd /x/r && claude --resume " + "a" * 8)
+        with open(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        self.assertIn("Copy summary and findings", js)
+        self.assertIn("## Approach notes", js)
+
     def test_progress_reads_tool_calls_and_result(self):
         log = os.path.join(tempfile.mkdtemp(), "x.log")
         with open(log, "w") as f:

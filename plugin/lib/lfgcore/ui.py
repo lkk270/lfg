@@ -53,6 +53,19 @@ def _only(q):
     return None if _arg(q, "all") == "1" else dash.repo_root(_rid(q)) if _rid(q) else None
 
 
+def pr_sessions(rows):
+    """Sessions about a PR, each with its resume command. The dashboard's own review runs are named as such: they
+    were started with `claude -p` but resume like any other session."""
+    from . import sessions as SS
+    run = "Read %s" % os.path.join(C.PLUGIN_ROOT, "skills", "review")
+    out = []
+    for s in rows:
+        mine = s["title"].startswith(run) or s["title"].startswith("Read ") and "/skills/review/SKILL.md" in s["title"]
+        out.append(dict(s, dashboard=mine, title="Review run from the dashboard" if mine else s["title"],
+                        resume=SS.resume_command(s)))
+    return out
+
+
 def graph_view(rid, kind):
     """URL of a tool-generated interactive view, generating it on first request. Graph views live in the repo's
     graph data (served by /graphdata/), the health report under ~/.lfg (served by /static/)."""
@@ -185,8 +198,7 @@ def api(view, q):
             repo, number = R.parse_pr(_arg(q, "pr"))
             return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number,
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
-                    "sessions": [s for s in R.sessions_for(repo, number) if "Read %s" % os.path.join(
-                        C.PLUGIN_ROOT, "skills", "review") not in s["title"]][:8]}
+                    "sessions": pr_sessions(R.sessions_for(repo, number))[:8]}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
     rid = _rid(q)

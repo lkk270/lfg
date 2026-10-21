@@ -1836,7 +1836,7 @@ async function prDetail(arg) {
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
   const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">New full review</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button></div>`;
-  const sess = (d.sessions || []).length ? section("Your sessions about this PR", `<ul class="items box">${d.sessions.map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json ? " · review ready to import" : ""}</div></div><button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button></li>`).join("")}</ul>`, "e.g. a /review-pr you ran yourself") : "";
+  const sess = (d.sessions || []).length ? section("Sessions about this PR", `<ul class="items box">${d.sessions.map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.dashboard ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("")}</ul>`, "a /review-pr you ran yourself, or a review run from here; resume one to ask it about its findings") : "";
   if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}${actions}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
@@ -1867,7 +1867,7 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-pass-body">
-      <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span>${discard}</div>
+      <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}</div>
       ${prior}
@@ -1875,6 +1875,18 @@ async function prDetail(arg) {
       ${postBar}
     </div>
     ${sess}`;
+}
+/* One review pass as Markdown for an agent: what the PR is, the summary, approach notes, and every finding with
+   where it is, what's wrong, the fix and the comment, plus what you decided about it. */
+function prCopyText(rec, p) {
+  const decided = { keep: "kept", drop: "dropped", pending: "not decided yet" };
+  const f = p.findings.map((x, i) => [`### ${i + 1}. ${x.title || x.issue || x.id} (${x.severity}, ${decided[x.status] || x.status}${x.comment_url ? ", posted" : ""})`,
+    x.file ? `Where: ${x.file}${x.line ? ":" + x.line : ""}` : "Where: the PR as a whole",
+    x.issue && x.title ? `Issue: ${x.issue}` : "", x.fix ? `Fix: ${x.fix}` : "", x.detail ? `What the review checked: ${x.detail}` : "",
+    x.body ? `Comment:\n${x.body}` : ""].filter(Boolean).join("\n"));
+  return [`# Review of ${rec.repo}#${rec.number}: ${rec.title || ""}`, `${rec.url || ""}\nReview ${p.n}, at commit ${p.head_sha}${p.score != null ? `, score ${p.score}` : ""}`,
+    p.summary ? `## Summary\n${p.summary}` : "", (p.approach_notes || []).length ? `## Approach notes\n${p.approach_notes.map(x => "- " + x).join("\n")}` : "",
+    `## Findings (${p.findings.length})`, f.join("\n\n") || "None."].filter(Boolean).join("\n\n");
 }
 async function prImport(pr, path, btn) {
   btn.disabled = true; btn.textContent = path === "log" ? "Saving…" : "Importing…";
@@ -1893,6 +1905,11 @@ async function prSessions(pr) {
   $$("[data-pr-importpath]").forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
 }
 function wirePrs(root) {
+  $$("[data-copy]", root).forEach(b => b.onclick = async () => {
+    const was = b.textContent;
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+    setTimeout(() => (b.textContent = was), 1500);
+  });
   $$("[data-pr-start]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prStart(b.dataset.prStart, b); });
   $$("[data-pr-sessions]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prSessions(b.dataset.prSessions); });
   $$("[data-pr-import]", root).forEach(b => b.onclick = e => { e.stopPropagation(); const [pr, path] = JSON.parse(b.dataset.prImport); prImport(pr, path, b); });
