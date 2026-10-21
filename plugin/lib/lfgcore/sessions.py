@@ -5,6 +5,7 @@ all of them from ~/.claude/projects, works out each one's repo, worktree, branch
 command that resumes it from the right folder. Names and folders you set are kept in ~/.lfg/state/sessions.json; the
 transcripts themselves are only ever read.
 """
+import calendar
 import glob
 import json
 import os
@@ -407,7 +408,7 @@ PRICES = {
 # Models whose price goes up when one request's prompt (input + cache read + cache write) is over a size.
 LONG_PROMPT = {"claude-haiku-5-5": (100_000, (0.50, 2.50, 0.05))}
 FIELDS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
-USAGE_V = 3
+USAGE_V = 4
 
 
 def cost(model, t):
@@ -453,7 +454,7 @@ def _file_usage(path):
             ts = ev.get("timestamp") or ""
             try:
                 day = time.strftime("%Y-%m-%d", time.localtime(
-                    time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone))
+                    calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))))  # ts is UTC
             except ValueError:
                 continue
             d = out.setdefault(day, {}).setdefault(m["model"], dict(dict.fromkeys(FIELDS, 0), usd=0.0))
