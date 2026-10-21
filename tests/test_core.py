@@ -1350,11 +1350,11 @@ class RunChecksTest(unittest.TestCase):
 class RunStepsTest(unittest.TestCase):
     def test_skipped_steps_and_work_done_outside_lfg_show_on_the_run(self):
         root, rid = git_repo()
-        C.run(["git", "commit", "-q", "--allow-empty", "-m", "start"], cwd=root)
+        C.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"], cwd=root)
         wt = os.path.join(tempfile.mkdtemp(), "wt")
         C.run(["git", "worktree", "add", "-q", "-b", "lee/x", wt], cwd=root)
         for i in range(3):
-            C.run(["git", "commit", "-q", "--allow-empty", "-m", "by hand %d" % i], cwd=wt)
+            C.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "by hand %d" % i], cwd=wt)
         run = os.path.join(C.runs_dir(root), "20261021-1249-x")
         C.write_json(os.path.join(run, "run.json"), {"branch": "main", "skipped": {"design": "settled in Linear",
                                                                                    "bogus": "x"},
