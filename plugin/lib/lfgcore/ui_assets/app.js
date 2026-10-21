@@ -1315,6 +1315,7 @@ PAGES.sessions = async () => {
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
+      <button class="btn small" data-sess-remind="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once">Remind it of my style</button>
       <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
       ${s.folder ? `<span class="tag" title="Your group">${esc(s.folder)} <a href="#" data-sess-ungroup="${esc(s.id)}" title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
       <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Group sessions your own way, e.g. one feature across repos. Only LFG stores this; nothing on disk moves.">${s.folder ? "Change group" : "Group…"}</button>
@@ -1422,6 +1423,12 @@ function wireSessions(root) {
   });
   $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
   $$("[data-sess-rules]", root).forEach(b => b.onclick = () => sessionRules(b.dataset.sessRules));
+  $$("[data-sess-remind]", root).forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const r = await save("pref_remind", { session: b.dataset.sessRemind });
+    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
+    b.textContent = "Reminds it with your next message";
+  });
   $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
 }
 /* Environment: every repo and worktree on this machine, and what LFG runs in the background. */

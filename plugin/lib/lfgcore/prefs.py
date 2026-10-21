@@ -24,6 +24,7 @@ PREFS_MD = os.path.join(C.HOME, ".claude", "lfg-preferences.md")
 IMPORT_LINE = "@~/.claude/lfg-preferences.md"
 PROTECTED_BRANCHES = ("main", "master", "qa", "prod", "production")
 
+STYLE = "How Claude talks to you"
 # Built in. Options are listed strictest first: a change to a later option loosens the rule.
 BUILTIN = [
     {"id": "commits", "group": "Git", "title": "Commits", "kind": "choice", "default": "ask", "enforce": True,
@@ -88,6 +89,79 @@ BUILTIN = [
      "text": "End commit messages with a Co-Authored-By line for Claude, and PR bodies with the Claude Code line.",
      "off_text": "I am the only author: no Co-Authored-By line for Claude in commits and no \"Generated with Claude "
      "Code\" line in PR bodies."},
+] + [
+    # How Claude talks to you: instructions only, never enforced. Condensed from Lee's answering rules.
+    {"id": pid, "group": STYLE, "title": title, "kind": "switch", "default": pid == "style_paste_blocks",
+     "about": about, "text": text, "off_text": ""} for pid, title, about, text in (
+        ("style_answer_first", "Lead with the answer",
+         "Replies open with two or three sentences that are the answer, saying who, what, where and when. A fix says "
+         "what happened before and what happens now.",
+         "Open every reply and explanation with two or three sentences that are the answer, not a preamble to it: "
+         "cover who, what, where and when, and for a fix say the old behavior and the new. Detail goes below, only "
+         "if it changes what I do."),
+        ("style_breaks_first", "Say what breaks for a person first",
+         "A problem starts with what someone sees or can't do; how the code causes it comes second. Questions to you "
+         "are about outcomes, not code.",
+         "When something is wrong, first say what a person sees or can't do, in plain words with no identifiers; "
+         "the mechanism comes after, only if needed. Put any question to me as one sentence about what someone will "
+         "see or be able to do."),
+        ("style_paste_blocks", "Anything to paste goes in markers",
+         "Anything you need to copy (a command, a query, a prompt for another session, a PR body) comes in a code "
+         "block between PASTE START and PASTE END, with only that inside and a line saying where it goes.",
+         "Anything I have to paste (a command, query, prompt for another session, PR body or message) goes inside a "
+         "fenced code block between `--- PASTE START ---` and `--- PASTE END ---`, with nothing else between the "
+         "markers. Say where it goes."),
+        ("style_risky_blocks", "SQL and risky commands say what they do",
+         "The PASTE START line of a query or a command that changes things names where it runs and whether it only "
+         "reads or what it writes. Writes come with the row count to expect, a way to check them, and a dry run.",
+         "For SQL and for commands that change or delete things, the PASTE START marker names where it runs (system "
+         "and environment) and what it does: `READ ONLY`, or `WRITE - ` followed by every kind of write in it. Before "
+         "a write, say how many rows it should touch, add RETURNING or a check query, name any precondition, and "
+         "offer a dry run (BEGIN ... ROLLBACK) for a write to several tables."),
+        ("style_steps", "Steps you run come one at a time",
+         "When you have to do something yourself (run a command, set a secret, click through a page), Claude shows "
+         "the outline once, then one step per message and waits for you.",
+         "When I have to run steps myself (commands, queries, secrets, clicks), show the outline once, then give one "
+         "step per message: a one-line status (\"step 2 of 5: ...\"), the step in paste markers, what to report "
+         "back, then wait for me."),
+        ("style_handoff_prompts", "Prompts for another session say what it is",
+         "A prompt Claude writes for a new session opens by saying what that session is, then the task, then the "
+         "branch and base.",
+         "A prompt for another session opens by saying what that session is (\"This is a fresh session on ...\"), "
+         "then the task, then the constraints, naming the branch and the base explicitly."),
+        ("style_labels", "No labels to remember",
+         "Claude re-names a finding or shorthand every time it comes back, and explains without code names or jargon.",
+         "Don't make me hold your labels: re-name a numbered finding or invented shorthand every time it comes back "
+         "(\"finding 3, the one where ...\"). Explain without code identifiers or borrowed jargon when a plain word "
+         "works."),
+        ("style_hold_position", "A question is not a correction",
+         "When you push back, Claude checks again and answers on the evidence instead of giving in, and says what is "
+         "proven and what is not.",
+         "A question is not a correction: when I push back, re-check the claim and answer on the evidence, changing "
+         "position only if the evidence does, and say what changed. Say what is proven and what is only reasoned, and "
+         "name the assumption a claim rests on."),
+        ("style_one_note", "At most one note at the end",
+         "At most one extra note at the end of a reply, and only one that changes what you do next.",
+         "End with at most one trailing note, and only if it changes what I do next, decide, or believe about the "
+         "current state."),
+        ("style_recommend", "A recommendation, not a menu",
+         "Claude says which option it recommends and why, and skips padding and follow-ups you didn't ask for.",
+         "Give a recommendation, not a menu: name alternatives only when they are real, and say which one and why. "
+         "No padding, no speculative follow-ups, no work I didn't ask for."),
+        ("style_no_em_dash", "No em dashes", "No em dashes anywhere, in replies or in code.",
+         "Never use em dashes, in prose or code. Use a hyphen, a colon, or restructure the sentence."),
+        ("style_us_spelling", "US spelling", "US spelling in replies and in code.",
+         "Use US spelling, in code and prose."),
+        ("style_tables", "Tables only when they earn it",
+         "A table only when several things are compared across the same points.",
+         "Use a table only to compare several things across the same dimensions; never for two items or one "
+         "dimension."))
+] + [
+    {"id": "style_point_words", "group": STYLE, "title": "Length of each point", "kind": "choice",
+     "default": "none", "options": [
+         {"value": "20", "label": "20 words", "text": "Keep each point, bullet or sentence to at most 20 words."},
+         {"value": "40", "label": "40 words", "text": "Keep each point, bullet or sentence to at most 40 words."},
+         {"value": "none", "label": "No limit", "text": ""}]},
 ]
 # What each choice does, said to you (the page shows this; "text" is what Claude is told).
 ABOUT = {
@@ -124,6 +198,9 @@ ABOUT = {
         "closing one stays blocked.",
     ("merge_pr", "never"):
         "Claude is blocked from merging pull requests; you merge.",
+    ("style_point_words", "20"): "Each point, bullet or sentence is at most 20 words.",
+    ("style_point_words", "40"): "Each point, bullet or sentence is at most 40 words.",
+    ("style_point_words", "none"): "No limit on how long a point is.",
 }
 for _p in BUILTIN:
     if (_p["id"], None) in ABOUT:
@@ -157,6 +234,34 @@ def _state_path():
 
 def _seen_path():
     return C.lfg_path("state", "prefs-seen.json")
+
+
+def _remind_path():
+    return C.lfg_path("state", "prefs-remind.json")
+
+
+def style_ids(d=None):
+    return {p["id"] for p in catalog(d) if p["group"] == STYLE}
+
+
+def remind(session):
+    """Flag a session so its next message carries the "How Claude talks to you" rules again. Only adds
+    instructions, so Claude may run it too."""
+    if not re.match(r"^[0-9a-f-]{36}$", str(session or "")):
+        raise ValueError("not a session id: %r" % session)
+    ids = [s for s in C.read_json(_remind_path(), []) or [] if s != session][-200:] + [session]
+    C.write_json(_remind_path(), ids)
+    return {"session": session, "reminded": True}
+
+
+def _take_reminder(sid, d):
+    """The style rules on for sid if it was flagged, clearing the flag; else ""."""
+    ids = C.read_json(_remind_path(), []) or []
+    if not sid or sid not in ids:
+        return ""
+    C.write_json(_remind_path(), [s for s in ids if s != sid])
+    text = render(effective(sid, d), d, only=style_ids(d), header=STYLE)
+    return text and (text + "\nThe user asked you to follow these again; your recent replies drifted from them.")
 
 
 def _migrate(vals):
@@ -546,10 +651,10 @@ def hook(event):
             if event == "session-start":
                 out = note
             else:
-                if not isinstance(prev, dict) or prev.get("digest") == cur["digest"]:
-                    return 0
-                prev = dict(cur, **prev)  # a session seen before a key was recorded: that part counts as unchanged
                 parts = []
+                if not isinstance(prev, dict) or prev.get("digest") == cur["digest"]:
+                    prev = cur  # nothing changed since the session last heard
+                prev = dict(cur, **prev)  # a session seen before a key was recorded: that part counts as unchanged
                 if prev["defaults"] != cur["defaults"]:
                     parts.append(dflt + "\nThe user changed their default rules while this session was open; these "
                                  "replace lfg-preferences.md as you read it at the start.")
@@ -564,7 +669,8 @@ def hook(event):
                 if gone:
                     parts.append("The user removed these rules of their own; stop following them: %s."
                                  % ", ".join(gone))
-                out = "\n\n".join(parts)
+                parts.append(_take_reminder(sid, d))  # "Remind it of my style", once
+                out = "\n\n".join(x for x in parts if x)
             if out:
                 print(json.dumps({"hookSpecificOutput": {
                     "hookEventName": "SessionStart" if event == "session-start" else "UserPromptSubmit",

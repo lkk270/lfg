@@ -1707,7 +1707,7 @@ class PrefsTest(unittest.TestCase):
     def setUp(self):
         from lfgcore import prefs as P
         self.P = P
-        for f in (P._state_path(), P._seen_path()):
+        for f in (P._state_path(), P._seen_path(), P._remind_path()):
             if os.path.exists(f):
                 os.remove(f)
         self.md = os.path.join(tempfile.mkdtemp(), "lfg-preferences.md")
@@ -1762,6 +1762,49 @@ class PrefsTest(unittest.TestCase):
         self.assertEqual(self.hook("prompt", {"session_id": sid})[1], "")
         os.remove(S._rule_override("zz-api-style"))
         self.assertIn("removed these rules", self.hook("prompt", {"session_id": sid})[1])
+
+    def test_style_rules_render_when_on_and_only_paste_markers_start_on(self):
+        P = self.P
+        d = P.load()
+        style = P.style_ids(d)
+        self.assertEqual(len(style), 14)
+        on = {p for p in style if P.effective(None, d)[p] not in (False, "none")}
+        self.assertEqual(on, {"style_paste_blocks"})
+        text = P.render(P.effective(None, d), d)
+        self.assertIn("## How Claude talks to you\n- Anything I have to paste", text)
+        self.assertNotIn("em dashes", text)
+        P.set_pref("style_no_em_dash", True)
+        P.set_pref("style_point_words", "20")
+        P.set_pref("style_paste_blocks", False)
+        with open(self.md) as f:
+            text = f.read()
+        self.assertIn("Never use em dashes", text)
+        self.assertIn("at most 20 words", text)
+        self.assertNotIn("PASTE START", text)
+        P.set_pref("style_no_em_dash", False, session=self.SID)  # a session can differ, like any rule
+        self.assertEqual((P.effective(self.SID)["style_no_em_dash"], P.effective()["style_no_em_dash"]),
+                         (False, True))
+        self.assertFalse(any(p.get("enforce") for p in P.catalog() if p["id"] in style))  # Claude is asked
+
+    def test_remind_adds_the_style_rules_to_one_message_then_stops(self):
+        P = self.P
+        P.set_pref("style_tables", True)
+        self.hook("session-start", {"session_id": self.SID})
+        self.assertEqual(self.hook("prompt", {"session_id": self.SID})[1], "")  # no flag: nothing added
+        from lfgcore import cli
+        with mock.patch("sys.stdout", io.StringIO()):
+            cli.cmd_prefs(types.SimpleNamespace(action="remind", id=self.SID, session=None))
+        out = json.loads(self.hook("prompt", {"session_id": self.SID})[1])["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("# How Claude talks to you", out)
+        self.assertIn("Use a table only", out)
+        self.assertIn("PASTE START", out)
+        self.assertIn("drifted", out)
+        self.assertNotIn("pull request", out)  # only the style rules
+        self.assertEqual(self.hook("prompt", {"session_id": self.SID})[1], "")
+        self.assertEqual(self.hook("prompt", {"session_id": "99999999-2222-3333-4444-555555555555"})[1], "")
+        self.assertTrue(ui.save("pref_remind", {"session": self.SID})["reminded"])  # the Sessions button
+        with self.assertRaises(ST.Invalid):
+            ui.save("pref_remind", {"session": "../x"})
 
     def test_review_fixes_only_small_amends_on_your_own_open_pr(self):
         P = self.P
@@ -1927,7 +1970,8 @@ class GuardPrefsTest(unittest.TestCase):
     def test_the_preferences_page_and_list_show_them(self):
         page = ui.api("prefs", {})
         ids = [p["id"] for p in page["catalog"]]
-        for pid in ("git_ff_sync", "gh_default_branch", "rule_1", "rule_4", "rule_13"):
+        for pid in ("git_ff_sync", "gh_default_branch", "rule_1", "rule_4", "rule_13", "style_answer_first",
+                    "style_point_words"):
             self.assertIn(pid, ids)
         self.assertTrue(all(p["enforce"] for p in page["catalog"] if p["id"].startswith("rule_")))
         self.assertEqual(page["defaults"]["rule_2"], "block")

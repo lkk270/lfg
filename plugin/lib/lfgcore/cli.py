@@ -842,6 +842,8 @@ def cmd_prefs(a):
             _print(P.set_pref(a.id, a.value, session=a.session, by_agent=not a.by_user))
         elif a.action == "clear":
             _print(P.clear_session(a.session or a.id))
+        elif a.action == "remind":
+            _print(P.remind(a.session or a.id))
         elif a.action == "install":
             _print(P.install())
         elif a.action == "status":
@@ -1149,8 +1151,10 @@ def main(argv=None):
     rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
     rv.add_argument("--json", action="store_true")
     pf = sp.add_parser("prefs", help="your rules for Claude: defaults, per-session changes, hooks that enforce them")
-    pf.add_argument("action", nargs="?", default="list", choices=["list", "set", "clear", "install", "status", "hook"])
-    pf.add_argument("id", nargs="?", help="set: the preference; hook: session-start|prompt|pre-tool")
+    pf.add_argument("action", nargs="?", default="list",
+                    choices=["list", "set", "clear", "remind", "install", "status", "hook"])
+    pf.add_argument("id", nargs="?",
+                    help="set: the preference; remind: a session id; hook: session-start|prompt|pre-tool")
     pf.add_argument("value", nargs="?", help="set: on/off, or one of the choices")
     pf.add_argument("--session", help="one session (its id from lfg sessions); default: the defaults")
     pf.add_argument("--by-user", action="store_true", help="allow loosening (your own terminal only)")
