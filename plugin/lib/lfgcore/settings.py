@@ -85,6 +85,14 @@ FIELDS = [
     ("shipcheck.memory", "Ship check container memory", "str", "Docker --memory, e.g. 1g.", None),
     ("shipcheck.cpus", "Ship check container CPUs", "str", "Docker --cpus, e.g. 1.5.", None),
     ("shipcheck.health_timeout_s", "Ship check health timeout (s)", "int", "", (5, 1800)),
+    ("guard.allow_commits", "Let Claude commit when I ask", "bool", "Commits become an approval prompt instead of "
+     "a block. Pushing, merging, rebasing, PRs, secrets and deploys stay blocked.", None),
+    ("dictate.shortcut", "Dictate shortcut", "choice", "Hold to talk, double-tap for hands-free.",
+     ("option+space", "right_option", "fn", "ctrl+space", "cmd+shift+space")),
+    ("dictate.insert", "Dictate: put text in by", "choice", "paste (fast; your clipboard is put back) or type "
+     "(clipboard untouched).", ("paste", "type")),
+    ("dictate.cleanup", "Dictate: clean up with Claude", "bool", "Removes filler words and fixes punctuation. Sends "
+     "the text (never audio) to Claude. On by default; off keeps everything on this Mac.", None),
 ] + [("models.%s" % a, "Model: %s" % a, "choice", "", MODELS) for a in C.DEFAULT_CONFIG["models"]]
 
 
@@ -174,6 +182,14 @@ def save_config(values):
             else:
                 notes.append("Headroom restarted in %s mode." % HR.mode() if HR.restart()
                              else "Headroom restart failed: run `lfg headroom restart`.")
+    if any(k.startswith("dictate.") for k in changed):
+        from . import dictate as DI
+        if DI.restart():
+            notes.append("Dictate restarted with the new settings.")
+        if "dictate.shortcut" in changed and DI.conflicts(clean["dictate.shortcut"]):
+            alt = DI.suggestion(clean["dictate.shortcut"])
+            notes.append("%s may also use that shortcut%s." % (", ".join(DI.conflicts(clean["dictate.shortcut"])),
+                                                              "; try %s" % DI.SHORTCUTS[alt]["label"] if alt else ""))
     if "ui.port" in changed:
         notes.append("The new dashboard port applies the next time you run `lfg ui`.")
     return {"changed": changed, "notes": notes}

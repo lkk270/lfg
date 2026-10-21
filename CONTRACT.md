@@ -54,6 +54,7 @@ Only through `claudecfg.py` (backup, compare-and-swap, ledger entry), only after
 | launchd agents `dev.lfg.headroom`, `dev.lfg.omnigraph.<name>` | Headroom / Knowledge packs | booted out, plist removed |
 | user-scope MCP `linear` (only if you have none) | Linear pack | `claude mcp remove` |
 | `claude plugin install lfg@lfg --scope user` | `lfg enable --everywhere` | `uninstall --scope user` |
+| launchd agent `dev.lfg.dictate` (runs `plugin/lib/lfgcore/dictate_helper.py` in `~/.lfg/dictate/venv`) | Dictate pack | booted out, plist removed, `~/.lfg/dictate` deleted |
 
 Revert restores a value only while it still equals what LFG wrote. Homebrew/uv installs are listed (`state/packs.json`), never removed. Older versions' machine-wide changes (global deny rules, the `~/.claude/CLAUDE.md` block, user-scope MCP servers, global Headroom routing, the plugin on everywhere) are detected exactly by `setup.legacy_items()` and offered for clean-up by `lfg setup`, the dashboard and `lfg uninstall`.
 
@@ -67,6 +68,7 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg changes [list\|undo <id>] [--json]` | The change ledger; `undo` reverts one entry if it is still LFG's |
 | `lfg uninstall [--dry-run] [--keep-data] [--yes]` | Replays the ledger backwards, cleans up older installs and LFG launchd agents, removes `~/.lfg`; lists tools and repo graph folders left behind |
 | `lfg mcp <code-review-graph\|dev-graph\|second-brain\|headroom>` | The plugin's MCP servers (`plugin/.mcp.json`): the real server when its pack is ready, else a stub with no tools that says how to add it |
+| `lfg dictate [status\|restart] [--json]` | LFG Dictate (pack `dictate`, off until `lfg add dictate`): on-device speech-to-text anywhere on the Mac. Hold the shortcut (`dictate.shortcut`, default Option+Space) to talk, double-tap for hands-free; text is pasted with the clipboard restored (`dictate.insert`: paste\|type), or left on the clipboard when no text field is focused. Runs cactus-needle's Whistle model offline (telemetry off, Hugging Face offline, explicit weights path). `dictate.cleanup` (on by default) sends text only to `claude -p`. No audio or transcript is kept; `~/.lfg/dictate/state.json` holds permissions, last error and today's count |
 | `lfg version` | Version |
 | `lfg doctor [--selftest]` | Tools of the packs that are on, Claude Code + marketplace, where LFG is on, Docker, Omnigraph, a Headroom proxy that is down, gh auth, leftovers from older installs, the ledger; `--selftest` proves every forbidden action is blocked |
 | `lfg init [--rebuild]` | First-time setup for the current repo (graphs + repo dirs). Normally automatic |
@@ -127,7 +129,7 @@ disable-model-invocation: true                                      # only for e
 - Rules modules are loaded with `lfg rule <name>` (Bash), never copied into the skill.
 - Use graph tools before reading files: code-review-graph MCP (`get_minimal_context_tool` first, then `get_impact_radius_tool`, `query_graph_tool`, `get_review_context_tool`, `detect_changes_tool`), then `graphify query/explain/path` (from a worktree with `--graph "$(lfg repo graph)"`), then dev-graph (Omnigraph MCP), then files.
 - Linear: read through the Linear MCP freely. **Any write** (create/update issue, comment, label, status) is shown to the user as exact text first and done only after an explicit yes.
-- Never: commit, push, gh writes, read `.env*`/keys, print env, write secrets, deploy, `docker push`, delete Docker resources LFG didn't label. Changes are left unstaged.
+- Never: push, commit without the user's approval (Commit approval), gh writes, read `.env*`/keys, print env, write secrets, deploy, `docker push`, delete Docker resources LFG didn't label. Changes are left unstaged.
 - Keep skills short (target < 120 lines): they are loaded into context.
 
 ## Agents (`plugin/agents/<role>.md`)

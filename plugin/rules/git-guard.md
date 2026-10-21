@@ -2,7 +2,7 @@ Rule module: git-guard · LFG · author Varun Singh · adapted from mattpocock/s
 
 # git-guard: read-only git and GitHub
 
-Agents read git and GitHub; the human writes. Every change is left **unstaged** with `COMMIT_MSG.md` and `PR_BODY.md` in the run folder, and the human commits, pushes and opens the PR in their own terminal. This holds even when the user asks in chat.
+Agents read git and GitHub; the human pushes. Every change is left **unstaged** with `COMMIT_MSG.md` and `PR_BODY.md` in the run folder. Commit only when the user asks: with Commit approval on (the default) Claude Code shows them each commit to approve; with it off, the guard blocks commits too. Pushing and opening the PR are always the human's, even when the user asks in chat.
 
 ## Allowed
 

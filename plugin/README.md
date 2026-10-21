@@ -1,6 +1,6 @@
 # LFG plugin
 
-LFG is an engineering pipeline for Claude Code. It takes an idea or a Linear issue from "what do we want?" to a change that is tested, security-checked, reviewed and ready for **you** to commit. It works from knowledge graphs of your code (code-review-graph, graphify, dev-graph), picks a lane (Express / Standard / Full / Hotfix) so small changes stay fast, and never commits, pushes or deploys on its own.
+LFG is an engineering pipeline for Claude Code. It takes an idea or a Linear issue from "what do we want?" to a change that is tested, security-checked, reviewed and ready for **you** to commit. It works from knowledge graphs of your code (code-review-graph, graphify, dev-graph), picks a lane (Express / Standard / Full / Hotfix) so small changes stay fast, never pushes or deploys, and commits only when you ask and approve each commit.
 
 This folder is the Claude Code plugin **and** the `lfg` CLI it calls (`bin/`, `lib/`). Install it with the installer in the repository root, which also sets up the tools the CLI uses:
 
@@ -60,7 +60,7 @@ Trigger phrases, inputs and outputs for each: `lfg ui` → Skills, or the guide 
 
 ## What LFG never does
 
-Commit, push, merge, write to GitHub, read `.env` or key files, deploy, or `docker push`. Writes to Linear happen only after you approve the exact text. To do any of these, you do it yourself in your own terminal.
+Push, merge, rebase, write to GitHub, read `.env` or key files, deploy, or `docker push`. Commits happen only when you ask, and Claude Code asks you to approve each one (Commit approval; turn it off in Settings to block commits too). Writes to Linear happen only after you approve the exact text. To do any of these, you do it yourself in your own terminal.
 
 ## Credits
 

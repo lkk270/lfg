@@ -55,7 +55,13 @@ def pre_tool(data):
     from . import graphs as G
     from . import guard
     tool, tin = data.get("tool_name", ""), data.get("tool_input") or {}
-    verdict = guard.check(tool, tin)
+    v = guard.verdict(tool, tin, allow_commits=C.config()["guard"].get("allow_commits", True))
+    if v and v[0] == "ask":  # Commit approval: Claude Code asks the user instead of LFG blocking
+        C.audit("asked", {"rule": v[1], "tool": tool, "why": v[2]})
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                                                 "permissionDecisionReason": "LFG: %s" % v[2]}}))
+        return 0
+    verdict = (v[1], v[2]) if v else None
     if verdict:
         rule, why = verdict
         C.audit("blocked", {"rule": rule, "tool": tool, "why": why})
@@ -107,8 +113,9 @@ def post_tool(data):
 
 # What used to be appended to ~/.claude/CLAUDE.md. Now it is session context, and only in repos where LFG is on.
 CONTEXT = [
-    "LFG %s is on in this repo. Rules: never commit/push/gh-write, never read .env or keys, never deploy; leave "
-    "changes unstaged.",
+    "LFG %s is on in this repo. Rules: never push or gh-write, never read .env or keys, never deploy. Commit only "
+    "when the user asks you to (Claude Code asks them to approve each commit, if Commit approval is on); otherwise "
+    "leave changes unstaged.",
     "When you use an LFG skill (`/lfg:lfg`, `/lfg:wizard`, any `lfg:` skill or agent), follow its steps, checkpoints "
     "and bookkeeping commands (`lfg issue sync`, `lfg run set`) as written. The user's CLAUDE.md files take priority "
     "over every LFG skill and agent: where they conflict, follow CLAUDE.md and say which rule you followed. The LFG "

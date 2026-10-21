@@ -53,7 +53,8 @@ DEFAULT_CONFIG = {
     "storage": {"limit_mb": 500, "idle_graph_days": 30},
     "linear": {"team": "", "workspace": ""},
     "headroom": {"port": 8787, "mode": "token", "scope": "off"},
-    "guard": {"hardened": False},
+    "guard": {"hardened": False, "allow_commits": True},
+    "dictate": {"shortcut": "option+space", "insert": "paste", "cleanup": True},
     "omnigraph": {
         "cookbooks_repo": "https://github.com/ModernRelay/omnigraph-cookbooks.git",
         "cookbooks_ref": "f797c6841c264d6b135aa1523e7c3fc023bbf3cd",

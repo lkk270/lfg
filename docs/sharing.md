@@ -35,10 +35,11 @@ Core is all LFG needs. Add the rest when you want them, from the dashboard or wi
 |---|---|---|
 | `security` | gitleaks, semgrep, osv-scanner, trivy, hadolint, actionlint, zizmor, picklescan | `/lfg:secure`, the green gate |
 | `shipcheck` | Docker Desktop (or bring your own Docker / Colima) | `lfg shipcheck` |
-| `pentest` | Ollama, LuLu, Strix (its installer is a `curl \| bash` script, so LFG asks first and never runs it from the dashboard) | `/lfg:pentest` |
+| `pentest` (experimental) | Ollama, LuLu, Strix (its installer is a `curl \| bash` script, so LFG asks first and never runs it from the dashboard) | `/lfg:pentest` |
 | `knowledge` | Omnigraph + two local servers under launchd | dev-graph, second-brain |
 | `linear` | the Linear MCP server (reuses yours if you have one) | `/lfg:inbox`, issue reads |
 | `headroom` | headroom-ai + a local proxy (experimental) | context compression, LFG repos only unless you choose everywhere |
+| `dictate` | a private environment in `~/.lfg/dictate` with the Whistle model (about 90 MB) and a login helper | LFG Dictate: hold Option+Space anywhere to dictate, on-device; asks for Microphone and Accessibility permission |
 
 `lfg remove <pack>` stops what a pack runs. Its tools stay installed because other things may use them.
 

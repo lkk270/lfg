@@ -249,7 +249,7 @@ class SetupFlowTest(Sandbox):
         self.assertEqual(SU.legacy_items(), [])
 
     def test_hooks_do_nothing_where_lfg_is_off(self):
-        data = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}, "cwd": self.repo})
+        data = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push"}, "cwd": self.repo})
         with mock.patch("sys.stdin", io.StringIO(data)), mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(H.main("pre-tool"), 0)
         C.write_json(C.lfg_path("enabled.json"), {"repos": {self.repo: {}}})

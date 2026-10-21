@@ -234,7 +234,7 @@
 <section id="overview">
   <div class="eyebrow">Documentation</div>
   <h1>LFG commands and getting started</h1>
-  <p class="lead">LFG takes an idea or a Linear issue to a reviewed, tested and security-checked change, with the commit message and pull request description written for you. It runs inside Claude Code as slash commands, backed by the <code>lfg</code> command-line tool. LFG never commits, pushes or deploys — the final step is always yours.</p>
+  <p class="lead">LFG takes an idea or a Linear issue to a reviewed, tested and security-checked change, with the commit message and pull request description written for you. It runs inside Claude Code as slash commands, backed by the <code>lfg</code> command-line tool. LFG never pushes or deploys, and commits only when you ask and approve it — publishing is always yours.</p>
 
   <div class="features">
     <div class="feature"><h4>Requirements</h4><p><code>/grill</code> interviews you until goals, users, acceptance criteria and non-goals are clear.</p></div>
@@ -673,7 +673,7 @@ gh pr create --body-file "$(lfg run path PR_BODY.md)"</code></pre></div>
   <h2>Security model</h2>
   <p class="desc">These rules are enforced by the plugin’s hooks, not only requested. <code>lfg doctor --selftest</code> verifies them.</p>
   <div class="callout warn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
-    <div><p class="title">LFG never</p><p>Commits, pushes, merges, deploys or writes to GitHub; reads <code>.env</code> files, keys or credential stores; writes a secret anywhere; pentests anything that is not local; or sends code to a cloud model during a pentest.</p></div></div>
+    <div><p class="title">LFG never</p><p>Pushes, merges, deploys or writes to GitHub; commits without your approval; reads <code>.env</code> files, keys or credential stores; writes a secret anywhere; pentests anything that is not local; or sends code to a cloud model during a pentest.</p></div></div>
   <div class="callout ok"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
     <div><p class="title">You always</p><p>Approve briefs, designs and Linear writes; commit and push; and complete anything that needs a password or a system prompt, such as GitHub sign-in, LuLu approval and Linear sign-in.</p></div></div>
 </section>

@@ -665,6 +665,16 @@ function showRule(name) {
   };
 }
 // ------------------------------------------------------------------ settings → Claude Code (LFG's footprint, all undoable)
+/* Dictate's own options, right on its pack row */
+function dictateControls(o, dis) {
+  if (o.preview) dis = "disabled";
+  return `<div class="dictate-opts${o.preview ? " preview" : ""}">${o.preview ? '<div class="preview-note">These controls work once Dictate is on.</div>' : ""}
+    <label>Shortcut <select data-dict="dictate.shortcut" ${dis}>${o.shortcuts.map(([k, l]) => `<option value="${esc(k)}" ${k === o.shortcut ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+    <label>Put text in by <select data-dict="dictate.insert" ${dis}><option value="paste" ${o.insert === "paste" ? "selected" : ""}>Pasting (clipboard put back)</option><option value="type" ${o.insert === "type" ? "selected" : ""}>Typing</option></select></label>
+    <label class="row"><input type="checkbox" data-dict="dictate.cleanup" ${o.cleanup ? "checked" : ""} ${dis}><span>Clean up with Claude <span class="meta">· removes filler words; sends the text (never audio) to Claude</span></span></label>
+    <a href="#" class="small" data-tour-start="${o.preview ? "dictate-intro" : "dictate"}">Take the tour</a>
+  </div>`;
+}
 function settingsClaudeCode() {
   return '<div id="cc-box"><div class="loading">Looking at your Claude Code setup…</div></div>';
 }
@@ -681,7 +691,7 @@ async function loadClaudeCode() {
     const j = d.jobs[name];
     return j ? `<div class="meta">${j.status === "running" ? "Installing…" : j.status === "done" ? "Installed." : "Install failed."}</div>${j.log.length ? `<pre class="joblog">${esc(j.log.slice(-12).join("\n"))}</pre>` : ""}` : "";
   };
-  const packRows = d.packs.map(p => `<li>${dot(p.on ? (p.missing.length ? "warn" : "ok") : "")}<div class="grow"><div class="title">${esc(p.title)}</div><div class="meta">${esc(p.about)}${p.on && p.missing.length ? ` · missing: ${esc(p.missing.map(m => m.split(":")[1]).join(", "))}` : ""}</div>${job(p.name)}</div>
+  const packRows = d.packs.map(p => `<li data-pack="${esc(p.name)}">${dot(p.on ? (p.missing.length ? "warn" : "ok") : "")}<div class="grow"><div class="title">${esc(p.title.replace(" (experimental)", ""))}${p.experimental ? ' <span class="tag">Experimental</span>' : ""}</div><div class="meta">${esc(p.about)}${p.detail ? `<br>${fmtWhy(p.detail)}` : ""}${p.settings ? dictateControls(p.settings, dis) : ""}${p.on && p.missing.length ? ` · missing: ${esc(p.missing.map(m => m.split(":")[1]).join(", "))}` : ""}</div>${job(p.name)}</div>
     ${p.name === "core" ? '<span class="muted small">always on</span>' : p.on && !p.missing.length ? `<button class="btn small" data-cc="pack_remove" data-name="${esc(p.name)}" ${dis}>Turn off</button>` : `<button class="btn small" data-cc="pack_add" data-name="${esc(p.name)}" ${dis || ((d.jobs[p.name] || {}).status === "running" ? "disabled" : "")}>${p.on ? "Install missing" : "Add"}</button>`}</li>`).join("");
   const hrOpts = [["off", "Off"], ["repos", "Only repos where LFG is on"], ["everywhere", "Every Claude Code session"]];
   const hrBlocked = hr.cloud_provider ? `Not available: Claude Code uses ${esc(hr.cloud_provider)} here.` : !hr.installed ? "Add the Headroom pack first." : "";
@@ -697,7 +707,8 @@ async function loadClaudeCode() {
     <div class="set-section"><h4>Feature packs</h4><p class="muted">Core is all LFG needs. The rest install their tools only when you add them. Tools stay installed when you turn a pack off.</p>
       <div class="box"><ul class="list">${packRows}</ul></div></div>
     <div class="set-section"><h4>Safety</h4>
-      <div class="box pad"><div class="row">${dot("ok")}<div class="grow"><b>Guard</b><div class="meta">On in every LFG repo: blocks commits, pushes, secret reads and the rest of the 18 rules (Settings → Rules). Recently blocked: ${d.blocked.length ? d.blocked.slice(0, 3).map(b => `rule ${esc(b.rule)} (${esc(b.tool)})`).join(", ") : "nothing"}.</div></div></div>
+      <div class="box pad"><div class="row">${dot("ok")}<div class="grow"><b>Guard</b><div class="meta">On in every LFG repo: blocks pushes, secret reads, deploys and the rest of the 18 rules (Settings → Rules), and asks you before any commit. Recently blocked: ${d.blocked.length ? d.blocked.slice(0, 3).map(b => `rule ${esc(b.rule)} (${esc(b.tool)})`).join(", ") : "nothing"}.</div></div></div>
+      <label class="row mt"><input type="checkbox" data-cc="commits" ${d.allow_commits ? "checked" : ""} ${dis}><span><b>Let Claude commit when I ask</b><span class="meta"> · each commit becomes an approval prompt in Claude Code; pushing, merging, rebasing, PRs, secrets and deploys stay blocked</span></span></label>
       <label class="row mt"><input type="checkbox" data-cc="hardened" ${d.hardened ? "checked" : ""} ${dis}><span><b>Hardened mode</b><span class="meta"> · also add Claude Code deny rules (git commit/push, secret files…) to each LFG repo's <code>.claude/settings.local.json</code>, never to your user settings</span></span></label></div></div>
     <div class="set-section"><h4>Headroom (context compression)</h4><p class="muted">A local proxy that shrinks what Claude Code sends. ${hr.live ? `Running, forwarding to ${esc(hr.upstream)}.` : hr.scope !== "off" ? `<span class="row" style="gap:8px">${dot("bad")}<span>Not running, and Claude Code is pointed at it, so terminal sessions can't reach Claude. Run <code>lfg headroom restart</code> in a terminal.</span></span>` : "Not running."}</p>
       <div class="row"><select id="cc-hr" ${dis || (hrBlocked && hr.scope === "off" ? "disabled" : "")}>${hrOpts.map(([v, l]) => `<option value="${v}" ${v === hr.scope ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><button class="btn" data-cc="headroom" ${dis}>Apply</button><span class="muted small">${esc(hrBlocked)}</span></div></div>
@@ -712,9 +723,15 @@ async function loadClaudeCode() {
       </ul></div></div>
     <div class="set-section"><h4>Changes LFG made outside ~/.lfg</h4>${changes}
       <p class="muted small mt">To remove LFG completely, run <code>lfg uninstall</code> in your terminal. It lists everything it will undo before it does anything.</p></div>`;
+  $$("[data-dict]", box).forEach(el => el.onchange = async () => {
+    el.disabled = true;
+    state.ccMsg = await save("config", { values: { [el.dataset.dict]: el.type === "checkbox" ? el.checked : el.value } });
+    loadClaudeCode();
+  });
   $$("[data-cc]", box).forEach(el => {
     const act = el.dataset.cc, ev = el.type === "checkbox" ? "onchange" : "onclick";
     el[ev] = async () => {
+      if (act === "commits") { state.ccMsg = await save("config", { values: { "guard.allow_commits": el.checked } }); loadClaudeCode(); return; }
       const body = act === "everywhere" || act === "hardened" ? { on: el.checked } : act === "headroom" ? { scope: $("#cc-hr").value }
         : { root: el.dataset.root, name: el.dataset.name, id: el.dataset.id };
       if (act === "repo_off" && !confirm(`Turn LFG off in ${el.dataset.root}? Its graphs and runs are kept.`)) return;
@@ -725,6 +742,8 @@ async function loadClaudeCode() {
     };
   });
   if (state.ccMsg) { saidMsg($("#cc-msg", box), state.ccMsg, state.ccMsg.ok ? "Done." : ""); state.ccMsg = null; }
+  $$("[data-tour-start]", box).forEach(l => l.onclick = e => { e.preventDefault(); startTour(l.dataset.tourStart); });
+  if (state.pendingTour && $('[data-pack="dictate"]', box)) { const t = state.pendingTour; state.pendingTour = null; setTimeout(() => startTour(t), 250); }
   clearTimeout(ccTimer);
   if (Object.values(d.jobs).some(j => j.status === "running")) ccTimer = setTimeout(() => { if (document.body.contains(box)) loadClaudeCode(); }, 2000);
 }
@@ -894,6 +913,123 @@ async function showSkill(name) {
     if (!r.ok) return saidMsg($("#skill-msg"), r);
     await refreshList();
     showSkill(name);
+  };
+}
+
+// ------------------------------------------------------------------ guided tours (first time, skippable)
+const shortcutLabel = () => { const o = $('[data-dict="dictate.shortcut"]'); return o ? o.options[o.selectedIndex].text : "your shortcut"; };
+/* One walkthrough of every Dictate control. While Dictate is off the controls are shown greyed and the last step is
+   Add; once it's on, the same steps end with Turn off. */
+function dictateTour(on) {
+  const pre = on ? "" : " Works once Dictate is on.";
+  return [
+    { sel: '[data-pack="dictate"]', title: on ? "Meet LFG Dictate" : "New: LFG Dictate", body: () => `Speech-to-text that works in any app on your Mac: Slack, your editor, the browser, Claude. Speech is turned into text on this computer, so audio never leaves it and nothing you say is saved.${on ? " This row shows its shortcut, whether it's running and how many times you used it today." : " It's off until you add it."}` },
+    { title: "How to talk to it", body: () => `<b>Hold ${esc(shortcutLabel())}</b>, speak, and let go: the words appear where your cursor is.<br><br><b>Double-tap</b> it for hands-free dictation; press it again or <b>Esc</b> to finish.<br><br>While it listens, a small pill at the bottom of your screen shows bars that move with your voice:<div class="tour-pill" aria-hidden="true">${"<i></i>".repeat(9)}</div>` },
+    { sel: '[data-dict="dictate.shortcut"]', title: "Shortcut", body: () => `Which keys start Dictate: Option+Space, Right Option, Fn (globe), Control+Space or Command+Shift+Space. Right Option and Fn work on their own. Pick another one if an app already uses yours (the ChatGPT app and Raycast like Option+Space).${pre}` },
+    { sel: '[data-dict="dictate.insert"]', title: "Put text in by", body: () => `<b>Pasting</b> is instant and puts your clipboard back right after. <b>Typing</b> never touches your clipboard but is slower for long text. If nothing editable has focus, the text is left on the clipboard so you can press ⌘V.${pre}` },
+    { sel: '[data-dict="dictate.cleanup"]', title: "Clean up with Claude", body: () => `On by default. Removes filler words ("um", "like"), applies spoken corrections ("Tuesday, no, Wednesday") and fixes punctuation: the text, never the audio, goes to Claude with your Claude Code sign-in. Untick it to keep everything on your Mac.${pre}` },
+    on ? { sel: '[data-pack="dictate"] [data-cc="pack_remove"]', title: "Turn it off", body: () => "Stops Dictate and deletes everything it installed: the model, its app and its login item. You can add it again any time." }
+       : { sel: '[data-pack="dictate"] [data-cc="pack_add"]', title: "Turn it on", body: () => '<b>Add</b> downloads the speech model (about 90 MB, into ~/.lfg/dictate) and starts Dictate. macOS then asks for <b>Microphone</b> and <b>Accessibility</b> permission for "LFG Dictate". After that, the controls above come alive.' },
+    { title: "From the terminal", body: () => `The same controls, if you prefer typing:<pre class="out">lfg add dictate                    # turn it on\nlfg dictate status\nlfg dictate shortcut right_option\nlfg dictate insert type            # or paste\nlfg dictate cleanup off            # or on\nlfg remove dictate                 # turn it off</pre>Replay this tour any time with <b>Take the tour</b> on the Dictate row.` },
+  ];
+}
+const TOURS = { get dictate() { return dictateTour(true); }, get "dictate-intro"() { return dictateTour(false); } };
+let TOUR = null;
+function startTour(name) {
+  endTour();
+  const box = document.createElement("div");
+  box.className = "tour";
+  box.innerHTML = '<div class="tour-shade"></div><div class="tour-hole" hidden></div><div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title"></div>';
+  document.body.append(box);
+  TOUR = { name, i: 0, box, onKey: e => { if (e.key === "Escape") finishTour("skipped"); else if (e.key === "ArrowRight") tourGo(1); else if (e.key === "ArrowLeft") tourGo(-1); } };
+  document.addEventListener("keydown", TOUR.onKey);
+  window.addEventListener("resize", tourDraw);
+  tourDraw();
+}
+function tourGo(d) { if (!TOUR) return; const n = TOUR.i + d; if (n >= TOURS[TOUR.name].length) return finishTour("finished"); TOUR.i = Math.max(0, n); tourDraw(); }
+function tourDraw() {
+  if (!TOUR) return;
+  const steps = TOURS[TOUR.name], st = steps[TOUR.i], last = TOUR.i === steps.length - 1;
+  const hole = $(".tour-hole", TOUR.box), card = $(".tour-card", TOUR.box), shade = $(".tour-shade", TOUR.box);
+  const target = st.sel && $(st.sel);
+  card.innerHTML = `<div class="tour-step">${TOUR.i + 1} of ${steps.length}</div><h3 id="tour-title">${esc(st.title)}</h3><div class="tour-body">${st.body()}</div>
+    <div class="tour-actions"><button class="link" data-t="skip">Skip tour</button><span class="grow"></span>${TOUR.i ? '<button class="btn small" data-t="back">Back</button>' : ""}<button class="btn small primary" data-t="next">${last ? "Done" : "Next"}</button></div>`;
+  $('[data-t="skip"]', card).onclick = () => finishTour("skipped");
+  $('[data-t="next"]', card).onclick = () => tourGo(1);
+  const back = $('[data-t="back"]', card); if (back) back.onclick = () => tourGo(-1);
+  shade.classList.toggle("solid", !target);
+  if (!target) {  // a step about how to use it, not a button: centred card
+    hole.hidden = true;
+    card.style.left = `${Math.max(16, (innerWidth - card.offsetWidth) / 2)}px`; card.style.top = `${Math.max(16, (innerHeight - card.offsetHeight) / 2)}px`;
+  } else {
+    const el = target.closest("label") && !target.closest("li > .grow > .title") && target.type === "checkbox" ? target.closest("label") : target;
+    el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect(), pad = 6;
+    Object.assign(hole.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + 2 * pad}px`, height: `${r.height + 2 * pad}px` });
+    hole.hidden = false;
+    const below = r.bottom + pad + 12, h = card.offsetHeight, w = card.offsetWidth;
+    card.style.top = `${below + h < innerHeight - 8 ? below : Math.max(8, r.top - pad - 12 - h)}px`;
+    card.style.left = `${Math.min(innerWidth - w - 16, Math.max(16, r.left))}px`;
+  }
+  $('[data-t="next"]', card).focus();
+}
+function finishTour(how) {
+  if (!TOUR) return;
+  const name = TOUR.name;
+  try { localStorage.setItem("lfg.tour." + name, how); } catch (e) { /* private window: the server copy still counts */ }
+  save("tour_done", { name, how });
+  endTour();
+  const p = $("#tour-prompt"); if (p) p.remove();
+}
+function endTour() {
+  if (!TOUR) return;
+  document.removeEventListener("keydown", TOUR.onKey);
+  window.removeEventListener("resize", tourDraw);
+  TOUR.box.remove();
+  TOUR = null;
+}
+/* The first time the dashboard opens after Dictate is set up: offer the tour, or skip it for good */
+async function offerTours() {
+  let t;
+  try { t = await api("tours"); } catch (e) { return; }
+  const seen = k => { try { return localStorage.getItem("lfg.tour." + k); } catch (e) { return null; } };
+  const remember = (k, how) => { try { localStorage.setItem("lfg.tour." + k, how); } catch (e) { /* ignore */ } save("tour_done", { name: k, how }); };
+  const d = t.dictate || {};
+  const promo = $("#promo");
+  promo.innerHTML = "";
+  // Dictate off: a banner on every page until it is turned on or closed (new installs and updates alike)
+  if (!d.on && !d.banner_closed && !seen("dictate-banner")) {
+    promo.innerHTML = `<div class="promo" role="region" aria-label="New: LFG Dictate">
+      <div class="tour-pill" aria-hidden="true">${"<i></i>".repeat(9)}</div>
+      <div class="grow"><div class="promo-title"><span class="tag">New</span> LFG Dictate</div>
+        <div class="promo-text">Hold <b>Option+Space</b> anywhere on your Mac, speak, and let go: the words appear where your cursor is. Your voice is transcribed on this Mac and never saved; Claude tidies up the text.</div></div>
+      <div class="promo-actions"><button class="btn small primary" data-promo="on">Turn it on</button><button class="btn small" data-promo="tour">Take the tour</button>
+        <button class="icon-btn" data-promo="close" aria-label="Close" title="Don't show again">&times;</button></div></div>`;
+    const go = () => { sessionStorage.setItem("lfg.tab.settings", "claudecode"); if ((location.hash.slice(1) || "home").split("/")[0] === "settings") route(); else location.hash = "#settings"; };
+    $('[data-promo="close"]', promo).onclick = () => { remember("dictate-banner", "closed"); promo.innerHTML = ""; };
+    $('[data-promo="tour"]', promo).onclick = () => { state.pendingTour = "dictate-intro"; go(); };
+    $('[data-promo="on"]', promo).onclick = async e => {
+      const r = await save("pack_add", { name: "dictate" });
+      if (!r.ok) { e.target.closest(".promo").querySelector(".promo-text").innerHTML = `${fmtWhy(r.why || "Couldn't start it.")} You can also run <code>lfg add dictate</code> in your terminal.`; return; }
+      promo.innerHTML = "";
+      go();  // Settings → Claude Code shows the download's progress
+    };
+    return;
+  }
+  // Dictate on: offer the controls tour once
+  // (the walkthrough taken before turning it on already showed every control, so it counts)
+  if (!d.on || d.done || seen("dictate") || seen("dictate-intro") === "finished" || $("#tour-prompt")) return;
+  const card = document.createElement("div");
+  card.id = "tour-prompt"; card.className = "tour-prompt"; card.setAttribute("role", "dialog"); card.setAttribute("aria-label", "LFG Dictate is ready");
+  card.innerHTML = `<div class="tour-pill small" aria-hidden="true">${"<i></i>".repeat(7)}</div><div class="grow"><b>LFG Dictate is ready</b><div class="meta">Take a 1-minute tour of its controls?</div></div>
+    <button class="link" data-p="skip">Skip</button><button class="btn small primary" data-p="go">Start tour</button>`;
+  document.body.append(card);
+  $('[data-p="skip"]', card).onclick = () => { remember("dictate", "skipped"); card.remove(); };
+  $('[data-p="go"]', card).onclick = () => {
+    card.remove();
+    state.pendingTour = "dictate";
+    sessionStorage.setItem("lfg.tab.settings", "claudecode");
+    if ((location.hash.slice(1) || "home").split("/")[0] === "settings") route(); else location.hash = "#settings";
   };
 }
 
@@ -1433,6 +1569,7 @@ async function init() {
   await loadBranches();
   mapStatus();
   route();
+  offerTours();
 }
 async function loadBranches() {
   /* runs and checks are tagged with the branch they ran on; the code map is one per project */
