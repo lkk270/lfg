@@ -214,6 +214,16 @@ def _about(d, review=None):
     return title, about[:400]
 
 
+def _ticket(d):
+    """The Linear ticket a run is for: "Source: ATO-4223" in the brief's heading, else one in the run's name."""
+    for line in C.read_text(os.path.join(d, "01-brief.md")).splitlines()[:5]:
+        m = re.search(r"Source:\s*([A-Z][A-Z0-9]*-\d+)", line)
+        if m:
+            return m.group(1)
+    m = re.search(r"(?:^|-)([a-z][a-z0-9]*-\d+)(?:-|$)", re.sub(r"^\d{8}-\d{4}-", "", os.path.basename(d)))
+    return m.group(1).upper() if m else ""
+
+
 def _run_summary(d):
     meta = C.read_json(os.path.join(d, "run.json"), {}) or {}
     rd = C.read_json(os.path.join(d, "ready.json"), None)
@@ -229,8 +239,10 @@ def _run_summary(d):
     if ready and _newer_work(d, os.path.join(d, "ready.json")):
         ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
     return {"run": os.path.basename(d), "slug": meta.get("slug"), "created": meta.get("created"),
-            "title": title, "about": about,
-            "branch": meta.get("branch") or "",
+            "title": title, "about": about, "ticket": _ticket(d),
+            # the run starts on one branch and its work moves to the worktree `lfg worktree new` gives it
+            "branch": next((w["branch"] for w in reversed(meta.get("worktrees") or [])
+                            if isinstance(w, dict) and w.get("branch")), meta.get("branch") or ""),
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()),
             "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),
@@ -269,7 +281,7 @@ def _for_repo(summary, mine, d=None, rid=None):
     about the owner's work, so they neither count nor show here."""
     every = bool(mine) and all(t.get("passes") for t in mine)
     st = summary["stages"]
-    stages = {k: (bool(st.get(k)) if k in ("brief", "design") else k == "tasks" or (k == "build" and every))
+    stages = {k: (bool(st.get(k)) if k in ("brief", "design", "tasks") else k == "build" and every)
               for k, _, _ in STAGES}
     part = {}  # this repo's own stage results in the shared run (04-qa-portal.md, 05-secure-portal.json, ...)
     for key, _, pat in STAGES:
