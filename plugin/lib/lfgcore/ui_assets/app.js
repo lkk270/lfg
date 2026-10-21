@@ -1554,12 +1554,22 @@ function wireSessions(root) {
     $("#grp-new").onkeydown = e => { if (e.key === "Enter") make(); };
   };
   $$("[data-sess-ungroup]", root).forEach(a => a.onclick = e => { e.preventDefault(); const [sid, from] = JSON.parse(a.dataset.sessUngroup); setGroup(sid, "", null, from); });
+  /* Starring changes the star and moves the session to the top of its list in place: no reload, no flicker. */
   $$("[data-sess-star]", root).forEach(b => b.onclick = async () => {
     const [id, on] = JSON.parse(b.dataset.sessStar);
     b.disabled = true;
     const r = await save("session_star", { id, on });
-    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
-    route();
+    b.disabled = false;
+    if (!r.ok) return alertMsg(b, r);
+    const s = (state.sessions.sessions || []).find(x => x.id === id);
+    if (s) s.starred = on;
+    b.classList.toggle("on", on);
+    b.textContent = on ? "★" : "☆";
+    b.setAttribute("aria-label", on ? "Unstar" : "Star");
+    b.title = on ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away";
+    b.dataset.sessStar = JSON.stringify([id, !on]);
+    const li = b.closest("li.sess"), list = li && li.parentNode;
+    if (on && list) list.prepend(li);
   });
   const hid = $("#sess-hidden", root);
   if (hid) hid.onchange = () => { state.showHidden = hid.checked; route(); };
@@ -1958,14 +1968,18 @@ function ghPanel(g) {
 PAGES.prs = async arg => {
   if (arg) return prDetail(arg);
   const [d, unlocked] = await Promise.all([api("prreviews", scopeArgs("prs")), isUnlocked()]);
+  state.prMethod = d.method;
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
+  state.prPick = state.prPick || new Set();
   const qcols = [
-    { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
+    { k: "pick", label: "", html: x => `<input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} onclick="event.stopPropagation()" title="Pick several PRs, for example a backend and its frontend, and review them together" aria-label="Pick ${esc(prRef(x))}">` },
+    { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}${linkTags(x.linked)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
     { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button> <button class="btn small" data-pr-sessions="${esc(prRef(x))}" ${unlocked ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
   ];
+  const qopts = { onRow: x => (location.hash = prHash(x)) };
   const rcols = [
-    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div>${x.gh ? `<div class="sub">${ghTag(x.gh)}</div>` : ""}` },
+    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div><div class="sub">${x.gh ? ghTag(x.gh) : ""}${linkTags(x.linked)}</div>` },
     { k: "state", label: "Where it is", html: x => `${tallyLine(x)}${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}`, sort: x => (x.posted ? 2 : (x.tally || {}).pending ? 0 : 1) },
     { k: "score", label: "Score", num: true },
     { k: "passes", label: "Reviews", num: true },
@@ -1974,10 +1988,68 @@ PAGES.prs = async arg => {
   return `${head("PR reviews", `Pull requests waiting on your review, your own open ones, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login. ${scopeLine("prs")}`)}
     ${d.no_remote && !allRepos("prs") ? `<p class="muted small">${esc(repoName())} has no GitHub remote, so this shows PRs from every repo.</p>` : ""}
     ${lock}
-    ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
-    ${section("Your open PRs", d.mine_why ? unavailable({ why: d.mine_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.mine, qcols, { emptyTitle: "No open PRs", emptyBody: "You have no open pull requests here." })}</div>`, "review your own work before others do; on your own PR you can only comment")}
-    ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}`;
+    <div class="callout" id="pr-pickbar" hidden></div>
+    ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { ...qopts, emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
+    ${section("Your open PRs", d.mine_why ? unavailable({ why: d.mine_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.mine, qcols, { ...qopts, emptyTitle: "No open PRs", emptyBody: "You have no open pull requests here." })}</div>`, "review your own work before others do; on your own PR you can only comment. Open one to link it to a session or a session group")}
+    ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}
+    ${methodSection(d.method, unlocked)}`;
 };
+/* Linked PRs as tags. They can be in another repo than the one picked top left, so each says its repo, and opening
+   one works whichever repo is picked. */
+const linkTags = prs => (prs || []).map(x => ` <a class="tag mono" href="#prs/${esc(x.replace("#", "/"))}" title="Linked: reviewed together, or linked by you" onclick="event.stopPropagation()">with ${esc(x)}</a>`).join("");
+/* Which files a review reads to decide what to look for, how to score and how to word comments. */
+function methodSection(m, unlocked) {
+  if (!m) return "";
+  const rows = m.sources.map((x, i) => `<li><span class="grow"><span class="mono small">${esc(x.path)}</span> ${x.missing ? '<span class="tag bad">not found</span>' : `<span class="muted small">${plural(x.found, "file")}</span>`}</span>${m.own && unlocked ? `<button class="btn small" data-rm-move='${i},-1' ${i ? "" : "disabled"} aria-label="Read earlier">↑</button><button class="btn small" data-rm-move='${i},1' ${i < m.sources.length - 1 ? "" : "disabled"} aria-label="Read later">↓</button><button class="btn small" data-rm-del="${i}">Remove</button>` : ""}</li>`).join("");
+  return `<details class="more mt" id="review-method"><summary><b>Review method</b> <span class="muted small">${m.own ? `your own: ${plural(m.sources.length, "source")}` : "LFG's built-in method"}</span></summary>
+    <div class="readable"><p class="muted small">What every review here reads, in order, to decide what to look for, how serious each finding is, the score and how comments are worded. Later ones win. The repo's AGENTS.md and CLAUDE.md files are read after these and win over them.</p>
+    <ul class="items box">${rows}</ul>
+    ${unlocked ? `<div class="row mt"><input type="text" id="rm-new" class="grow mono" placeholder="A file or folder, e.g. ~/.claude/skills/review-pr/SKILL.md"><button class="btn" id="rm-add">Add</button>${m.own ? '<button class="btn" id="rm-reset" title="Go back to LFG\'s built-in review method">Use LFG\'s built-in method</button>' : ""}</div><span class="save-msg" id="rm-msg"></span>` : '<p class="muted small">Run <code>lfg ui --unlock</code> to change it here.</p>'}
+    <p class="muted small">Read last, after everything above: <span class="mono">${esc(m.overrides)}</span> (${m.override_files.length ? plural(m.override_files.length, "file") : "empty"}).</p></div></details>`;
+}
+function wireMethod(root) {
+  const box = $("#review-method", root);
+  if (!box) return;
+  const cur = () => (state.prMethod.own ? state.prMethod.sources.map(x => x.path) : []);
+  const put = async list => {
+    const r = await save("review_sources", { sources: list });
+    if (!r.ok) return saidMsg($("#rm-msg", box), r, "");
+    state.prMethod = r; sessionStorage.setItem("lfg.methodOpen", "1"); softRoute();
+  };
+  $$("[data-rm-del]", box).forEach(b => b.onclick = () => put(cur().filter((_, i) => i !== +b.dataset.rmDel)));
+  $$("[data-rm-move]", box).forEach(b => b.onclick = () => { const [i, d] = b.dataset.rmMove.split(",").map(Number), l = cur(); [l[i], l[i + d]] = [l[i + d], l[i]]; put(l); });
+  const add = $("#rm-add", box), inp = $("#rm-new", box);
+  if (add) add.onclick = () => { const v = inp.value.trim(); if (v) put([...cur(), v]); };
+  if (inp) inp.onkeydown = e => { if (e.key === "Enter") add.onclick(); };
+  const reset = $("#rm-reset", box);
+  if (reset) reset.onclick = () => put([]);
+  if (sessionStorage.getItem("lfg.methodOpen")) { box.open = true; sessionStorage.removeItem("lfg.methodOpen"); }
+}
+/* Pick several PRs on the list (checkboxes) and review them together in one session. */
+function pickBar() {
+  const bar = $("#pr-pickbar");
+  if (!bar) return;
+  const picked = [...state.prPick];
+  bar.hidden = picked.length < 1;
+  bar.innerHTML = `<span><b>${plural(picked.length, "PR")} picked:</b> <span class="mono small">${esc(picked.join(", "))}</span></span>
+    <button class="btn small primary" id="pr-together" ${picked.length < 2 ? "disabled" : ""} title="One Claude session reviews them as one change: each gets its own review, and it checks they agree with each other">Review together</button>
+    <button class="btn small" id="pr-picklink" ${picked.length < 2 ? "disabled" : ""} title="Link their reviews without running anything">Link them</button>
+    <button class="btn small" id="pr-pickclear">Clear</button>`;
+  $("#pr-pickclear").onclick = () => { state.prPick.clear(); $$("[data-pr-pick]").forEach(c => (c.checked = false)); pickBar(); };
+  $("#pr-together").onclick = async e => {
+    const b = e.target, [first, ...rest] = picked;
+    b.disabled = true; b.textContent = "Starting…";
+    const r = await save("review_run", { pr: first, with: rest });
+    if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
+    state.prPick.clear(); setTimeout(softRoute, 1000);
+  };
+  $("#pr-picklink").onclick = async e => {
+    const [first, ...rest] = picked;
+    for (const x of rest) { const r = await save("review_link", { pr: first, other: x }); if (!r.ok) return alertMsg(e.target, r); }
+    for (let i = 1; i < rest.length; i++) for (const y of rest.slice(i)) await save("review_link", { pr: rest[i - 1], other: y });
+    state.prPick.clear(); softRoute();
+  };
+}
 function prFinding(f, pr, unlocked, live) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
   const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("");
@@ -2014,8 +2086,12 @@ async function prDetail(arg) {
   const can = unlocked && !running;
   const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">New full review</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button></div>`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
-  const sess = (d.sessions || []).length ? section("Sessions about this PR", `<ul class="items box">${d.sessions.map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.dashboard ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("")}</ul>`, "a /review-pr you ran yourself, or a review run from here; resume one to ask it about its findings") : "";
-  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}${actions}${sess}`;
+  state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
+  const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
+  const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
+  const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
+    <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">Review together with linked PRs</button>` : ""}</div>`, "reviewed together, or linked by you; they can be in any repo");
+  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}${actions}${linkedBox}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
   let pick = Number(sessionStorage.getItem(key)) || last.n;
@@ -2047,7 +2123,9 @@ async function prDetail(arg) {
     <div class="pr-pass-body">
       <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
-        ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}</div>
+        ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
+        ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to talk to the session that did this review</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
+        <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
       ${prior}
       ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `<span id="pr-tally">${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide</span>`)}
       ${postBar}
@@ -2082,6 +2160,39 @@ async function prSessions(pr) {
     ${!d.ok ? unavailable(d) : ss.length ? `<ul class="items box">${rows}</ul>` : empty("No sessions found", "None of your sessions in the last 30 days mention this PR.")}</div>`);
   $$("[data-pr-importpath]").forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
 }
+/* Link another PR to this one: pick from your open PRs and review requests in every repo, or type one. */
+async function prLinkPr(pr) {
+  openDrawer(`Link a PR to ${pr}`, '<div class="skeleton"></div>');
+  const d = await api("prreviews", { all: "1" });
+  const have = new Set([pr, ...(state.prDetail.linked || [])]);
+  const opts = [...(d.mine || []), ...(d.queue || []), ...(d.reviews || [])].filter((x, i, a) => !have.has(prRef(x)) && a.findIndex(y => prRef(y) === prRef(x)) === i);
+  openDrawer(`Link a PR to ${pr}`, `<div class="readable"><p>Linked PRs show on each other's page, whichever repo is picked top left, and can be reviewed together in one session that also checks they agree with each other.</p>
+    <div class="row"><input type="text" id="lk-pr" class="grow mono" placeholder="owner/repo#123 or a PR URL"><button class="btn primary" id="lk-go">Link</button></div><span class="save-msg" id="lk-msg"></span>
+    ${opts.length ? `<div class="k">Your open PRs, review requests and reviews, in every repo</div><ul class="items box">${opts.map(x => `<li><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))}</div></div><button class="btn small" data-lk="${esc(prRef(x))}">Link</button></li>`).join("")}</ul>` : ""}</div>`);
+  const go = async other => {
+    const r = await save("review_link", { pr, other });
+    saidMsg($("#lk-msg"), r, `Linked ${other}.`);
+    if (r.ok) setTimeout(() => { closeDrawer(); softRoute(); }, 600);
+  };
+  $("#lk-go").onclick = () => go($("#lk-pr").value.trim());
+  $("#lk-pr").onkeydown = e => { if (e.key === "Enter") go($("#lk-pr").value.trim()); };
+  $$("[data-lk]").forEach(b => b.onclick = () => go(b.dataset.lk));
+}
+/* Link one of your sessions to this PR by hand, e.g. the one where you built it. */
+async function prLinkSession(pr) {
+  openDrawer(`Link a session to ${pr}`, '<div class="skeleton"></div>');
+  const d = await api("sessions", scopeArgs("sessions"));
+  const ss = (d.sessions || []).slice(0, 60);
+  openDrawer(`Link a session to ${pr}`, `<div class="readable"><p>It shows under "Sessions about this PR" with its resume command. To link a whole group of sessions, use <b>Add to a group…</b> above instead. ${allRepos("sessions") ? "" : `Showing sessions in ${esc(repoName())}.`}</p>
+    <input type="search" id="lk-find" class="wide" placeholder="Search names, branches…">
+    <ul class="items box" id="lk-list">${ss.map(s => `<li data-q="${esc((s.name + " " + (s.branch || "") + " " + (s.repo || "")).toLowerCase())}"><div class="grow"><div class="title">${esc(s.name)}</div><div class="meta">${ago(s.modified)}${s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}</div></div><button class="btn small" data-lks="${esc(s.id)}">Link</button></li>`).join("") || "<li>No sessions.</li>"}</ul><span class="save-msg" id="lk-msg"></span></div>`);
+  $("#lk-find").oninput = e => { const q = e.target.value.toLowerCase(); $$("#lk-list li[data-q]").forEach(li => (li.style.display = li.dataset.q.includes(q) ? "" : "none")); };
+  $$("[data-lks]").forEach(b => b.onclick = async () => {
+    const r = await save("review_link_session", { pr, id: b.dataset.lks });
+    saidMsg($("#lk-msg"), r, "Linked.");
+    if (r.ok) setTimeout(() => { closeDrawer(); softRoute(); }, 600);
+  });
+}
 function prGroup() {
   const G = state.prGroups, others = G.all.filter(g => !G.groups.includes(g));
   openDrawer(`Group ${G.pr} with its sessions`, `<div class="readable">
@@ -2104,6 +2215,30 @@ function prGroup() {
 }
 function wirePrs(root) {
   $$("[data-pr-group]", root).forEach(b => b.onclick = prGroup);
+  wireMethod(root);
+  /* on the page, not each box: sorting a table redraws its rows */
+  root.onchange = e => { const c = e.target.closest && e.target.closest("[data-pr-pick]"); if (!c) return; c.checked ? state.prPick.add(c.dataset.prPick) : state.prPick.delete(c.dataset.prPick); pickBar(); };
+  pickBar();
+  $$("[data-pr-together]", root).forEach(b => b.onclick = async () => {
+    const [pr, others] = JSON.parse(b.dataset.prTogether);
+    b.disabled = true; b.textContent = "Starting…";
+    const r = await save("review_run", { pr, with: others });
+    if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
+    setTimeout(softRoute, 1000);
+  });
+  $$("[data-pr-unlink]", root).forEach(b => b.onclick = async () => { const [pr, other] = JSON.parse(b.dataset.prUnlink); const r = await save("review_link", { pr, other, on: false }); if (!r.ok) return alertMsg(b, r); softRoute(); });
+  $$("[data-pr-unlinksess]", root).forEach(b => b.onclick = async () => { const [pr, id] = JSON.parse(b.dataset.prUnlinksess); const r = await save("review_link_session", { pr, id, on: false }); if (!r.ok) return alertMsg(b, r); softRoute(); });
+  $$("[data-pr-linkpr]", root).forEach(b => b.onclick = () => prLinkPr(b.dataset.prLinkpr));
+  $$("[data-pr-linksess]", root).forEach(b => b.onclick = () => prLinkSession(b.dataset.prLinksess));
+  $$("[data-pr-activity]", root).forEach(det => det.ontoggle = async () => {
+    if (!det.open || det.dataset.loaded) return;
+    det.dataset.loaded = "1";
+    const [pr, n] = JSON.parse(det.dataset.prActivity), box = det.querySelector("div");
+    const d = await api("prreviewlog", { pr, n });
+    const steps = d.steps || [];
+    box.className = "pr-activity small";
+    box.innerHTML = steps.length ? `<ol>${steps.map(x => x.kind === "said" ? `<li class="said">${txt(x.text)}</li>` : `<li><span class="tag">${esc(x.tool)}</span> <span class="mono">${esc(x.text)}</span></li>`).join("")}</ol>` : '<p class="muted">Its log is gone, so there is nothing to show.</p>';
+  });
   $$("[data-copy]", root).forEach(b => b.onclick = async () => {
     const was = b.textContent;
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }

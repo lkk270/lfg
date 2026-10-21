@@ -2551,6 +2551,70 @@ class ReviewTest(unittest.TestCase):
             self.assertEqual(R._save_from_log("o/r", 7, log, None), "")
         self.assertEqual(R.load("o/r", 7)["passes"][0]["score"], 90)
 
+    def fake_claude(self, events):
+        """A stand-in for `claude -p`: writes these stream-json events to the run's log."""
+        def run(cmd, cwd=None, stdout=None, **kw):
+            stdout.write("\n".join(json.dumps(e) for e in events))
+            return subprocess.CompletedProcess(cmd, 0)
+        return run
+
+    def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        both = {"reviews": [{"pr": "o/api#7", "summary": "backend", "findings": [self.finding()]},
+                            {"pr": "o/web#9", "summary": "frontend", "findings": []}]}
+        events = [{"type": "system", "subtype": "init", "session_id": sid},
+                  {"type": "assistant", "session_id": sid, "message": {"content": [
+                      {"type": "text", "text": "Reading both diffs."},
+                      {"type": "tool_use", "name": "Bash", "input": {"command": "gh pr diff 7 -R o/api"}}]}},
+                  {"type": "result", "session_id": sid, "result": "```json\n%s\n```" % json.dumps(both)}]
+        meta = lambda repo, n: dict(self.META, url="https://github.com/%s/pull/%d" % (repo, n))  # noqa: E731
+        with mock.patch.object(R, "pr_meta", side_effect=meta), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=self.fake_claude(events)) as run:
+            j = R.run("o/api", 7, together=[("o/web", 9)])
+        self.assertEqual(j["status"], "done", j.get("why"))
+        prompt = run.call_args[0][0][2]
+        self.assertIn("o/api#7, o/web#9", prompt)
+        self.assertIn('"reviews"', prompt)
+        api, web = R.load("o/api", 7)["passes"][-1], R.load("o/web", 9)["passes"][-1]
+        self.assertEqual((api["summary"], web["summary"]), ("backend", "frontend"))
+        self.assertEqual((api["run"]["session_id"], api["run"]["with"], web["run"]["with"]), (sid, ["o/web#9"], ["o/api#7"]))
+        self.assertIn("claude --resume " + sid, R.resume(api["run"]))
+        self.assertEqual((R.linked("o/api#7"), R.linked("o/web#9")), (["o/web#9"], ["o/api#7"]))
+        steps = R.activity(api["run"]["log"])
+        self.assertEqual([x["kind"] for x in steps], ["said", "tool"])
+        self.assertIn("gh pr diff 7", steps[1]["text"])
+
+    def test_links_go_both_ways_and_a_session_can_be_linked_by_hand(self):
+        R.link("o/api#7", "https://github.com/o/web/pull/9")
+        self.assertEqual(R.linked("o/web#9"), ["o/api#7"])
+        R.link("o/web#9", "o/api#7", on=False)
+        self.assertEqual((R.linked("o/api#7"), R.linked("o/web#9")), ([], []))
+        with self.assertRaises(R.ReviewError):
+            R.link("o/api#7", "o/api#7")
+        sid = "11111111-2222-3333-4444-555555555555"
+        R.link_session("o/api#7", sid)
+        self.assertEqual(R.linked_sessions("o/api#7"), [sid])
+        with self.assertRaises(R.ReviewError):
+            R.link_session("o/api#7", "not-a-session")
+
+    def test_review_method_lists_your_sources_and_resets_to_lfgs(self):
+        d = self.tmp_dir()
+        with open(os.path.join(d, "SKILL.md"), "w") as f:
+            f.write("# mine\n")
+        cfg = R.C.lfg_path("config.json")
+        had = R.C.read_json(cfg, None)
+        self.addCleanup(lambda: R.C.write_json(cfg, had) if had is not None else os.path.exists(cfg) and os.remove(cfg))
+        m = R.set_sources([os.path.join(d, "SKILL.md"), d])
+        self.assertTrue(m["own"])
+        self.assertEqual([x["found"] for x in m["sources"]], [1, 1])
+        with self.assertRaises(R.ReviewError):
+            R.set_sources([os.path.join(d, "nope.md")])
+        m = R.set_sources([])
+        self.assertFalse(m["own"])
+        self.assertEqual(m["sources"][0]["path"], R.default_dir())
+
     def test_import_only_reads_sessions_and_review_logs(self):
         with self.assertRaises(R.ReviewError):
             R.import_session("o/r", 7, "/etc/hosts")

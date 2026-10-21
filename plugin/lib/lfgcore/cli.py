@@ -811,7 +811,7 @@ def _review(R, a):
     elif a.action == "threads":
         _print(R.threads(repo, number))
     elif a.action == "run":
-        j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh)
+        j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh, together=[R.parse_pr(x) for x in a.with_ or []])
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
                                                   j["log"]))
         return 0 if j["status"] == "done" else 1
@@ -1172,6 +1172,8 @@ def main(argv=None):
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
+    rv.add_argument("--with", dest="with_", action="append", metavar="PR",
+                    help="run: another PR to review in the same session, e.g. the frontend for a backend PR")
     rv.add_argument("--json", action="store_true")
     pf = sp.add_parser("prefs", help="your rules for Claude: defaults, per-session changes, hooks that enforce them")
     pf.add_argument("action", nargs="?", default="list",
