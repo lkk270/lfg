@@ -1030,6 +1030,7 @@ def usage(rid, days=30):
     every = in_background("all_usage_%d" % days, 120, lambda: _all_usage(days), "adding up usage")
     if every.get("available"):
         out["days"], out["models"] = every["days"], every["models"]
+        out["unpriced"] = every.get("unpriced") or []  # counted as $0, so the page names them
         out["spend"] = {"available": True, "today": every["spend"]["today"], "7d": every["spend"]["7d"],
                         "30d": every["spend"]["30d"], "source": "lfg",
                         "models": [{"model": m["model"], "usd": round(m["usd"], 2)} for m in every["models"]

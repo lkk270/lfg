@@ -2024,6 +2024,12 @@ class SessionsTest(unittest.TestCase):
         long = 120000 * 0.50 + 100000 * 2.50 + 30000 * 0.05
         self.assertAlmostEqual(d["models"][0]["usd"], (cheap + long) / 1e6, places=6)
 
+    def test_models_with_no_price_are_named(self):
+        d = self.replies(("claude-opus-5-5", 1000000, 0, 0, 0), ("claude-someday-9", 1000000, 0, 0, 0))()
+        self.assertEqual((d["unpriced"], d["spend"]["today"]), (["claude-someday-9"], 4.0))
+        with open(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js")) as f:
+            self.assertIn("Not priced:", f.read())
+
     def test_pr_review_sessions_and_their_subagents_count_as_reviews(self):
         u = {"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0,
              "cache_creation_input_tokens": 0}
