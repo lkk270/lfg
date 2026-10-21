@@ -1324,18 +1324,31 @@ PAGES.sessions = async () => {
     if (!g.has(s.group)) g.set(s.group, []);
     g.get(s.group).push(s);
   }
-  const line = s => `<li class="sess" data-sid="${esc(s.id)}"><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
+  const line = s => `<li class="sess" data-sid="${esc(s.id)}"><button class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${unlocked ? "" : "disabled"} title="${s.starred ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away"}" aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div>
       <details class="more" data-sess-recent="${esc(s.id)}"><summary class="small">Recent messages</summary><div class="sess-recent small muted">Loading…</div></details></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
       <button class="btn small" data-sess-remind="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once">Remind it of my style</button>
       <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
-      ${s.folder ? `<span class="tag" title="Your group">${esc(s.folder)} <a href="#" data-sess-ungroup="${esc(s.id)}" title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
+      ${s.folder ? `<span class="tag" title="${s.via_pr ? "Joined because it mentions a PR this group follows" : "Your group"}">${esc(s.folder)}${s.via_pr ? " · via PR" : ""} <a href="#" data-sess-ungroup='${esc(JSON.stringify([s.id, s.via_pr ? s.folder : ""]))}' title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
       <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Group sessions your own way, e.g. one feature across repos. Only LFG stores this; nothing on disk moves.">${s.folder ? "Change group" : "Group…"}</button>
       <button class="btn small" data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}' ${unlocked ? "" : "disabled"}>${s.hidden ? "Show again" : "Hide"}</button>
       <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></li>`;
-  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || ss.some(s => Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(ss[0].modified)}</span>${repo !== "Your groups" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary><ul class="items sess-list">${ss.map(line).join("")}</ul></details>`).join(""), plural([...g.values()].flat().length, "session")));
+  const GP = d.group_prs || {};
+  if (!q) for (const name of Object.keys(GP)) {
+    if (!byRepo.has("Your groups")) byRepo.set("Your groups", new Map());
+    if (!byRepo.get("Your groups").has(name)) byRepo.get("Your groups").set(name, []);
+  }
+  /* starred first; sessions not starred and untouched for a week fold away, so the ones you still care about stand out */
+  const quiet = s => !s.starred && Date.now() - Date.parse(s.modified) > 7 * 864e5;
+  const listOf = ss => {
+    const sorted = [...ss].sort((a, b) => (b.starred - a.starred) || (a.modified < b.modified ? 1 : -1));
+    const live = q ? sorted : sorted.filter(s => !quiet(s)), old = q ? [] : sorted.filter(quiet);
+    return `${live.length ? `<ul class="items sess-list">${live.map(line).join("")}</ul>` : ""}${old.length ? `<details class="more sess-old"><summary>${plural(old.length, "older session")}, not starred and untouched for a week</summary><ul class="items sess-list">${old.map(line).join("")}</ul></details>` : ""}`;
+  };
+  const prTags = name => (GP[name] || []).map(pr => `<a class="tag mono" href="#prs/${esc(pr.replace("#", "/"))}" title="This group follows ${esc(pr)}: every session that mentions it joins">${esc(pr)}</a>`).join(" ");
+  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || !ss.length || ss.some(s => s.starred || Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b> ${repo === "Your groups" ? prTags(name) : ""}</span><span class="muted small nowrap">${ss.length ? `${plural(ss.length, "session")} · ${ago(ss[0].modified)}` : "no session mentions it yet"}</span>${repo !== "Your groups" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary>${listOf(ss)}</details>`).join(""), plural([...g.values()].flat().length, "session")));
   const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
   return `${head("Sessions", `Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up. ${scopeLine("sessions")}`)}
     ${lock}
@@ -1352,8 +1365,8 @@ function wireSessions(root) {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
     setTimeout(() => (b.textContent = "Copy resume command"), 1500);
   });
-  const setGroup = async (sid, folder, msgEl) => {
-    const r = await save("session_folder", { id: sid, folder });
+  const setGroup = async (sid, folder, msgEl, from) => {
+    const r = await save("session_folder", { id: sid, folder, from: from || (((state.sessions.sessions || []).find(x => x.id === sid) || {}).via_pr ? ((state.sessions.sessions || []).find(x => x.id === sid) || {}).folder : "") });
     if (msgEl) saidMsg(msgEl, r, folder ? `Added to ${folder}.` : "Taken out.");
     if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 400);
     return r;
@@ -1389,7 +1402,14 @@ function wireSessions(root) {
     $("#grp-make").onclick = make;
     $("#grp-new").onkeydown = e => { if (e.key === "Enter") make(); };
   };
-  $$("[data-sess-ungroup]", root).forEach(a => a.onclick = e => { e.preventDefault(); setGroup(a.dataset.sessUngroup, ""); });
+  $$("[data-sess-ungroup]", root).forEach(a => a.onclick = e => { e.preventDefault(); const [sid, from] = JSON.parse(a.dataset.sessUngroup); setGroup(sid, "", null, from); });
+  $$("[data-sess-star]", root).forEach(b => b.onclick = async () => {
+    const [id, on] = JSON.parse(b.dataset.sessStar);
+    b.disabled = true;
+    const r = await save("session_star", { id, on });
+    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
+    route();
+  });
   const hid = $("#sess-hidden", root);
   if (hid) hid.onchange = () => { state.showHidden = hid.checked; route(); };
   $$("[data-sess-hide]", root).forEach(b => b.onclick = async () => {
@@ -1841,7 +1861,8 @@ async function prDetail(arg) {
   const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>, started ${ago(j.started)}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">New full review</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button></div>`;
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">New full review</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button></div>`;
+  state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   const sess = (d.sessions || []).length ? section("Sessions about this PR", `<ul class="items box">${d.sessions.map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.dashboard ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("")}</ul>`, "a /review-pr you ran yourself, or a review run from here; resume one to ask it about its findings") : "";
   if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}${actions}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
@@ -1910,7 +1931,28 @@ async function prSessions(pr) {
     ${!d.ok ? unavailable(d) : ss.length ? `<ul class="items box">${rows}</ul>` : empty("No sessions found", "None of your sessions in the last 30 days mention this PR.")}</div>`);
   $$("[data-pr-importpath]").forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
 }
+function prGroup() {
+  const G = state.prGroups, others = G.all.filter(g => !G.groups.includes(g));
+  openDrawer(`Group ${G.pr} with its sessions`, `<div class="readable">
+    <p>A group follows this PR: every session that mentions it joins the group on the Sessions page, including the review runs started here, alongside any sessions you put there yourself. Take one out with its ✕ and it stays out.</p>
+    ${G.groups.length ? `<div class="k">Following it</div><div class="row wrap">${G.groups.map(g => `<span class="tag">${esc(g)} <a href="#" data-grp-off="${esc(g)}" title="Stop following this PR">✕</a></span>`).join("")}</div>` : ""}
+    ${others.length ? `<div class="k">Your groups</div><div class="row wrap">${others.map(g => `<button class="btn small" data-grp-on="${esc(g)}">${esc(g)}</button>`).join("")}</div>` : ""}
+    <div class="k">New group</div>
+    <div class="row"><input type="text" id="grp-new" class="grow" placeholder="e.g. ATO-4282 Terraform" maxlength="80"><button class="btn primary" id="grp-make">Create and add</button></div>
+    <span class="save-msg" id="grp-msg"></span></div>`);
+  const go = async (group, on) => {
+    const r = await save("group_pr", { group, pr: G.pr, on });
+    saidMsg($("#grp-msg"), r, on ? `Added to ${group}. Its sessions show there on the Sessions page.` : `No longer in ${group}.`);
+    if (r.ok) setTimeout(() => { closeDrawer(); softRoute(); }, 900);
+  };
+  $$("[data-grp-on]").forEach(b => b.onclick = () => go(b.dataset.grpOn, true));
+  $$("[data-grp-off]").forEach(a => a.onclick = ev => { ev.preventDefault(); go(a.dataset.grpOff, false); });
+  const make = () => { const v = $("#grp-new").value.trim(); if (v.length < 2) { $("#grp-msg").textContent = "Give the group a name of at least 2 characters."; return; } go(v, true); };
+  $("#grp-make").onclick = make;
+  $("#grp-new").onkeydown = ev => { if (ev.key === "Enter") make(); };
+}
 function wirePrs(root) {
+  $$("[data-pr-group]", root).forEach(b => b.onclick = prGroup);
   $$("[data-copy]", root).forEach(b => b.onclick = async () => {
     const was = b.textContent;
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }

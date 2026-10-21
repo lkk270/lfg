@@ -192,13 +192,15 @@ def api(view, q):
         return K.skill_text(_arg(q, "id"), _rid(q))
     if view in ("prreviews", "prreview"):
         from . import review as R
+        from . import sessions as SS
         if view == "prreviews":
             return R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q))
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number,
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
-                    "sessions": pr_sessions(R.sessions_for(repo, number))[:8]}
+                    "sessions": pr_sessions(R.sessions_for(repo, number))[:8],
+                    "groups": SS.groups_of("%s#%d" % (repo, number)), "all_groups": SS.listing()["folders"]}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
     rid = _rid(q)
@@ -319,7 +321,8 @@ def save(what, body):
             raise S.Invalid(str(e)) from None
         dash.forget("environment")
         return res
-    if what in ("session_name", "session_folder", "session_hide", "session_trash", "worktree_remove"):
+    if what in ("session_name", "session_folder", "session_hide", "session_trash", "worktree_remove", "session_star",
+                "group_pr"):
         from . import sessions as SS
         try:
             if what == "session_name":
@@ -331,11 +334,15 @@ def save(what, body):
                 return SS.hide(ids, on=body.get("on", True) is not False)
             if what == "session_trash":
                 return SS.trash(body.get("id"))
+            if what == "session_star":
+                return SS.star(body.get("id"), body.get("on", True) is not False)
+            if what == "group_pr":
+                return SS.follow_pr(body.get("group"), body.get("pr"), body.get("on", True) is not False)
             if what == "worktree_remove":
                 res = SS.remove_worktree(str(body.get("path") or ""))
                 dash.forget("environment")
                 return res
-            return SS.file_into(body.get("id"), body.get("folder"))
+            return SS.file_into(body.get("id"), body.get("folder"), body.get("from") or "")
         except ValueError as e:
             raise S.Invalid(str(e)) from None
     if what.startswith("review_"):

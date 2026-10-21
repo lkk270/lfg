@@ -722,10 +722,16 @@ def _mentions(repo, number):
                                  "review %d" % number)]
 
 
+def mentions(raw, repo, number):
+    """True if a transcript's bytes mention this PR. "review 12" alone is too loose: it also needs the repo's name."""
+    keys = _mentions(repo, number)
+    hits = [k for k in keys if k in raw]
+    return bool(hits) and not (hits == [keys[-1]] and repo.split("/")[-1].encode() not in raw)
+
+
 def sessions_for(repo, number, days=30):
     """Your Claude Code sessions from the last `days` that mention this PR, newest first."""
-    cut, keys, out = time.time() - days * 86400, _mentions(repo, number), []
-    name = repo.split("/")[-1].encode()
+    cut, out = time.time() - days * 86400, []
     for p in glob.glob(os.path.join(SESSION_DIR, "*", "*.jsonl")):
         try:
             if os.path.getmtime(p) < cut:
@@ -734,8 +740,7 @@ def sessions_for(repo, number, days=30):
                 raw = fh.read()
         except OSError:
             continue
-        hits = [k for k in keys if k in raw]
-        if not hits or (hits == [keys[-1]] and name not in raw):  # "review 12" alone is too loose
+        if not mentions(raw, repo, number):
             continue
         title, cwd, first = "", "", ""
         for ln in raw.splitlines():
