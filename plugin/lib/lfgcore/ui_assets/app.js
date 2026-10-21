@@ -94,7 +94,7 @@ const STEP_WHY = {
   design: "/lfg:plan designs the change from the code graphs (02-design.md). Small changes can skip it",
   tasks: "/lfg:plan breaks the plan into tickets with tests agreed up front (tasks.json)",
   build: "/lfg:build writes the code, test first, one note per ticket (03-build-*.md)",
-  qa: "The QA agent proves each acceptance criterion with a test (04-qa.md)",
+  qa: "/lfg:check has the QA agent prove each acceptance criterion with a test (04-qa.md)",
   gate: "/lfg:check runs lint, types, tests and build like CI (ready.json)",
   secure: "/lfg:secure vets new packages, URLs and security-sensitive code (05-secure.json)",
   review: "/lfg:expert reviews standards, spec and blast radius (06-review.json)",
@@ -1155,7 +1155,7 @@ async function runDetail(run) {
   const p = runPlace(all.stages, d.stages, d), attn = runAttention(d);
   const stuck = { "fix-checks": "gate", "fix-review": "review", "fix-block": "review", "fix-security": "secure", "fix-ship": "ship" }[p.next];
   const keys = all.stages.map(([k]) => k), last = keys.reduce((m, k, i) => (d.stages[k] ? i : m), -1);
-  const steps = `<div class="steps">${keys.map((k, i) => { const skip = !d.stages[k] && i < last && k !== p.next; return `<span class="${k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : skip ? "skipped" : ""}" title="${esc((skip ? "Skipped. " : "") + (STEP_WHY[k] || ""))}">${esc(STEP[k] || k)}</span>`; }).join("")}</div>`;
+  const steps = `<div class="steps">${keys.map((k, i) => { const skip = !d.stages[k] && i < last && k !== p.next; return `<span class="${k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : skip ? "skipped" : ""}" title="${esc((k === p.next ? "Next. " : skip ? "Skipped. " : d.stages[k] ? "Done. " : "") + (STEP_WHY[k] || "") + ". /lfg:lfg runs every step in order")}">${esc(STEP[k] || k)}</span>`; }).join("")}</div>`;
   const files = d.files.filter(f => fileName(f.name)).map(f => ({ ...f, run, label: fileName(f.name) }))
     .sort((a, b) => fileRank(a.name) - fileRank(b.name) || a.name.localeCompare(b.name));
   const tasks = d.tasks_list.length ? `<div class="box items">${d.tasks_list.map(taskItem).join("")}</div>` : "";
