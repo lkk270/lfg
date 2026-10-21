@@ -546,10 +546,70 @@ def open_editor(port):
     return webbrowser.open("http://127.0.0.1:%d/#unlock=%s" % (port, S.edit_key()))
 
 
+def _state_path():
+    return C.lfg_path("state", "ui.json")
+
+
+def _alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _command(pid):
+    return C.run(["ps", "-o", "command=", "-p", str(pid)], timeout=5).stdout.strip()
+
+
+def _stop_old(port):
+    """Stop the LFG dashboard an earlier `lfg ui` left on this port (e.g. from a terminal that has since closed).
+    Returns what holds the port when it is something else, else ""."""
+    import signal
+    import time
+    old = C.read_json(_state_path(), {}) or {}
+    pid = old.get("pid")
+    if old.get("port") == port and pid and pid != os.getpid() and _alive(pid) and " ui" in _command(pid) \
+            and "lfg" in _command(pid):
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            if not _alive(pid):
+                break
+            time.sleep(0.1)
+        print("Stopped the LFG dashboard that was already running on port %d (pid %d)." % (port, pid), flush=True)
+        return ""
+    holder = C.run(["lsof", "-t", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"], timeout=5).stdout.split()
+    return "%s (pid %s)" % (_command(holder[0])[:120], holder[0]) if holder else "another program"
+
+
+def _exit_with_terminal():
+    """A dashboard started from a terminal stops when that terminal is gone, even if it never sent a hangup: its
+    parent shell dies and it is handed to launchd (pid 1)."""
+    import time
+
+    def watch():
+        while os.getppid() != 1:
+            time.sleep(5)
+        os._exit(0)
+    if sys.stdin and sys.stdin.isatty() and os.getppid() != 1:
+        threading.Thread(target=watch, daemon=True).start()
+
+
 def serve(port, open_browser=True):
     Handler.port = port
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    try:
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as e:
+        if e.errno != __import__("errno").EADDRINUSE:
+            raise
+        other = _stop_old(port)
+        if other:
+            sys.exit("Port %d is in use by %s. Stop it, or start the dashboard on another port: lfg ui --port N"
+                     % (port, other))
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     srv.daemon_threads = True
+    C.write_json(_state_path(), {"pid": os.getpid(), "port": port, "started": C.now_iso()})
+    _exit_with_terminal()
     # tool/MCP checks take a few seconds; warm them so the first overview shows every integration
     threading.Thread(target=dash.tools, daemon=True).start()
     print("LFG dashboard: http://127.0.0.1:%d  (Ctrl-C to stop)" % port)

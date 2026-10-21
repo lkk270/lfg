@@ -305,6 +305,44 @@ class DocsTest(unittest.TestCase):
 
 
 class UiTest(unittest.TestCase):
+    def test_a_new_dashboard_takes_the_port_from_one_left_running_and_names_anything_else(self):
+        import socket
+        lfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "bin", "lfg")
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        def start():  # no terminal, as when the one it was started from is gone
+            return subprocess.Popen([sys.executable, lfg, "ui", "--port", str(port), "--no-open"],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, start_new_session=True)
+
+        def up(p):
+            for _ in range(100):
+                if (C.read_json(ui._state_path(), {}) or {}).get("pid") == p.pid:
+                    return True
+                time.sleep(0.1)
+            return False
+        old = start()
+        self.addCleanup(old.kill)
+        self.assertTrue(up(old))
+        new = start()
+        self.addCleanup(new.kill)
+        self.assertTrue(up(new))
+        self.assertEqual(old.wait(timeout=10), -15)  # the leftover was stopped, not left holding the port
+        self.assertIn("Stopped the LFG dashboard", new.stdout.readline())
+        new.kill()
+        new.wait()
+        with socket.socket() as other:
+            other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            other.bind(("127.0.0.1", port))
+            other.listen()
+            out = subprocess.run([sys.executable, lfg, "ui", "--port", str(port), "--no-open"],
+                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("Port %d is in use by" % port, out.stderr)
+        self.assertIn("--port", out.stderr)
+
     def test_repo_id_blocks_traversal(self):
         self.assertEqual(ui._rid({"repo": ["repo-1234abcd"]}), "repo-1234abcd")
         for bad in ("../x", "a/b", ".hidden", ""):
