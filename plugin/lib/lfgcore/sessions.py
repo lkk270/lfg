@@ -408,8 +408,9 @@ def usage(days=30):
     since = time.strftime("%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
     today = time.strftime("%Y-%m-%d")
     week = time.strftime("%Y-%m-%d", time.localtime(time.time() - 6 * 86400))
+    month = time.strftime("%Y-%m-%d", time.localtime(time.time() - 29 * 86400))
     per_day, per_model, unpriced, reviews = {}, {}, set(), {}
-    spend = {"today": 0.0, "7d": 0.0, "30d": 0.0}
+    spend = {"today": 0.0, "7d": 0.0, "30d": 0.0, "range": 0.0}  # range: all `days` asked for
     for f in new.values():
         rv = f.get("review") or ""
         for day, models in f["days"].items():
@@ -439,7 +440,8 @@ def usage(days=30):
                     r["tokens"] += sum(t[k] for k in FIELDS)
                     r["last"] = max(r["last"], day)
                 mm["usd"] += usd
-                spend["30d"] += usd
+                spend["range"] += usd
+                spend["30d"] += usd if day >= month else 0
                 spend["7d"] += usd if day >= week else 0
                 spend["today"] += usd if day == today else 0
     for dd in per_day.values():

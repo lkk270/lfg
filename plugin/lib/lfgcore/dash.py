@@ -1032,7 +1032,7 @@ def usage(rid, days=30):
         out["days"], out["models"] = every["days"], every["models"]
         out["unpriced"] = every.get("unpriced") or []  # counted as $0, so the page names them
         out["spend"] = {"available": True, "today": every["spend"]["today"], "7d": every["spend"]["7d"],
-                        "30d": every["spend"]["30d"], "source": "lfg",
+                        "30d": every["spend"]["30d"], "range": every["spend"]["range"], "source": "lfg",
                         "models": [{"model": m["model"], "usd": round(m["usd"], 2)} for m in every["models"]
                                    if m["usd"] >= 0.01]}
     elif every.get("pending"):

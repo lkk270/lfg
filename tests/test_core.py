@@ -2030,6 +2030,12 @@ class SessionsTest(unittest.TestCase):
         with open(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js")) as f:
             self.assertIn("Not priced:", f.read())
 
+    def test_30_days_means_30_days_even_when_90_are_asked_for(self):
+        get = self.replies(("claude-opus-5-5", 1000000, 0, 0, 1), ("claude-opus-5-5", 1000000, 0, 0, 60))
+        self.assertEqual(get(30)["spend"]["30d"], 4.0)
+        d = get(90)
+        self.assertEqual((d["spend"]["30d"], d["spend"]["range"]), (4.0, 8.0))
+
     def test_pr_review_sessions_and_their_subagents_count_as_reviews(self):
         u = {"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0,
              "cache_creation_input_tokens": 0}
