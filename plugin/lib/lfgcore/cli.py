@@ -959,7 +959,7 @@ def main(argv=None):
                 " · %s" % st["error"] if st["error"] else ""))
             if st["last"]:
                 print("Last dictation: %s into %s (focused: %s)" % (
-                    {"paste": "pasted", "type": "typed", "clipboard": "left on the clipboard"}.get(
+                    {"paste": "copied and pasted", "type": "copied and typed", "clipboard": "copied"}.get(
                         st["last"].get("went"), "?"), st["last"].get("app") or "?", st["last"].get("focus")))
         return 0 if not st["installed"] or st["agent"] else 1
     if a.cmd == "mcp":

@@ -201,23 +201,6 @@ class Trigger:
         return self.state in ("held", "maybe_double", "handsfree")
 
 
-# ---------------------------------------------------------------- insert or leave on the clipboard
-
-TEXT_ROLES = {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXWebArea", "AXSecureTextField"}
-NOT_TEXT_ROLES = {"AXButton", "AXCheckBox", "AXRadioButton", "AXMenuItem", "AXMenuBarItem", "AXImage", "AXList",
-                  "AXOutline", "AXTable", "AXBrowser", "AXDockItem", "AXSlider", "AXPopUpButton"}
-
-
-def insert_or_copy(focused_app, role, settable):
-    """Where dictated text goes: paste (or type) it, unless macOS positively says the focused thing is not editable
-    (a button, list, image...). Not knowing is common (Chrome, Electron apps such as Slack, VS Code or Claude, Java
-    apps, and macOS sometimes won't even say which app is in front), and not knowing means insert: pasting where
-    nothing takes text is harmless, and the user expects the words where their cursor is."""
-    if role in NOT_TEXT_ROLES and not settable:
-        return "clipboard"
-    return "insert"
-
-
 # ---------------------------------------------------------------- shortcut clashes
 
 def conflicts(shortcut):

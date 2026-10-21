@@ -2,9 +2,9 @@
 
 Runs in Dictate's private environment (~/.lfg/dictate/venv: cactus-needle, sounddevice, PyObjC), started by launchd
 with telemetry off and Hugging Face offline (see dictate.py). Flow: the shortcut starts the microphone and a small
-"Listening" panel; when the dictation ends the audio is transcribed on-device by Whistle, optionally cleaned up by
-Claude (text only, only when the user turned "Clean up" on), then pasted (clipboard restored) or typed into the focused
-app. With no text field focused, the text stays on the clipboard. No audio and no transcript is written to disk.
+listening pill; when the dictation ends the audio is transcribed on-device by Whistle, cleaned up by Claude (text
+only, while "Clean up" is on), then copied to the clipboard and pasted (or typed) where the cursor is: both, every
+time, so it can be pasted again elsewhere. No audio and no transcript is written to disk.
 """
 import math
 import os
@@ -215,34 +215,12 @@ def _key(code, down, flags=0):
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
 
-def _save_clipboard(pb):
-    saved = []
-    for item in pb.pasteboardItems() or []:
-        saved.append({t: item.dataForType_(t) for t in item.types() if item.dataForType_(t) is not None})
-    return saved
-
-
-def _restore_clipboard(pb, saved):
-    pb.clearContents()
-    items = []
-    for kinds in saved:
-        it = AppKit.NSPasteboardItem.alloc().init()
-        for t, data in kinds.items():
-            it.setData_forType_(data, t)
-        items.append(it)
-    if items:
-        pb.writeObjects_(items)
-
-
 def paste(text):
-    pb = AppKit.NSPasteboard.generalPasteboard()
-    saved = _save_clipboard(pb)
-    pb.clearContents()
-    pb.setString_forType_(text, AppKit.NSPasteboardTypeString)
+    """Puts the text on the clipboard and presses ⌘V. The text stays on the clipboard afterwards, so it can be pasted
+    again anywhere."""
+    copy_only(text)
     _key(9, True, Quartz.kCGEventFlagMaskCommand)   # ⌘V
     _key(9, False, Quartz.kCGEventFlagMaskCommand)
-    time.sleep(0.35)  # let the app read the clipboard before it is put back
-    _restore_clipboard(pb, saved)
 
 
 def type_text(text):
@@ -371,17 +349,17 @@ class Dictate:
                 if self.cfg["cleanup"]:
                     self.ui.busy()
                     text = clean_up(text)
-                app, role, settable, why = focus_info()
-                where = D.insert_or_copy(app, role, settable)
-                if where == "insert":
-                    (type_text if self.cfg["insert"] == "type" else paste)(text)
-                    self.ui.hide()
-                else:
+                # always both: on the clipboard, and put in where the cursor is
+                app, role, _settable, why = focus_info()
+                if self.cfg["insert"] == "type":
                     copy_only(text)
-                    self.ui.say("Copied: press ⌘V", 2.5)
-                # what happened and why (never the words), for `lfg dictate status`
-                D.record_use(used=True, last={"went": self.cfg["insert"] if where == "insert" else "clipboard",
-                                              "app": app or "", "focus": role or why or "unknown"})
+                    type_text(text)
+                else:
+                    paste(text)
+                self.ui.hide()
+                # where it went (never the words), for `lfg dictate status`
+                D.record_use(used=True, last={"went": self.cfg["insert"], "app": app or "",
+                                              "focus": role or why or "unknown"})
             except Exception as e:  # never let one bad dictation stop the helper
                 D.record_use(error="transcribe: %s" % type(e).__name__)
                 self.ui.say("Dictate hit an error", 2)

@@ -89,8 +89,8 @@ FIELDS = [
      "a block. Pushing, merging, rebasing, PRs, secrets and deploys stay blocked.", None),
     ("dictate.shortcut", "Dictate shortcut", "choice", "Hold to talk, double-tap for hands-free.",
      ("option+space", "right_option", "fn", "ctrl+space", "cmd+shift+space")),
-    ("dictate.insert", "Dictate: put text in by", "choice", "paste (fast; your clipboard is put back) or type "
-     "(clipboard untouched).", ("paste", "type")),
+    ("dictate.insert", "Dictate: put text in by", "choice", "paste (fast) or type (for apps that block pasting). "
+     "Either way the text also stays on your clipboard.", ("paste", "type")),
     ("dictate.cleanup", "Dictate: clean up with Claude", "bool", "Removes filler words and fixes punctuation. Sends "
      "the text (never audio) to Claude. On by default; off keeps everything on this Mac.", None),
 ] + [("models.%s" % a, "Model: %s" % a, "choice", "", MODELS) for a in C.DEFAULT_CONFIG["models"]]

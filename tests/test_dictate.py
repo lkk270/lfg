@@ -182,16 +182,6 @@ class DictateAppAndOptionsTest(DictatePackTest):
         self.assertEqual(cp.returncode, 7)
 
 
-class InsertOrCopyTest(unittest.TestCase):
-    def test_apps_that_dont_say_what_is_focused_still_get_the_text(self):
-        self.assertEqual(D.insert_or_copy(True, None, False), "insert")  # Chrome, Electron, Java apps
-        self.assertEqual(D.insert_or_copy(True, "AXTextArea", True), "insert")
-        self.assertEqual(D.insert_or_copy(True, "AXGroup", False), "insert")  # unclear: try
-        self.assertEqual(D.insert_or_copy(True, "AXButton", False), "clipboard")
-        self.assertEqual(D.insert_or_copy(True, "AXButton", True), "insert")
-        self.assertEqual(D.insert_or_copy(None, None, False), "insert")  # macOS wouldn't say: paste anyway
-
-
 class TourTest(DictatePackTest):
     def test_offered_once_dictate_is_ready_until_finished_or_skipped(self):
         from lfgcore import control as K

@@ -67,7 +67,7 @@ Hold **Option+Space** anywhere on your Mac, in any app, speak, and let go: the w
 
 - **Off until you turn it on:** nothing is downloaded or asked for until `lfg add dictate` (or Settings → Claude Code → Feature packs). It then fetches Cactus Compute's on-device [Whistle](https://cactuscompute.com/blog/whistle) model (17 MB) into `~/.lfg/dictate` and asks macOS for Microphone and Accessibility permission.
 - **On-device:** audio never leaves the Mac, usage telemetry is switched off, and no audio or transcript is kept. **Clean up with Claude** is on by default: it sends the text (never audio) to Claude, with your Claude Code sign-in, to remove filler words, apply spoken corrections and fix punctuation. Turn it off (`lfg dictate cleanup off` or the Dictate row) to keep everything on the Mac.
-- **Your clipboard is put back** after pasting, or choose **Type instead**. With no text field focused, the text is left on the clipboard.
+- **Both, every time:** the text is put where your cursor is and also left on your clipboard, so you can paste it again anywhere. Pasting is the default; choose **Type instead** for apps that block pasting.
 - While it listens, a small pill at the bottom of the screen shows bars that move with your voice; that's all.
 - Change the shortcut, paste/type and Clean up on the Dictate row in Settings → Claude Code, or with `lfg dictate shortcut right_option`, `lfg dictate insert type`, `lfg dictate cleanup on|off`. macOS lists it as **LFG Dictate** under Privacy & Security. `lfg remove dictate` deletes it all.
 
