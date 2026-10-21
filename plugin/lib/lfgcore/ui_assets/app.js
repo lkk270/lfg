@@ -89,17 +89,18 @@ const dot = t => `<span class="dot ${t}"></span>`;
 const fmtWhy = w => esc(w || "").replace(/`([^`]+)`/g, "<code>$1</code>");
 
 /* Pipeline steps, in the words a person uses */
+/* What each step of a run is: [command that does it, what it produces]. */
 const STEP_WHY = {
-  brief: "/lfg:grill or /lfg:lfg writes up the idea: problem, users, acceptance criteria (01-brief.md)",
-  design: "/lfg:plan designs the change from the code graphs (02-design.md). Small changes can skip it",
-  tasks: "/lfg:plan breaks the plan into tickets with tests agreed up front (tasks.json)",
-  build: "/lfg:build writes the code, test first, one note per ticket (03-build-*.md)",
-  qa: "/lfg:check has the QA agent prove each acceptance criterion with a test (04-qa.md)",
-  gate: "/lfg:check runs lint, types, tests and build like CI (ready.json)",
-  secure: "/lfg:secure vets new packages, URLs and security-sensitive code (05-secure.json)",
-  review: "/lfg:expert reviews standards, spec and blast radius (06-review.json)",
-  ship: "/lfg:ship builds, runs and smoke-tests it in Docker (07-shipcheck.json)",
-  packet: "/lfg:ship writes the commit message and PR body for you (COMMIT_MSG.md)" };
+  brief: ["/lfg:grill", "Writes up the idea: the problem, who it's for, and how you'll know it works."],
+  design: ["/lfg:plan", "Designs the change from the code graphs. Small changes can skip it."],
+  tasks: ["/lfg:plan", "Breaks the plan into tickets, each with its tests agreed up front."],
+  build: ["/lfg:build", "Writes the code, test first, one ticket at a time."],
+  qa: ["/lfg:check", "Proves each acceptance criterion with a test."],
+  gate: ["/lfg:check", "Runs lint, types, tests and build, like CI."],
+  secure: ["/lfg:secure", "Vets new packages, URLs and security-sensitive code."],
+  review: ["/lfg:expert", "Reviews standards, spec and what the change could break."],
+  ship: ["/lfg:ship", "Builds and smoke-tests it in Docker."],
+  packet: ["/lfg:ship", "Writes the commit message and PR body for you."] };
 const STEP = { brief: "Idea written up", design: "Plan", tasks: "Task list", build: "Built", qa: "Tested", gate: "Checks run",
   secure: "Security check", review: "Code review", ship: "Ship check", packet: "Ready to commit" };
 const NEXT = { brief: "write up the idea", design: "make a plan", tasks: "split it into tasks", build: "build it", qa: "test it",
@@ -1155,7 +1156,12 @@ async function runDetail(run) {
   const p = runPlace(all.stages, d.stages, d), attn = runAttention(d);
   const stuck = { "fix-checks": "gate", "fix-review": "review", "fix-block": "review", "fix-security": "secure", "fix-ship": "ship" }[p.next];
   const keys = all.stages.map(([k]) => k), last = keys.reduce((m, k, i) => (d.stages[k] ? i : m), -1);
-  const steps = `<div class="steps">${keys.map((k, i) => { const skip = !d.stages[k] && i < last && k !== p.next; return `<span class="${k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : skip ? "skipped" : ""}" title="${esc((k === p.next ? "Next. " : skip ? "Skipped. " : d.stages[k] ? "Done. " : "") + (STEP_WHY[k] || "") + ". /lfg:lfg runs every step in order")}">${esc(STEP[k] || k)}</span>`; }).join("")}</div>`;
+  const steps = `<div class="steps">${keys.map((k, i) => {
+    const skip = !d.stages[k] && i < last && k !== p.next, [cmd, what] = STEP_WHY[k] || ["", ""];
+    const cls = k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : skip ? "skipped" : "";
+    const state = { stuck: "Needs fixing", done: "Done", next: "Next", skipped: "Skipped" }[cls] || "Not yet";
+    return `<span class="${cls}" tabindex="0">${esc(STEP[k] || k)}<span class="tip" role="tooltip"><span class="tip-state">${state}</span> <code>${esc(cmd)}</code><br>${esc(what)}</span></span>`;
+  }).join("")}</div><p class="muted small">Hover a step for what it is. <code>/lfg:lfg</code> runs every step in order.</p>`;
   const files = d.files.filter(f => fileName(f.name)).map(f => ({ ...f, run, label: fileName(f.name) }))
     .sort((a, b) => fileRank(a.name) - fileRank(b.name) || a.name.localeCompare(b.name));
   const tasks = d.tasks_list.length ? `<div class="box items">${d.tasks_list.map(taskItem).join("")}</div>` : "";

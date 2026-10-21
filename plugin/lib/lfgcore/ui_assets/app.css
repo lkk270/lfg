@@ -174,7 +174,7 @@ a.now:hover { background: var(--soft-2); }
 .progress span { display: block; height: 100%; background: var(--blue); border-radius: 2px; }
 .progress.done span { background: var(--green); } .progress.stuck span { background: var(--red); }
 .steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; font-size: 12.5px; }
-.steps span { padding: 2px 8px; border-radius: 4px; color: var(--faint); background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.steps > span { padding: 2px 8px; border-radius: 4px; color: var(--faint); background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
 .steps .done { color: var(--text-2); box-shadow: none; background: var(--page); }
 .steps .done::before { content: "✓ "; color: var(--green); }
 .steps .next { color: var(--blue-tx); background: var(--blue-bg); box-shadow: none; font-weight: 500; }
@@ -182,6 +182,14 @@ a.now:hover { background: var(--soft-2); }
 .steps .stuck::before { content: "! "; }
 .steps .skipped { font-style: italic; }
 .steps .skipped::after { content: " (skipped)"; }
+.steps > span { position: relative; }
+.steps .tip { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 260px; padding: 8px 10px;
+  border-radius: 6px; background: var(--page); box-shadow: 0 0 0 1px var(--line), 0 6px 18px rgba(0, 0, 0, .25);
+  color: var(--text-2); font-weight: 400; font-style: normal; line-height: 1.45; white-space: normal; }
+.steps .tip::before, .steps .tip::after { content: none; }
+.steps > span:hover .tip, .steps > span:focus .tip { display: block; }
+.steps .tip-state { font-weight: 600; color: var(--text); }
+.steps > span:nth-last-child(-n+2) .tip { left: auto; right: 0; }  /* stay on screen at the right edge */
 
 /* lists */
 .list { list-style: none; margin: 0; padding: 0; }
