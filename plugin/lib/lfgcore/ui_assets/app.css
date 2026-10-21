@@ -96,6 +96,12 @@ code { font-size: .86em; background: var(--code-bg); border-radius: 4px; padding
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar { position: sticky; top: 0; z-index: 4; height: 44px; display: flex; align-items: center; padding: 0 14px;
   background: var(--page); }
+.history { display: flex; gap: 2px; margin-right: 6px; flex: none; }
+.hist { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: 4px; background: none; color: var(--text-2); cursor: pointer; }
+.hist:hover:not(:disabled) { background: var(--hover); }
+.hist:disabled { color: var(--faint); cursor: default; }
+.hist .ico { width: 16px; height: 16px; }
 .crumbs { display: flex; align-items: center; gap: 2px; font-size: 14px; color: var(--text-2); min-width: 0; overflow: hidden; }
 .crumbs a, .crumbs span { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 4px;
   white-space: nowrap; text-decoration: none; overflow: hidden; text-overflow: ellipsis; }

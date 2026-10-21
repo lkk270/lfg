@@ -113,54 +113,54 @@ BUILTIN = [
          "When something is wrong, first say what a person sees or can't do, in plain words with no identifiers; "
          "the mechanism comes after, only if needed. Put any question to me as one sentence about what someone will "
          "see or be able to do."),
-        ("style_paste_blocks", "Anything to paste goes in markers",
+        ("style_paste_blocks", "Put anything to paste in markers",
          "Anything you need to copy (a command, a query, a prompt for another session, a PR body) comes in a code "
          "block between PASTE START and PASTE END, with only that inside and a line saying where it goes.",
          "Anything I have to paste (a command, query, prompt for another session, PR body or message) goes inside a "
          "fenced code block between `--- PASTE START ---` and `--- PASTE END ---`, with nothing else between the "
          "markers. Say where it goes."),
-        ("style_risky_blocks", "SQL and risky commands say what they do",
+        ("style_risky_blocks", "Say what SQL and risky commands do",
          "The PASTE START line of a query or a command that changes things names where it runs and whether it only "
          "reads or what it writes. Writes come with the row count to expect, a way to check them, and a dry run.",
          "For SQL and for commands that change or delete things, the PASTE START marker names where it runs (system "
          "and environment) and what it does: `READ ONLY`, or `WRITE - ` followed by every kind of write in it. Before "
          "a write, say how many rows it should touch, add RETURNING or a check query, name any precondition, and "
          "offer a dry run (BEGIN ... ROLLBACK) for a write to several tables."),
-        ("style_steps", "Steps you run come one at a time",
+        ("style_steps", "Give steps you run one at a time",
          "When you have to do something yourself (run a command, set a secret, click through a page), Claude shows "
          "the outline once, then one step per message and waits for you.",
          "When I have to run steps myself (commands, queries, secrets, clicks), show the outline once, then give one "
          "step per message: a one-line status (\"step 2 of 5: ...\"), the step in paste markers, what to report "
          "back, then wait for me."),
-        ("style_handoff_prompts", "Prompts for another session say what it is",
+        ("style_handoff_prompts", "Open prompts for another session with what it is",
          "A prompt Claude writes for a new session opens by saying what that session is, then the task, then the "
          "branch and base.",
          "A prompt for another session opens by saying what that session is (\"This is a fresh session on ...\"), "
          "then the task, then the constraints, naming the branch and the base explicitly."),
-        ("style_labels", "No labels to remember",
+        ("style_labels", "Re-name findings and shorthand each time",
          "Claude re-names a finding or shorthand every time it comes back, and explains without code names or jargon.",
          "Don't make me hold your labels: re-name a numbered finding or invented shorthand every time it comes back "
          "(\"finding 3, the one where ...\"). Explain without code identifiers or borrowed jargon when a plain word "
          "works."),
-        ("style_hold_position", "A question is not a correction",
+        ("style_hold_position", "Answer pushback on the evidence",
          "When you push back, Claude checks again and answers on the evidence instead of giving in, and says what is "
          "proven and what is not.",
          "A question is not a correction: when I push back, re-check the claim and answer on the evidence, changing "
          "position only if the evidence does, and say what changed. Say what is proven and what is only reasoned, and "
          "name the assumption a claim rests on."),
-        ("style_one_note", "At most one note at the end",
+        ("style_one_note", "End with at most one note",
          "At most one extra note at the end of a reply, and only one that changes what you do next.",
          "End with at most one trailing note, and only if it changes what I do next, decide, or believe about the "
          "current state."),
-        ("style_recommend", "A recommendation, not a menu",
+        ("style_recommend", "Recommend one option",
          "Claude says which option it recommends and why, and skips padding and follow-ups you didn't ask for.",
          "Give a recommendation, not a menu: name alternatives only when they are real, and say which one and why. "
          "No padding, no speculative follow-ups, no work I didn't ask for."),
-        ("style_no_em_dash", "No em dashes", "No em dashes anywhere, in replies or in code.",
+        ("style_no_em_dash", "Use hyphens instead of em dashes", "No em dashes anywhere, in replies or in code.",
          "Never use em dashes, in prose or code. Use a hyphen, a colon, or restructure the sentence."),
-        ("style_us_spelling", "US spelling", "US spelling in replies and in code.",
+        ("style_us_spelling", "Use US spelling", "US spelling in replies and in code.",
          "Use US spelling, in code and prose."),
-        ("style_tables", "Tables only when they earn it",
+        ("style_tables", "Use tables only to compare",
          "A table only when several things are compared across the same points.",
          "Use a table only to compare several things across the same dimensions; never for two items or one "
          "dimension."))

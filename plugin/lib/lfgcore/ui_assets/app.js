@@ -2155,6 +2155,14 @@ function wireDocs() {
   const on = $(".doc-nav a.on");
   if (on) on.scrollIntoView({ block: "nearest" });
 }
+/* Back and forward arrows in the top bar. Browsers with the Navigation API say when there is nowhere to go;
+   others leave both on, and an arrow with nowhere to go does nothing. */
+function histButtons() {
+  const n = window.navigation;
+  if (!n || !("canGoBack" in n)) return;
+  $("#back").disabled = !n.canGoBack;
+  $("#forward").disabled = !n.canGoForward;
+}
 async function init() {
   if (location.hash.startsWith("#unlock=")) {  // from `lfg ui`: keep the edit key, drop it from the URL
     localStorage.setItem("lfg.editKey", decodeURIComponent(location.hash.slice(8)));
@@ -2173,7 +2181,10 @@ async function init() {
   $("#refresh").onclick = refresh;
   checkUpdate();
   $("#branch").onchange = () => { state.branch = $("#branch").value; localStorage.setItem(branchPref(), state.branch); refresh(); };
-  window.onhashchange = route;
+  $("#back").onclick = () => history.back();
+  $("#forward").onclick = () => history.forward();
+  window.onhashchange = () => { histButtons(); route(); };
+  histButtons();
   await loadBranches();
   mapStatus();
   route();
