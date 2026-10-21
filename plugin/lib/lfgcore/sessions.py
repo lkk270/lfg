@@ -273,30 +273,40 @@ def file_into(sid, folder):
 
 # Dollars per million tokens: (input, output, cache read). Cache writes cost 1.25x input (5 minutes) or 2x (1 hour).
 # Anthropic's first-party API list prices; on a Max or Team plan this is what the same work would cost at API rates.
+# Requests are priced as transcripts are read and the dollars kept in the usage index: after changing a price, bump
+# USAGE_V so every transcript is priced again.
 PRICES = {
     "claude-fable-5-1": (10.0, 50.0, 0.25), "claude-mythos-5-1": (10.0, 50.0, 0.25),
-    "claude-fable-5": (10.0, 50.0, 0.25), "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-opus-5": (5.0, 25.0, 0.50),
+    "claude-fable-5": (10.0, 50.0, 1.00), "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-opus-5": (5.0, 25.0, 0.50),
     "claude-opus-4-8": (5.0, 25.0, 0.50), "claude-opus-4-7": (5.0, 25.0, 0.50), "claude-opus-4-6": (5.0, 25.0, 0.50),
     "claude-sonnet-5-5": (2.0, 10.0, 0.20), "claude-sonnet-5": (2.0, 10.0, 0.20),
     "claude-sonnet-4-6": (3.0, 15.0, 0.30),
     "claude-haiku-5-5": (0.10, 0.50, 0.01), "claude-haiku-4-5": (1.0, 5.0, 0.10),
 }
+# Models whose price goes up when one request's prompt (input + cache read + cache write) is over a size.
+LONG_PROMPT = {"claude-haiku-5-5": (100_000, (0.50, 2.50, 0.05))}
 FIELDS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
+USAGE_V = 3
 
 
 def cost(model, t):
-    """Dollars for one model's token counts, or None for a model LFG has no price for."""
-    p = PRICES.get(re.sub(r"-\d{8}$", "", model or ""))
+    """Dollars for one request's token counts, or None for a model LFG has no price for. Per request, because a
+    model in LONG_PROMPT is priced by the size of each prompt, not of a day's total."""
+    name = re.sub(r"-\d{8}$", "", model or "")
+    p = PRICES.get(name)
     if not p:
         return None
+    if name in LONG_PROMPT and t["input"] + t["cache_read"] + t["cache_write_5m"] + t["cache_write_1h"] > \
+            LONG_PROMPT[name][0]:
+        p = LONG_PROMPT[name][1]
     inp, out, read = p
     return (t["input"] * inp + t["output"] * out + t["cache_read"] * read + t["cache_write_5m"] * inp * 1.25
             + t["cache_write_1h"] * inp * 2) / 1e6
 
 
 def _file_usage(path):
-    """{day: {model: {field: tokens}}} for one transcript. A reply is logged once per content block with the same
-    usage, so each message id counts once."""
+    """{day: {model: {field: tokens, "usd": dollars or None if unpriced}}} for one transcript. A reply is logged once
+    per content block with the same usage, so each message id counts once."""
     out, seen = {}, set()
     with open(path, "rb") as fh:
         for ln in fh:
@@ -325,9 +335,11 @@ def _file_usage(path):
                     time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone))
             except ValueError:
                 continue
-            d = out.setdefault(day, {}).setdefault(m["model"], dict.fromkeys(FIELDS, 0))
+            d = out.setdefault(day, {}).setdefault(m["model"], dict(dict.fromkeys(FIELDS, 0), usd=0.0))
             for k in FIELDS:
                 d[k] += row[k]
+            usd = cost(m["model"], row)
+            d["usd"] = None if usd is None or d["usd"] is None else d["usd"] + usd
     return out
 
 
@@ -368,7 +380,7 @@ def usage(days=30):
     """Tokens and dollars per day and per model for every Claude Code session (and its subagents), whether or not
     LFG is on there. Only transcripts that changed since last time are read again."""
     idx = C.read_json(_usage_index_path(), {}) or {}
-    idx = idx if idx.get("v") == 2 else {"v": 2, "files": {}}
+    idx = idx if idx.get("v") == USAGE_V else {"v": USAGE_V, "files": {}}
     old, new, changed = idx["files"], {}, False
     files = glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")) + \
         glob.glob(os.path.join(PROJECTS, "*", "*", "subagents", "*.jsonl"))
@@ -396,12 +408,13 @@ def usage(days=30):
             continue
     if changed or len(new) != len(old):
         C.ensure_dir(os.path.dirname(_usage_index_path()))
-        C.write_json(_usage_index_path(), {"v": 2, "files": new})
+        C.write_json(_usage_index_path(), {"v": USAGE_V, "files": new})
     since = time.strftime("%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
     today = time.strftime("%Y-%m-%d")
     week = time.strftime("%Y-%m-%d", time.localtime(time.time() - 6 * 86400))
+    month = time.strftime("%Y-%m-%d", time.localtime(time.time() - 29 * 86400))
     per_day, per_model, unpriced, reviews = {}, {}, set(), {}
-    spend = {"today": 0.0, "7d": 0.0, "30d": 0.0}
+    spend = {"today": 0.0, "7d": 0.0, "30d": 0.0, "range": 0.0}  # range: all `days` asked for
     for f in new.values():
         rv = f.get("review") or ""
         for day, models in f["days"].items():
@@ -412,7 +425,7 @@ def usage(days=30):
                                                   models={}))
                 dm = dd["models"].setdefault(model, dict.fromkeys(FIELDS + ("usd",), 0))
                 mm = per_model.setdefault(model, dict.fromkeys(FIELDS + ("usd",), 0))
-                usd = cost(model, t)
+                usd = t["usd"]
                 if usd is None:
                     unpriced.add(model)
                     usd = 0.0
@@ -431,7 +444,8 @@ def usage(days=30):
                     r["tokens"] += sum(t[k] for k in FIELDS)
                     r["last"] = max(r["last"], day)
                 mm["usd"] += usd
-                spend["30d"] += usd
+                spend["range"] += usd
+                spend["30d"] += usd if day >= month else 0
                 spend["7d"] += usd if day >= week else 0
                 spend["today"] += usd if day == today else 0
     for dd in per_day.values():
