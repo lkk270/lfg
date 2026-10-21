@@ -1160,8 +1160,8 @@ def main(argv=None):
     fb.add_argument("verdict", choices=["accept", "reject"])
     fb.add_argument("--note")
     rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
-    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "others", "run", "sessions",
-                                       "import"])
+    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "others", "run",
+                                       "sessions", "import"])
     rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
     rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")
     st = rv.add_mutually_exclusive_group()

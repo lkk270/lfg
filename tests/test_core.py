@@ -2581,7 +2581,8 @@ class ReviewTest(unittest.TestCase):
         self.assertIn('"reviews"', prompt)
         api, web = R.load("o/api", 7)["passes"][-1], R.load("o/web", 9)["passes"][-1]
         self.assertEqual((api["summary"], web["summary"]), ("backend", "frontend"))
-        self.assertEqual((api["run"]["session_id"], api["run"]["with"], web["run"]["with"]), (sid, ["o/web#9"], ["o/api#7"]))
+        self.assertEqual((api["run"]["session_id"], api["run"]["with"], web["run"]["with"]),
+                         (sid, ["o/web#9"], ["o/api#7"]))
         self.assertIn("claude --resume " + sid, R.resume(api["run"]))
         self.assertEqual((R.linked("o/api#7"), R.linked("o/web#9")), (["o/web#9"], ["o/api#7"]))
         steps = R.activity(api["run"]["log"])
