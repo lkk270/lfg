@@ -233,7 +233,80 @@ def _clean_finding(f, i):
     return {"title": _text(f.get("title"), "title", 200), "severity": sev, "file": f.get("file") or None,
             "line": line, "issue": _text(f.get("issue"), "issue", 1000), "fix": _text(f.get("fix"), "fix", 1000),
             "detail": _text(f.get("detail"), "detail"), "body": body, "origin": origin, "since": since,
-            "status": "pending", "comment_id": None, "comment_url": None}
+            "echoes": _echoes(f.get("echoes"), i), "status": "pending", "comment_id": None, "comment_url": None}
+
+
+def _echoes(raw, i):
+    """Other reviewers (people, CodeRabbit, other bots) who already raised this: [{who, url, said, bot}]."""
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise ReviewError("finding %d: echoes is a list of {who, url, said}" % i)
+    out = []
+    for e in raw[:10]:
+        if not isinstance(e, dict) or not str(e.get("who") or "").strip():
+            raise ReviewError("finding %d: each echo needs who (their GitHub login)" % i)
+        url = str(e.get("url") or "")
+        out.append({"who": str(e["who"]).strip().lstrip("@")[:80],
+                    "url": url if url.startswith("https://github.com/") else "",
+                    "said": _text(e.get("said"), "echo", 600), "bot": bool(e.get("bot"))})
+    return out
+
+
+def others(repo, number):
+    """What other reviewers already said on a PR: inline comments (with file and line), review summaries and
+    conversation comments, from people and bots (CodeRabbit, Sonar, other agents). LFG's own posted comments are
+    left out. Read-only."""
+    rec = load(repo, number) or {}
+    mine = {f.get("comment_id") for f in findings(rec) if f.get("comment_id")} if rec.get("passes") else set()
+    out = []
+
+    def add(c, kind, file=None, line=None):
+        u = c.get("user") or {}
+        body = (c.get("body") or "").strip()
+        if not body or c.get("id") in mine:
+            return
+        out.append({"who": u.get("login") or "", "bot": u.get("type") == "Bot" or (u.get("login") or "").endswith(
+            "[bot]"), "kind": kind, "file": file, "line": line, "said": body[:1500], "url": c.get("html_url") or "",
+            "at": c.get("submitted_at") or c.get("created_at") or ""})
+    for c in gh_json(["api", "--paginate", "repos/%s/pulls/%d/comments" % (repo, number)], timeout=120) or []:
+        add(c, "inline", c.get("path"), c.get("line") or c.get("original_line"))
+    for c in gh_json(["api", "--paginate", "repos/%s/pulls/%d/reviews" % (repo, number)], timeout=120) or []:
+        add(c, "review")
+    for c in gh_json(["api", "--paginate", "repos/%s/issues/%d/comments" % (repo, number)], timeout=120) or []:
+        add(c, "comment")
+    return out
+
+
+NEAR = 3  # lines: another reviewer's inline comment this close to a finding is about the same spot
+
+
+def mark_echoes(repo, number, said=None):
+    """Tag the latest review's findings with other reviewers' inline comments on the same file within NEAR lines,
+    on top of the ones the review itself named. Never fails a review: if GitHub can't be asked, nothing changes."""
+    rec = load(repo, number)
+    if not rec or not rec.get("passes"):
+        return 0
+    try:
+        said = others(repo, number) if said is None else said
+    except ReviewError:
+        return 0
+    n = 0
+    for f in rec["passes"][-1]["findings"]:
+        have = {e["url"] for e in f.get("echoes") or [] if e.get("url")} | {e["who"] for e in f.get("echoes") or []}
+        for c in said:
+            if c["kind"] != "inline" or not f.get("file") or c["file"] != f["file"] or not f.get("line") \
+                    or not c.get("line") or abs(int(c["line"]) - int(f["line"])) > NEAR:
+                continue
+            if c["url"] in have or c["who"] in have:
+                continue
+            f.setdefault("echoes", []).append({"who": c["who"], "url": c["url"], "said": c["said"][:600],
+                                               "bot": c["bot"], "near": True})
+            have |= {c["url"], c["who"]}
+            n += 1
+    if n:
+        store(rec)
+    return n
 
 
 def save(repo, number, data, ticket=None, meta=None):
@@ -465,6 +538,46 @@ def sources():
     return {"files": out, "missing": missing, "own": bool(cfg.get("sources"))}
 
 
+def method():
+    """What the Review method section shows: the files and folders a review reads, in order, each with whether it is
+    there and how many files it holds; then your overrides, read last."""
+    cfg = C.config().get("review") or {}
+    own = list(cfg.get("sources") or [])
+    rows = [{"path": x, "found": len(_expand(x)), "missing": not _expand(x)} for x in own or [default_dir()]]
+    return {"own": bool(own), "sources": rows, "builtin": default_dir(), "overrides": override_dir(),
+            "override_files": _expand(override_dir())}
+
+
+def set_sources(paths):
+    """Your review method: the files and folders /lfg:review reads instead of LFG's built-in one, in order (later
+    ones win). An empty list goes back to the built-in method. Each must exist."""
+    from . import settings as ST
+    if not isinstance(paths, list) or not all(isinstance(x, str) for x in paths):
+        raise ReviewError("expected a list of paths")
+    clean = []
+    for x in (p.strip() for p in paths):
+        if x and x not in clean:
+            if not _expand(x):
+                raise ReviewError("%s isn't a file or a folder with Markdown in it" % x)
+            clean.append(x)
+    path = C.lfg_path("config.json")
+    raw = C.read_json(path, {}) or {}
+    if not isinstance(raw, dict):
+        raise ReviewError("%s is not valid JSON; fix it by hand first" % path)
+    ST._backup(path, "config")
+    rv = dict(raw.get("review") or {})
+    if clean:
+        rv["sources"] = clean
+    else:
+        rv.pop("sources", None)
+    if rv:
+        raw["review"] = rv
+    else:
+        raw.pop("review", None)
+    C.write_json(path, raw)
+    return method()
+
+
 def agents_md(repo, head_sha, files):
     """AGENTS.md files as of the PR's head that govern the changed files: the root one plus any in a folder above a
     changed file."""
@@ -565,6 +678,7 @@ def local_checkout(repo):
 # Unattended runs may read anything and run only these. Writes to GitHub are denied on top of the guard, which only
 # runs in repos where LFG is on.
 RUN_ALLOW = ["Read", "Grep", "Glob", "Bash(lfg review context *)", "Bash(lfg review save *)",
+             "Bash(lfg review others *)",
              "Bash(lfg review show *)", "Bash(lfg review threads *)", "Bash(lfg graphs *)", "Bash(lfg rule *)",
              "Bash(gh pr view *)", "Bash(gh pr diff *)", "Bash(gh search prs *)", "Bash(gh api repos/*)",
              "Bash(git fetch *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git blame *)",
@@ -595,14 +709,18 @@ def _alive(pid):
         return False
 
 
-def start(repo, number, ticket=None, fresh=False):
-    """Start `lfg review run` detached (the dashboard's Review / Re-review buttons)."""
+def start(repo, number, ticket=None, fresh=False, together=()):
+    """Start `lfg review run` detached (the dashboard's Review / Re-review / Review together buttons). together: more
+    (repo, number) PRs to review in the same session."""
     import subprocess
     import sys
-    j = job(repo, number)
-    if j and j.get("status") == "running":
-        return {"started": False, "note": "A review of this PR is already running."}
-    args = [sys.executable, os.path.join(C.PLUGIN_ROOT, "bin", "lfg"), "review", "run", "%s#%d" % (repo, number)]
+    prs = [(repo, number)] + [tuple(x) for x in together if tuple(x) != (repo, number)]
+    busy = [ref(*x) for x in prs if (job(*x) or {}).get("status") == "running"]
+    if busy:
+        return {"started": False, "note": "A review of %s is already running." % ", ".join(busy)}
+    args = [sys.executable, os.path.join(C.PLUGIN_ROOT, "bin", "lfg"), "review", "run", ref(repo, number)]
+    for x in prs[1:]:
+        args += ["--with", ref(*x)]
     args += ["--ticket", ticket] if ticket else []
     args += ["--fresh"] if fresh else []
     with open(os.devnull, "wb") as dn:
@@ -611,56 +729,191 @@ def start(repo, number, ticket=None, fresh=False):
     return {"started": True}
 
 
-def run(repo, number, ticket=None, fresh=False):
-    """Review one PR with Claude Code in print mode, on your own login, and wait for it."""
+def ref(repo, number):
+    return "%s#%d" % (repo, number)
+
+
+def _passes(repo, number):
+    return len((load(repo, number) or {}).get("passes") or [])
+
+
+def run(repo, number, ticket=None, fresh=False, together=()):
+    """Review one PR with Claude Code in print mode, on your own login, and wait for it. together: more PRs reviewed
+    in the same session as one change (a backend and the frontend that calls it): each gets its own review, and the
+    session also checks they agree with each other. Every review it saves remembers the session, so you can resume it,
+    and its log, so the page can show what it did."""
+    import shutil
     import subprocess
     if not C.which("claude"):
         raise ReviewError("Claude Code (`claude`) is not on PATH")
-    before = len((load(repo, number) or {}).get("passes") or [])
+    prs = [(repo, number)] + [tuple(x) for x in together if tuple(x) != (repo, number)]
+    before = {x: _passes(*x) for x in prs}
     cwd = local_checkout(repo) or C.ensure_dir(reviews_dir())
     log = job_path(repo, number)[:-5] + ".log"
-    j = {"repo": repo, "number": number, "status": "running", "pid": os.getpid(), "started": C.now_iso(),
-         "cwd": cwd, "log": log, "re_review": before > 0 and not fresh, "fresh": bool(fresh)}
-    C.write_json(job_path(repo, number), j)
+    refs = [ref(*x) for x in prs]
+    for x in prs:
+        C.write_json(job_path(*x), {
+            "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
+            "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
+            "with": [r for r in refs if r != ref(*x)]})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
-    prompt = ("Read %s and follow it to review %s#%d%s. You are running unattended from the LFG dashboard: nobody "
-              "can answer questions, so put anything you would have asked in the summary. Run each shell command on "
-              "its own, never chained with ; or &&. Don't run `lfg review save` and don't write files: end your last "
-              "message with the Output JSON in one ```json block, and LFG saves it. Skip the steps after saving "
-              "(showing the table, triage, the post command).%s"
-              % (skill, repo, number, " (Linear ticket %s)" % ticket if ticket else "",
+    if len(prs) == 1:
+        what = "to review %s" % refs[0]
+        out = "end your last message with the Output JSON in one ```json block"
+    else:
+        what = ("to review these PRs together, as one change: %s. They are meant to work together (for example a "
+                "backend and the frontend that calls it). Review each one as the skill says, and also check that they "
+                "agree with each other (API shapes, field names, error cases, which has to ship first); put a problem "
+                "between them on the PR whose code should change, and say in each summary how it fits the others"
+                % ", ".join(refs))
+        out = ("end your last message with one ```json block {\"reviews\": [{\"pr\": \"owner/repo#number\", ...the "
+               "Output JSON for that PR}]}, one entry per PR")
+    prompt = ("Read %s and follow it %s%s. You are running unattended from the LFG dashboard: nobody can answer "
+              "questions, so put anything you would have asked in the summary. Run each shell command on its own, "
+              "never chained with ; or &&. Don't run `lfg review save` and don't write files: %s, and LFG saves it. "
+              "Skip the steps after saving (showing the table, triage, the post command).%s"
+              % (skill, what, " (Linear ticket %s)" % ticket if ticket else "", out,
                  " Do a full first review of the whole PR, as if there were no earlier reviews: no prior list, every "
                  "finding since \"first\"." if fresh else ""))
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
            "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)]
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as out:
+    with os.fdopen(fd, "w") as fh:
         # this code's own `lfg` first on PATH, so the session saves with the same version that started it
         env = dict(os.environ, PATH=os.path.join(C.PLUGIN_ROOT, "bin") + os.pathsep + os.environ.get("PATH", ""))
-        cp = subprocess.run(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
-    why = ""
-    if len((load(repo, number) or {}).get("passes") or []) == before:
-        why = _save_from_log(repo, number, log, ticket)
-    after = len((load(repo, number) or {}).get("passes") or [])
-    j.update(status="done" if after > before else "failed", exit=cp.returncode, ended=C.now_iso(),
-             why="" if after > before else why)
-    C.write_json(job_path(repo, number), j)
-    C.audit("review_run", {"pr": "%s#%d" % (repo, number), "status": j["status"]})
-    return j
+        cp = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    sid = session_id(log)
+    first = None
+    for x in prs:
+        why = ""
+        if _passes(*x) == before[x]:
+            why = _save_from_log(x[0], x[1], log, ticket, many=len(prs) > 1)
+        ok = _passes(*x) > before[x]
+        if ok:
+            mark_echoes(*x)
+            rec = load(*x)
+            p = rec["passes"][-1]
+            kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
+            shutil.copyfile(log, kept)
+            p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)]}
+            store(rec)
+        j = dict(job(*x) or {}, status="done" if ok else "failed", exit=cp.returncode, ended=C.now_iso(),
+                 why="" if ok else why)
+        C.write_json(job_path(*x), j)
+        C.audit("review_run", {"pr": ref(*x), "status": j["status"], "with": len(prs) - 1})
+        first = first or j
+    for i, x in enumerate(refs):
+        for y in refs[i + 1:]:
+            link(x, y)
+    return first
+
+
+def session_id(log):
+    """The Claude Code session a stream-json log came from (every event carries it)."""
+    for ln in C.read_text(log).splitlines()[:50]:
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("session_id"):
+            return ev["session_id"]
+    return ""
+
+
+def resume(run):
+    """The command that picks a review's session back up, so you can ask it about its findings."""
+    from . import sessions as SS
+    return SS.resume_command({"cwd": run.get("cwd"), "id": run["session_id"]}) if run.get("session_id") else ""
+
+
+def activity(path, limit=400):
+    """What a review run did, in order, from its log: what it said and each tool it used."""
+    out = []
+    for ln in C.read_text(path).splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+            continue
+        for part in (ev.get("message") or {}).get("content") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and (part.get("text") or "").strip():
+                out.append({"kind": "said", "text": part["text"].strip()[:4000]})
+            elif part.get("type") == "tool_use":
+                inp = part.get("input") or {}
+                what = inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("url") or ""
+                out.append({"kind": "tool", "tool": part.get("name") or "", "text": str(what)[:400]})
+    return out[-limit:]
+
+
+# ---------------------------------------------------------------- links between reviews, and to sessions
+
+def _links_path():
+    return os.path.join(reviews_dir(), "links.json")
+
+
+def _links():
+    d = C.read_json(_links_path(), {}) or {}
+    return {"prs": d.get("prs") or {}, "sessions": d.get("sessions") or {}}
+
+
+def linked(pr):
+    """PRs linked to this one: reviewed together, or linked by you. They can be in other repos."""
+    return sorted(_links()["prs"].get(pr) or [])
+
+
+def link(a, b, on=True):
+    """Link two PRs' reviews (both ways), e.g. a backend and its frontend. Either can be in any repo."""
+    a, b = ref(*parse_pr(a)), ref(*parse_pr(b))
+    if a == b:
+        raise ReviewError("a PR can't be linked to itself")
+    d = _links()
+    for x, y in ((a, b), (b, a)):
+        cur = set(d["prs"].get(x) or [])
+        cur = cur | {y} if on else cur - {y}
+        if cur:
+            d["prs"][x] = sorted(cur)
+        else:
+            d["prs"].pop(x, None)
+    C.ensure_dir(reviews_dir())
+    C.write_json(_links_path(), d)
+    return {"pr": a, "linked": sorted(d["prs"].get(a) or [])}
+
+
+def linked_sessions(pr):
+    return list(_links()["sessions"].get(pr) or [])
+
+
+def link_session(pr, sid, on=True):
+    """Link a Claude Code session to a PR by hand, e.g. the session where you built it."""
+    pr = ref(*parse_pr(pr))
+    if not re.match(r"^[0-9a-f-]{36}$", str(sid or "")):
+        raise ReviewError("not a session id: %r" % sid)
+    d = _links()
+    cur = [x for x in d["sessions"].get(pr) or [] if x != sid] + ([sid] if on else [])
+    if cur:
+        d["sessions"][pr] = cur
+    else:
+        d["sessions"].pop(pr, None)
+    C.ensure_dir(reviews_dir())
+    C.write_json(_links_path(), d)
+    return {"pr": pr, "sessions": cur}
 
 
 # ---------------------------------------------------------------- getting a review's JSON out of a session
 
-def find_review_json(text):
+def find_review_json(text, key="findings"):
     """The last review JSON ({..."findings": [...]}) in some text: a ```json block, a heredoc given to
-    `lfg review save`, or a bare object. None if there is none."""
+    `lfg review save`, or a bare object. key="reviews" finds a review of several PRs instead. None if there is none."""
     dec, best = json.JSONDecoder(), None
     for m in re.finditer(r"\{", text or ""):
         try:
             obj, _ = dec.raw_decode(text, m.start())
         except ValueError:
             continue
-        if isinstance(obj, dict) and isinstance(obj.get("findings"), list):
+        if isinstance(obj, dict) and isinstance(obj.get(key), list):
             best = obj
     return best
 
@@ -691,19 +944,25 @@ def _session_texts(path):
     return out
 
 
-def json_from_session(path):
+def json_from_session(path, key="findings"):
     for t in reversed(_session_texts(path)):
-        found = find_review_json(t)
+        found = find_review_json(t, key)
         if found:
             return found
     return None
 
 
-def _save_from_log(repo, number, log, ticket):
-    """After an unattended run: save the JSON it ended with (or tried to save). Returns why not, or ""."""
-    data = json_from_session(log)
+def _save_from_log(repo, number, log, ticket, many=False):
+    """After an unattended run: save the JSON it ended with (or tried to save). many: a review of several PRs, where
+    this PR's entry is picked out of {"reviews": [{"pr": ...}]}. Returns why not, or ""."""
+    if many:
+        want = ref(repo, number).lower()
+        data = next((x for x in (json_from_session(log, "reviews") or {}).get("reviews") or []
+                     if isinstance(x, dict) and str(x.get("pr") or "").lower().endswith(want)), None)
+    else:
+        data = json_from_session(log)
     if not data:
-        return "Claude finished without a review to save; see the log"
+        return "Claude finished without a review of this PR to save; see the log"
     data.setdefault("reviewer", me())
     try:
         save(repo, number, data, ticket=ticket)
@@ -868,5 +1127,8 @@ def dashboard(fresh=False, only=None):
                     "url": r.get("url"), "ticket": r.get("ticket"), "passes": len(r["passes"]),
                     "score": p.get("score"), "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
                     "job": job(r["repo"], r["number"]), "gh": st.get((r["repo"], r["number"]))})
+    links = _links()["prs"]  # linked PRs show on every row, whichever repo they are in
+    for x in q + mine + out:
+        x["linked"] = links.get(ref(x["repo"], x["number"])) or []
     return {"queue": q, "queue_why": qwhy, "mine": mine, "mine_why": mwhy, "reviews": out,
             "no_remote": bool(only) and not names}

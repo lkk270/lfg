@@ -51,7 +51,13 @@ preflight: graphs
      Findings get `since: "new"`.
    - **Missed.** One more pass over the whole PR for what earlier passes missed. Findings get `since: "missed"`.
      Never re-file an earlier finding: track it in `prior` instead.
-8. **Save.** Write the JSON below to a scratch file and `lfg review save <pr> --file <path> [--ticket <ID>]`. Fix
+8. **Other reviewers.** `lfg review others <pr>`: what people and bots (CodeRabbit, Sonar, other agents) already
+   said, inline (with `file` and `line`) or in the conversation. For each finding someone already raised, at the same
+   spot or the same idea in other words, list them in `echoes` and say so in `body`: agree with them by name and add
+   only what is new ("@coderabbitai flagged this too; the part it missed is ..."). If they said everything you would,
+   keep it as a short agreement rather than a second copy of their comment. Never echo LFG's own earlier comments
+   (those are in `prior`).
+9. **Save.** Write the JSON below to a scratch file and `lfg review save <pr> --file <path> [--ticket <ID>]`. Fix
    and re-run on a validation error.
 
 ## Output
@@ -65,7 +71,9 @@ The file passed to `lfg review save`:
    "file": "path/in/repo.ts", "line": 42, "issue": "one line", "fix": "one line",
    "detail": "evidence for the reviewer: what you checked and where; not posted",
    "body": "the comment the author reads, in the voice the sources describe",
-   "origin": "introduced|exposed|pre-existing", "since": "first|new|missed"}],
+   "origin": "introduced|exposed|pre-existing", "since": "first|new|missed",
+   "echoes": [{"who": "coderabbitai", "url": "https://github.com/...#discussion_r1", "said": "what they said, short",
+               "bot": true}]}],
  "prior": [{"id": "1.3", "state": "fixed|replied|withdrawn|resolved-unchanged|ignored|open", "note": "why"}]}
 ```
 

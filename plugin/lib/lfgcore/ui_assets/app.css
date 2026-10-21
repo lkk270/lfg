@@ -558,3 +558,10 @@ button.link:hover { color: var(--text); text-decoration: underline; }
 .dictate-opts.preview { opacity: .6; }
 .dictate-opts.preview a[data-tour-start] { opacity: 1; }
 .dictate-opts .preview-note { flex-basis: 100%; font-size: 12.5px; color: var(--muted); }
+
+/* PR reviews: what Claude did in a review run, and the bar for PRs picked to review together */
+.pr-activity ol { margin: 6px 0 0; padding-left: 22px; max-height: 420px; overflow: auto; }
+.pr-activity li { margin: 3px 0; overflow-wrap: anywhere; }
+.pr-activity li.said { color: var(--text); white-space: pre-wrap; }
+#pr-pickbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+#pr-pickbar[hidden] { display: none; }

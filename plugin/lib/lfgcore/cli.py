@@ -810,8 +810,10 @@ def _review(R, a):
             print("posted %s with %d inline comments: %s" % (out["event"], len(out["comments"]), out["posted"]["url"]))
     elif a.action == "threads":
         _print(R.threads(repo, number))
+    elif a.action == "others":
+        _print(R.others(repo, number))
     elif a.action == "run":
-        j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh)
+        j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh, together=[R.parse_pr(x) for x in a.with_ or []])
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
                                                   j["log"]))
         return 0 if j["status"] == "done" else 1
@@ -1158,8 +1160,8 @@ def main(argv=None):
     fb.add_argument("verdict", choices=["accept", "reject"])
     fb.add_argument("--note")
     rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
-    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "run", "sessions",
-                                       "import"])
+    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "others", "run",
+                                       "sessions", "import"])
     rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
     rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")
     st = rv.add_mutually_exclusive_group()
@@ -1172,6 +1174,8 @@ def main(argv=None):
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
+    rv.add_argument("--with", dest="with_", action="append", metavar="PR",
+                    help="run: another PR to review in the same session, e.g. the frontend for a backend PR")
     rv.add_argument("--json", action="store_true")
     pf = sp.add_parser("prefs", help="your rules for Claude: defaults, per-session changes, hooks that enforce them")
     pf.add_argument("action", nargs="?", default="list",

@@ -53,12 +53,29 @@ def _only(q):
     return None if _arg(q, "all") == "1" else dash.repo_root(_rid(q)) if _rid(q) else None
 
 
-def pr_sessions(rows):
-    """Sessions about a PR, each with its resume command. The dashboard's own review runs are named as such: they
-    were started with `claude -p` but resume like any other session."""
+def linked_pr(pr):
+    """A linked PR as the detail page shows it: where it is and whether it has a review."""
+    from . import review as R
+    repo, number = R.parse_pr(pr)
+    rec = R.load(repo, number) or {}
+    return {"pr": pr, "title": rec.get("title") or "", "reviewed": bool(rec.get("passes"))}
+
+
+def pr_sessions(rows, linked=()):
+    """Sessions about a PR, each with its resume command: the ones you linked by hand first, then every session that
+    mentions it. The dashboard's own review runs are named as such: they were started with `claude -p` but resume
+    like any other session."""
     from . import sessions as SS
     run = "Read %s" % os.path.join(C.PLUGIN_ROOT, "skills", "review")
     out = []
+    if linked:
+        known = {s["id"]: s for s in SS.listing(scripted=True, hidden=True)["sessions"]}
+        for sid in linked:
+            s = known.get(sid)
+            if s:
+                out.append({"id": sid, "title": s.get("name") or sid, "cwd": s.get("cwd") or "",
+                            "modified": s.get("modified"), "linked": True, "resume": s.get("resume")})
+        rows = [s for s in rows if s.get("id") not in set(linked)]
     for s in rows:
         mine = s["title"].startswith(run) or s["title"].startswith("Read ") and "/skills/review/SKILL.md" in s["title"]
         out.append(dict(s, dashboard=mine, title="Review run from the dashboard" if mine else s["title"],
@@ -193,17 +210,27 @@ def api(view, q):
     if view == "skilltext":
         from . import control as K
         return K.skill_text(_arg(q, "id"), _rid(q))
-    if view in ("prreviews", "prreview"):
+    if view in ("prreviews", "prreview", "prreviewlog"):
         from . import review as R
         from . import sessions as SS
         if view == "prreviews":
-            return R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q))
+            return dict(R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q)), method=R.method())
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
-            return {"record": R.load(repo, number), "job": R.progress(repo, number), "repo": repo, "number": number,
+            pr = R.ref(repo, number)
+            if view == "prreviewlog":
+                rec = R.need(repo, number)
+                p = next((x for x in rec["passes"] if x["n"] == int(_arg(q, "n") or 0)), None)
+                return {"steps": R.activity((p or {}).get("run", {}).get("log") or "")}
+            rec = R.load(repo, number)
+            for p in (rec or {}).get("passes") or []:
+                if p.get("run"):
+                    p["run"]["resume"] = R.resume(p["run"])
+            return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
-                    "sessions": pr_sessions(R.sessions_for(repo, number))[:8],
-                    "groups": SS.groups_of("%s#%d" % (repo, number)), "all_groups": SS.listing()["folders"]}
+                    "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
+                    "linked": [linked_pr(x) for x in R.linked(pr)],
+                    "groups": SS.groups_of(pr), "all_groups": SS.listing()["folders"]}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
     rid = _rid(q)
@@ -378,6 +405,8 @@ def review_action(what, body):
     `lfg review post` away from agents."""
     from . import review as R
     try:
+        if what == "review_sources":
+            return R.set_sources(body.get("sources"))
         repo, number = R.parse_pr(str(body.get("pr") or ""))
         if what == "review_mark":
             ids = body.get("ids") or []
@@ -389,7 +418,15 @@ def review_action(what, body):
             return R.post(repo, number, str(body.get("event") or ""), body=str(body.get("body") or ""),
                           dry_run=bool(body.get("dry_run")))
         if what == "review_run":
-            return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")))
+            together = body.get("with") or []
+            if not isinstance(together, list):
+                raise S.Invalid("with must be a list of PRs")
+            return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")),
+                           together=[R.parse_pr(str(x)) for x in together])
+        if what == "review_link":
+            return R.link(R.ref(repo, number), str(body.get("other") or ""), on=body.get("on", True) is not False)
+        if what == "review_link_session":
+            return R.link_session(R.ref(repo, number), body.get("id"), on=body.get("on", True) is not False)
         if what == "review_discard":
             return R.discard(repo, number, int(body.get("pass") or 0))
         if what == "review_rewrite":
