@@ -1325,7 +1325,8 @@ PAGES.sessions = async () => {
     g.get(s.group).push(s);
   }
   const line = s => `<li class="sess" data-sid="${esc(s.id)}"><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
-      <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div></div>
+      <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div>
+      <details class="more" data-sess-recent="${esc(s.id)}"><summary class="small">Recent messages</summary><div class="sess-recent small muted">Loading…</div></details></div>
       <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
       <button class="btn small" data-sess-remind="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once">Remind it of my style</button>
@@ -1436,6 +1437,15 @@ function wireSessions(root) {
   });
   $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
   $$("[data-sess-rules]", root).forEach(b => b.onclick = () => sessionRules(b.dataset.sessRules));
+  $$("[data-sess-recent]", root).forEach(d => d.ontoggle = async () => {
+    if (!d.open || d.dataset.loaded) return;
+    d.dataset.loaded = "1";
+    const r = await api("sessionrecent", { id: d.dataset.sessRecent });
+    const box = $(".sess-recent", d);
+    box.innerHTML = r.available === false ? esc(r.why) : (r.turns || []).length
+      ? r.turns.map(t => `<div class="sess-turn ${t.who}"><b>${t.who === "you" ? "You" : "Claude"}</b> <span class="muted">${ago(t.at)}</span><div class="pre-wrap">${esc(t.text)}${t.text.length >= 400 ? "…" : ""}</div></div>`).join("")
+      : "No messages yet.";
+  });
   $$("[data-sess-remind]", root).forEach(b => b.onclick = async () => {
     b.disabled = true;
     const r = await save("pref_remind", { session: b.dataset.sessRemind });

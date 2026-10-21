@@ -159,6 +159,12 @@ def api(view, q):
     if view == "sessions":
         from . import sessions as SS
         return SS.listing(hidden=_arg(q, "hidden") == "1", only=_only(q))
+    if view == "sessionrecent":
+        from . import sessions as SS
+        try:
+            return SS.recent(_arg(q, "id"))
+        except ValueError as e:
+            return {"available": False, "why": str(e)}
     if view == "sessiondone":
         from . import sessions as SS
         return SS.group_cleanup(_arg(q, "repo"), _arg(q, "group"))

@@ -2073,6 +2073,23 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(rows[a]["resume"], "cd /nowhere/app && claude --resume " + a)
         self.assertEqual(rows[a]["prompts"], 1)  # the meta line isn't a message you sent
 
+    def test_recent_messages_show_what_you_typed_and_how_claude_answered(self):
+        a = "%08d-0000-0000-0000-000000000000" % 5
+        self.write(a, "/nowhere/app", "main", "fix the login bug")
+        p = glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0]
+        note = {"type": "text", "text": "<system-reminder>r</system-reminder>"}
+        ev = [{"type": "assistant", "message": {"content": [note, {"type": "text", "text": "Found it in auth.py."}]}},
+              {"type": "assistant", "message": {"content": [{"type": "text", "text": "Fixed."}]}},
+              {"type": "user", "message": {"content": "<system-reminder>x</system-reminder>"}},
+              {"type": "user", "message": {"content": "now add a test"}}]
+        with open(p, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in ev))
+        turns = [(t["who"], t["text"]) for t in self.SS.recent(a)["turns"]]
+        self.assertEqual(turns, [("you", "fix the login bug"), ("claude", "Found it in auth.py."),
+                                 ("you", "now add a test")])
+        self.assertEqual(self.SS.recent(a, n=1)["turns"][-1]["text"], "now add a test")
+        self.assertFalse(ui.api("sessionrecent", {"id": ["../etc"]})["available"])
+
     def test_usage_counts_each_reply_once_and_prices_it(self):
         a = "%08d-0000-0000-0000-000000000000" % 1
         self.write(a, "/nowhere/app", "main", "hello")
