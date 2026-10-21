@@ -53,6 +53,22 @@ def _only(q):
     return None if _arg(q, "all") == "1" else dash.repo_root(_rid(q)) if _rid(q) else None
 
 
+def ticket_titles():
+    """{"ATO-4223": title} from the Linear issues LFG mirrors into dev-graph (`/lfg:inbox`); the dashboard never asks
+    Linear itself."""
+    def build():
+        out = {}
+        for rid in dash.repo_ids():
+            d = dash.issues(rid)
+            for i in d.get("issues") or [] if isinstance(d, dict) else []:
+                if i.get("legacyRef") and i.get("title"):
+                    out.setdefault(str(i["legacyRef"]).upper(), i["title"])
+            if out:  # one dev-graph serves every repo
+                break
+        return out
+    return dash.cached("ticket-titles", 300, build)
+
+
 def linked_pr(pr):
     """A linked PR as the detail page shows it: where it is and whether it has a review."""
     from . import review as R
@@ -210,11 +226,19 @@ def api(view, q):
     if view == "skilltext":
         from . import control as K
         return K.skill_text(_arg(q, "id"), _rid(q))
+    if view == "ticketprs":
+        from . import review as R
+        try:
+            return {"ticket": _arg(q, "ticket").strip().upper(), "prs": R.ticket_prs(_arg(q, "ticket")),
+                    "title": ticket_titles().get(_arg(q, "ticket").strip().upper(), "")}
+        except R.ReviewError as e:
+            return {"available": False, "why": str(e)}
     if view in ("prreviews", "prreview", "prreviewlog"):
         from . import review as R
         from . import sessions as SS
         if view == "prreviews":
-            return dict(R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q)), method=R.method())
+            return dict(R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q)), method=R.method(),
+                        ticket_titles=ticket_titles())
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             pr = R.ref(repo, number)
