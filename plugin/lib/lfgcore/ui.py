@@ -200,6 +200,10 @@ def api(view, q):
         if _arg(q, "fresh") == "1":
             dash.forget("update")
         d = dash.in_background("update", 60, lambda: U.check(max_age=0), "checking for updates")  # one cache, not two
+        j = U.job() or {}
+        if j.get("ended") and str(d.get("checked_at") or "~") < j["ended"]:  # checked before the last install: stale
+            dash.forget("update")
+            d = dash.in_background("update", 60, lambda: U.check(max_age=0), "checking for updates")
         # the jobs even while the check is still running, e.g. right after a restart
         return dict(d, job=U.job(), fix=U.fix_job())
     if view == "sessions":
