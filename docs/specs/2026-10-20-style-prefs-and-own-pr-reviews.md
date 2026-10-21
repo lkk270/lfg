@@ -1,8 +1,50 @@
-# Spec: own-PR reviews, "How Claude talks to you" in Preferences, and Usage page costs
+# Spec: own-PR reviews, "How Claude talks to you" in Preferences, Usage page costs, repo picker and update banner
 
-Three independent changes, one PR each: part 2 first (it is smaller), then part 1; part 3 in any order. Agreed with Lee on 2026-10-20.
+Four changes, one PR each, in this order: part 4, part 2, part 1, part 3. Part 4 goes first because part 2's repo
+filter reuses what it adds. Agreed with Lee on 2026-10-20.
 
-## Part 2 (ship first): PR reviews page
+## Part 4 (ship first): the repo picker, and the update banner
+
+### 1. Some pages ignore the repo picker, and don't say so
+
+Lee picks a repo top left, goes to Sessions or PR reviews, and still sees every repo. He reads that as the picker
+being broken across the app.
+
+Today, in `plugin/lib/lfgcore/ui.py` (`api()`, around lines 140-215): Home, Runs, Issues, Checks, Code, Docs and
+Usage get the picked repo (`_rid(q)`). Sessions (`SS.listing()`), PR reviews (`R.dashboard()`) and Environment are
+answered before that and take no repo, so they always show everything. Nothing on those pages says so.
+
+Build:
+
+- Sessions, PR reviews and Environment show only the picked repo by default, with a "Show all repos" link that
+  turns the filter off (remember the choice per page in `localStorage`, like `lfg.branch.*`). The page subtitle
+  names what is shown: "in lfg" or "across all repos".
+- Sessions: each session already has a `repo` field; match it against the picked repo's id (and its worktrees, so
+  a session in `lfg.worktrees/x` counts as lfg).
+- PR reviews: match each PR's `owner/repo` against the picked repo's GitHub remote. Part 2 uses the same helper.
+- Environment: filter its repo and worktree rows the same way.
+- Do the filtering on the server (pass `repo` through `api()`), so a filtered page doesn't fetch everything.
+- Pages that are global by nature (Preferences, Skills, Settings) stay global; give them no filter.
+
+Tests: each of the three views, given two repos' worth of data, returns one repo's with `repo` set and both with
+"all".
+
+### 2. The update banner gives no way to update when the checkout isn't on main
+
+Lee restarted lfg ui and saw only a yellow "LFG update ready" banner with no Update button. The cause was that the
+LFG checkout (`/Users/lee/code/lfg`) was left on another branch by an agent. `checkUpdate()` in
+`ui_assets/app.js` (around line 2183) then swaps the button for a small grey "Switch <path> to main first." that is
+easy to miss.
+
+Build:
+
+- Make the blocked state plain and actionable: say which branch the checkout is on, and offer a "Copy command"
+  button with `git -C <path> checkout main` (or, when the checkout has uncommitted changes, say that and offer
+  nothing to run). Same for the uncommitted-changes case.
+- Test the API side: `updates.check()` reports `current_branch` and `dirty` (it already does; add a test if none
+  exists) and the page copy covers both cases.
+
+## Part 2 (ship second): PR reviews page
 
 ### What is wrong today
 
@@ -18,7 +60,7 @@ Three independent changes, one PR each: part 2 first (it is smaller), then part 
 | Change | Detail |
 |---|---|
 | New section "Your open PRs" | `gh search prs --author=@me --state=open`, same columns and buttons as "Waiting on you" (Review / Re-review / Import / Open), same GitHub status tag, same 120 s cache pattern as `queue()`. |
-| Filter by the picked repo | Both sections show only PRs whose `owner/repo` is the picked repo's GitHub remote (`gh repo view --json nameWithOwner` in that repo's root, as `review.py:40` does). A "Show all repos" link turns the filter off. A repo with no GitHub remote shows everything, with a one-line note. |
+| Filter by the picked repo | Use the repo filter from part 4. Both sections show only PRs whose `owner/repo` is the picked repo's GitHub remote (`gh repo view --json nameWithOwner` in that repo's root, as `review.py:40` does). A "Show all repos" link turns the filter off. A repo with no GitHub remote shows everything, with a one-line note. |
 | Your own PR: Comment only | On a PR you authored, the detail page shows only "Comment only". GitHub rejects Approve and Request changes on your own PR. Enforce it in `review.post()` too, not only by hiding buttons. |
 
 Where: `review.py` (`queue`, `dashboard`, `post`), `ui.py` (the `prreviews` API, pass the repo through),
@@ -30,7 +72,7 @@ Where: `review.py` (`queue`, `dashboard`, `post`), `ui.py` (the `prreviews` API,
 - With a repo picked, PRs from other repos are left out of both sections; with "all", they are back.
 - `post()` on your own PR with `approve` or `request-changes` raises a clear error; `comment` works.
 
-## Part 1 (ship second): "How Claude talks to you" in Preferences
+## Part 1 (ship third): "How Claude talks to you" in Preferences
 
 ### What it is
 
@@ -92,7 +134,9 @@ LFG blocks agents from editing it). The agent's final message lists exactly whic
 
 ## Rules for the agent building this
 
-- Branch from `main` for each part, one PR each. Commit and push follow the user's Preferences
+- Branch from `main` for each part, one PR each, each in its own worktree: `lfg worktree new <branch>`. **Never
+  switch the main checkout off `main`**: lfg ui updates LFG from that checkout and refuses while it is on another
+  branch (that is the bug in part 4, item 2). Commit and push follow the user's Preferences
   (`~/.claude/lfg-preferences.md`).
 - Before each commit: `python3 -m unittest discover -s tests` and `uvx ruff check plugin/lib plugin/bin/lfg tests`
   (CI runs `pipx run ruff`; same checks). Lines are at most 120 characters.
@@ -101,7 +145,7 @@ LFG blocks agents from editing it). The agent's final message lists exactly whic
   command in paste markers: `gh pr create --repo lkk270/lfg --fill` (this repo has two remotes, so `--repo` is
   required).
 
-## Part 3 (independent of parts 1 and 2): Usage page costs
+## Part 3 (ship last, independent of the others): Usage page costs
 
 The Usage page in `lfg ui` shows what Claude Code costs at API prices, worked out from every session's transcript
 under ~/.claude/projects. A review found four real problems and one decision to write down. Fix them on a new branch
