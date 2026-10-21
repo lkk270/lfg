@@ -2554,6 +2554,8 @@ class ReviewTest(unittest.TestCase):
     def fake_claude(self, events):
         """A stand-in for `claude -p`: writes these stream-json events to the run's log."""
         def run(cmd, cwd=None, stdout=None, **kw):
+            if cmd[0] != "claude":  # gh: no GitHub in tests
+                return subprocess.CompletedProcess(cmd, 1, "", "offline")
             stdout.write("\n".join(json.dumps(e) for e in events))
             return subprocess.CompletedProcess(cmd, 0)
         return run
@@ -2574,7 +2576,7 @@ class ReviewTest(unittest.TestCase):
                 mock.patch("subprocess.run", side_effect=self.fake_claude(events)) as run:
             j = R.run("o/api", 7, together=[("o/web", 9)])
         self.assertEqual(j["status"], "done", j.get("why"))
-        prompt = run.call_args[0][0][2]
+        prompt = next(c[0][0][2] for c in run.call_args_list if c[0][0][0] == "claude")
         self.assertIn("o/api#7, o/web#9", prompt)
         self.assertIn('"reviews"', prompt)
         api, web = R.load("o/api", 7)["passes"][-1], R.load("o/web", 9)["passes"][-1]
@@ -2585,6 +2587,23 @@ class ReviewTest(unittest.TestCase):
         steps = R.activity(api["run"]["log"])
         self.assertEqual([x["kind"] for x in steps], ["said", "tool"])
         self.assertIn("gh pr diff 7", steps[1]["text"])
+
+    def test_a_finding_another_reviewer_already_raised_says_who(self):
+        named = self.finding(line=10, echoes=[{"who": "@alice", "url": "https://github.com/o/r/pull/7#discussion_r1",
+                                               "said": "same idea, other words"}])
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [named, self.finding(file="db.py", line=40),
+                                                            self.finding(file="db.py", line=90)]})
+        rabbit = {"who": "coderabbitai[bot]", "bot": True, "kind": "inline", "file": "db.py", "line": 42,
+                  "said": "Possible None here", "url": "https://github.com/o/r/pull/7#discussion_r2"}
+        self.assertEqual(R.mark_echoes("o/r", 7, said=[rabbit, dict(rabbit, kind="comment", file=None, line=None)]), 1)
+        f1, f2, f3 = R.load("o/r", 7)["passes"][-1]["findings"]
+        self.assertEqual([e["who"] for e in f1["echoes"]], ["alice"])  # the review's own, kept as it named them
+        self.assertEqual((f2["echoes"][0]["who"], f2["echoes"][0]["near"]), ("coderabbitai[bot]", True))  # 2 lines off
+        self.assertEqual(f3["echoes"], [])  # 48 lines away is somewhere else
+        self.assertEqual(R.mark_echoes("o/r", 7, said=[rabbit]), 0)  # never twice
+        with self.assertRaises(R.ReviewError):
+            R._clean_finding(self.finding(echoes=[{"url": "x"}]), 1)
 
     def test_links_go_both_ways_and_a_session_can_be_linked_by_hand(self):
         R.link("o/api#7", "https://github.com/o/web/pull/9")

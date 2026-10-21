@@ -233,7 +233,80 @@ def _clean_finding(f, i):
     return {"title": _text(f.get("title"), "title", 200), "severity": sev, "file": f.get("file") or None,
             "line": line, "issue": _text(f.get("issue"), "issue", 1000), "fix": _text(f.get("fix"), "fix", 1000),
             "detail": _text(f.get("detail"), "detail"), "body": body, "origin": origin, "since": since,
-            "status": "pending", "comment_id": None, "comment_url": None}
+            "echoes": _echoes(f.get("echoes"), i), "status": "pending", "comment_id": None, "comment_url": None}
+
+
+def _echoes(raw, i):
+    """Other reviewers (people, CodeRabbit, other bots) who already raised this: [{who, url, said, bot}]."""
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise ReviewError("finding %d: echoes is a list of {who, url, said}" % i)
+    out = []
+    for e in raw[:10]:
+        if not isinstance(e, dict) or not str(e.get("who") or "").strip():
+            raise ReviewError("finding %d: each echo needs who (their GitHub login)" % i)
+        url = str(e.get("url") or "")
+        out.append({"who": str(e["who"]).strip().lstrip("@")[:80],
+                    "url": url if url.startswith("https://github.com/") else "",
+                    "said": _text(e.get("said"), "echo", 600), "bot": bool(e.get("bot"))})
+    return out
+
+
+def others(repo, number):
+    """What other reviewers already said on a PR: inline comments (with file and line), review summaries and
+    conversation comments, from people and bots (CodeRabbit, Sonar, other agents). LFG's own posted comments are
+    left out. Read-only."""
+    rec = load(repo, number) or {}
+    mine = {f.get("comment_id") for f in findings(rec) if f.get("comment_id")} if rec.get("passes") else set()
+    out = []
+
+    def add(c, kind, file=None, line=None):
+        u = c.get("user") or {}
+        body = (c.get("body") or "").strip()
+        if not body or c.get("id") in mine:
+            return
+        out.append({"who": u.get("login") or "", "bot": u.get("type") == "Bot" or (u.get("login") or "").endswith(
+            "[bot]"), "kind": kind, "file": file, "line": line, "said": body[:1500], "url": c.get("html_url") or "",
+            "at": c.get("submitted_at") or c.get("created_at") or ""})
+    for c in gh_json(["api", "--paginate", "repos/%s/pulls/%d/comments" % (repo, number)], timeout=120) or []:
+        add(c, "inline", c.get("path"), c.get("line") or c.get("original_line"))
+    for c in gh_json(["api", "--paginate", "repos/%s/pulls/%d/reviews" % (repo, number)], timeout=120) or []:
+        add(c, "review")
+    for c in gh_json(["api", "--paginate", "repos/%s/issues/%d/comments" % (repo, number)], timeout=120) or []:
+        add(c, "comment")
+    return out
+
+
+NEAR = 3  # lines: another reviewer's inline comment this close to a finding is about the same spot
+
+
+def mark_echoes(repo, number, said=None):
+    """Tag the latest review's findings with other reviewers' inline comments on the same file within NEAR lines,
+    on top of the ones the review itself named. Never fails a review: if GitHub can't be asked, nothing changes."""
+    rec = load(repo, number)
+    if not rec or not rec.get("passes"):
+        return 0
+    try:
+        said = others(repo, number) if said is None else said
+    except ReviewError:
+        return 0
+    n = 0
+    for f in rec["passes"][-1]["findings"]:
+        have = {e["url"] for e in f.get("echoes") or [] if e.get("url")} | {e["who"] for e in f.get("echoes") or []}
+        for c in said:
+            if c["kind"] != "inline" or not f.get("file") or c["file"] != f["file"] or not f.get("line") \
+                    or not c.get("line") or abs(int(c["line"]) - int(f["line"])) > NEAR:
+                continue
+            if c["url"] in have or c["who"] in have:
+                continue
+            f.setdefault("echoes", []).append({"who": c["who"], "url": c["url"], "said": c["said"][:600],
+                                               "bot": c["bot"], "near": True})
+            have |= {c["url"], c["who"]}
+            n += 1
+    if n:
+        store(rec)
+    return n
 
 
 def save(repo, number, data, ticket=None, meta=None):
@@ -605,6 +678,7 @@ def local_checkout(repo):
 # Unattended runs may read anything and run only these. Writes to GitHub are denied on top of the guard, which only
 # runs in repos where LFG is on.
 RUN_ALLOW = ["Read", "Grep", "Glob", "Bash(lfg review context *)", "Bash(lfg review save *)",
+             "Bash(lfg review others *)",
              "Bash(lfg review show *)", "Bash(lfg review threads *)", "Bash(lfg graphs *)", "Bash(lfg rule *)",
              "Bash(gh pr view *)", "Bash(gh pr diff *)", "Bash(gh search prs *)", "Bash(gh api repos/*)",
              "Bash(git fetch *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git blame *)",
@@ -716,6 +790,7 @@ def run(repo, number, ticket=None, fresh=False, together=()):
             why = _save_from_log(x[0], x[1], log, ticket, many=len(prs) > 1)
         ok = _passes(*x) > before[x]
         if ok:
+            mark_echoes(*x)
             rec = load(*x)
             p = rec["passes"][-1]
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]

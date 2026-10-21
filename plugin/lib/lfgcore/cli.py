@@ -810,6 +810,8 @@ def _review(R, a):
             print("posted %s with %d inline comments: %s" % (out["event"], len(out["comments"]), out["posted"]["url"]))
     elif a.action == "threads":
         _print(R.threads(repo, number))
+    elif a.action == "others":
+        _print(R.others(repo, number))
     elif a.action == "run":
         j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh, together=[R.parse_pr(x) for x in a.with_ or []])
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
@@ -1158,7 +1160,7 @@ def main(argv=None):
     fb.add_argument("verdict", choices=["accept", "reject"])
     fb.add_argument("--note")
     rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
-    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "run", "sessions",
+    rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "others", "run", "sessions",
                                        "import"])
     rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
     rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")

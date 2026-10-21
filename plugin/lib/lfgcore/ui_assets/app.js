@@ -2052,7 +2052,8 @@ function pickBar() {
 }
 function prFinding(f, pr, unlocked, live) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
-  const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("");
+  const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("")
+    + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("");
   const posted = f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">Posted ↗</a>` : "";
   const can = unlocked && live && !f.comment_id;
   const btn = (status, text) => `<button class="btn small${f.status === status ? " primary" : ""}" data-pr-mark='${esc(JSON.stringify([pr, f.id, status]))}' ${can ? "" : "disabled"}>${text}</button>`;
@@ -2139,6 +2140,7 @@ function prCopyText(rec, p) {
   const f = p.findings.map((x, i) => [`### ${i + 1}. ${x.title || x.issue || x.id} (${x.severity}, ${decided[x.status] || x.status}${x.comment_url ? ", posted" : ""})`,
     x.file ? `Where: ${x.file}${x.line ? ":" + x.line : ""}` : "Where: the PR as a whole",
     x.issue && x.title ? `Issue: ${x.issue}` : "", x.fix ? `Fix: ${x.fix}` : "", x.detail ? `What the review checked: ${x.detail}` : "",
+    (x.echoes || []).length ? `Also raised by: ${x.echoes.map(e => `${e.who}${e.url ? " (" + e.url + ")" : ""}`).join(", ")}` : "",
     x.body ? `Comment:\n${x.body}` : ""].filter(Boolean).join("\n"));
   return [`# Review of ${rec.repo}#${rec.number}: ${rec.title || ""}`, `${rec.url || ""}\nReview ${p.n}, at commit ${p.head_sha}${p.score != null ? `, score ${p.score}` : ""}`,
     p.summary ? `## Summary\n${p.summary}` : "", (p.approach_notes || []).length ? `## Approach notes\n${p.approach_notes.map(x => "- " + x).join("\n")}` : "",
