@@ -2090,6 +2090,38 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(self.SS.recent(a, n=1)["turns"][-1]["text"], "now add a test")
         self.assertFalse(ui.api("sessionrecent", {"id": ["../etc"]})["available"])
 
+    def test_a_group_following_a_pr_gathers_its_sessions_and_review_runs(self):
+        SS = self.SS
+        a, b, c, d = ("%08d-0000-0000-0000-00000000000%d" % (40 + i, i) for i in range(4))
+        self.write(a, "/nowhere/api", "lee/ato-1", "build ATO-1, then open the PR")
+        self.write(b, "/nowhere/api", "main", "Read /x/skills/review/SKILL.md and follow it to review acme/api#12. "
+                                              "Unattended.", entry="sdk-cli")  # the dashboard's review run
+        self.write(c, "/nowhere/api", "main", "/review-pr acme/api#12")
+        self.write(d, "/nowhere/api", "main", "unrelated work on acme/api#13")
+        with open(glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0], "a") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Opened https://github.com/acme/api/pull/12"}]}}) + "\n")
+        with self.assertRaises(ValueError):
+            SS.follow_pr("ATO-1 rollout", "not a pr")
+        SS.follow_pr("ATO-1 rollout", "acme/api#12")
+        rows = {r["id"]: r for r in SS.listing()["sessions"]}
+        self.assertEqual({i for i, r in rows.items() if r["folder"] == "ATO-1 rollout"}, {a, b, c})
+        self.assertTrue(rows[b]["via_pr"])
+        self.assertEqual(rows[b]["name"], "Review run from the dashboard · acme/api#12")
+        self.assertEqual(SS.groups_of("acme/api#12"), ["ATO-1 rollout"])
+        SS.file_into(c, "", came_from="ATO-1 rollout")  # its ✕: stays out
+        SS.file_into(d, "ATO-1 rollout")  # put in by hand
+        rows = {r["id"]: r for r in SS.listing()["sessions"]}
+        self.assertEqual({i for i, r in rows.items() if r["folder"] == "ATO-1 rollout"}, {a, b, d})
+        self.assertFalse(rows[d]["via_pr"])
+        SS.star(a)
+        self.assertEqual([r["starred"] for r in SS.listing()["sessions"] if r["id"] == a], [True])
+        self.assertTrue(ui.save("session_star", {"id": a, "on": False}).get("starred") is False)
+        self.assertEqual(ui.save("group_pr", {"group": "ATO-1 rollout", "pr": "acme/api#12", "on": False})["prs"], [])
+        rows = {r["id"]: r for r in SS.listing()["sessions"]}
+        self.assertNotIn(b, rows)  # back to hidden like any script's session
+        self.assertEqual(rows[a]["folder"], "")
+
     def test_usage_counts_each_reply_once_and_prices_it(self):
         a = "%08d-0000-0000-0000-000000000000" % 1
         self.write(a, "/nowhere/app", "main", "hello")
@@ -2272,7 +2304,8 @@ class SessionsTest(unittest.TestCase):
         self.SS.file_into(a, "")
         r = self.SS.listing()["sessions"][0]
         self.assertEqual((r["name"], r["folder"]), ("hello", ""))
-        self.assertEqual(self.SS.prefs(), {"names": {}, "folders": {}, "hidden": []})
+        self.assertEqual(self.SS.prefs(), {"names": {}, "folders": {}, "hidden": [], "starred": [], "group_prs": {},
+                                           "left_out": {}})
         with self.assertRaises(ValueError):
             self.SS.rename("../../etc/passwd", "x")
 
