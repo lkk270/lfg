@@ -1,7 +1,6 @@
 """LFG Dictate (dormant until turned on, offline, removable), and the 0.3.0 guard fixes.
 Stdlib only; never touches the real ~/.lfg, launchd or the microphone."""
 import io
-import json
 import os
 import shutil
 import subprocess
@@ -19,7 +18,6 @@ from lfgcore import cli  # noqa: E402
 from lfgcore import common as C  # noqa: E402
 from lfgcore import dictate as D  # noqa: E402
 from lfgcore import guard  # noqa: E402
-from lfgcore import hooks as H  # noqa: E402
 from lfgcore import settings as ST  # noqa: E402
 from lfgcore import setup as SU  # noqa: E402
 

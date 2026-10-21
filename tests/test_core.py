@@ -1772,7 +1772,8 @@ class UpdatesTest(unittest.TestCase):
         self.assertEqual(d["upstream"][2]["conflicts"], [])
         j = self.run_apply()
         self.assertEqual(j["status"], "done", j.get("why"))
-        files = lambda: {f for f in ("one.txt", "two.txt", "three.txt") if os.path.exists(os.path.join(self.co, f))}
+        def files():
+            return {f for f in ("one.txt", "two.txt", "three.txt") if os.path.exists(os.path.join(self.co, f))}
         self.assertEqual(files(), {"three.txt"})  # cherry-picked on its own
         self.assertEqual(self.upstream_shas(), [one, two])  # the kept one is in; Later and Skip still listed
         self.pick(one, "keep")  # two weeks later
@@ -1812,7 +1813,8 @@ class UpdatesTest(unittest.TestCase):
         self.git(h["worktree"], "commit", "-q", "-m", "Merge upstream\n\nKept:\n- the new file\n\nNot kept:\n"
                                                          "- upstream's a.txt: ours already does it\n")
         held = self.held()
-        self.assertEqual((held["kept"], held["not_kept"]), (["the new file"], ["upstream's a.txt: ours already does it"]))
+        self.assertEqual((held["kept"], held["not_kept"]),
+                         (["the new file"], ["upstream's a.txt: ours already does it"]))
         self.pick(self.upstream_shas()[0], "skip")
         j = self.run_apply()
         self.assertEqual(j["status"], "failed")
