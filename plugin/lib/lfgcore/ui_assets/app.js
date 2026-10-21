@@ -2404,7 +2404,12 @@ async function checkUpdate(fresh) {
     if (ver) ver.textContent = "Update stopped";
     const what = H.state === "tests" ? "LFG's tests fail on the new code"
       : `the changes from ${esc(named("upstream"))} ${H.state === "conflict" ? `conflict with yours in ${plural(H.files.length, "file")}` : "are merged but not committed yet"}`;
-    const tried = F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">Claude tried ${ago(F.ended)} and stopped: ${esc(F.why || "")}</span>` : "";
+    /* Fix with Claude stopped for a decision only you can make: the question, and a prompt for a session of your own */
+    const ask = F && F.status === "needs_you" && F.branch === H.branch ? F : null;
+    const tried = ask ? `<div class="picks"><span class="tag warn">Needs your decision</span> <span class="pre-wrap">${esc(ask.question || "")}</span>
+        <div class="mt"><button class="btn small primary" data-copy="${esc(ask.session || "")}">Copy prompt for a Claude session</button>
+        <span class="muted small">Paste it into a new Claude Code session and decide there; it adds your decision to FORK.md so the next update follows it. Then press Update.</span></div></div>`
+      : F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">Claude tried ${ago(F.ended)} and stopped: ${esc(F.why || "")}</span>` : "";
     const unlocked = await isUnlocked();
     box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
       ${H.files.length ? `<details class="more inline"><summary>${H.state === "conflict" ? "Conflicting files" : "Changed files"}</summary><ul>${H.files.map(f => `<li class="mono small">${esc(f)}</li>`).join("")}</ul></details>` : ""}

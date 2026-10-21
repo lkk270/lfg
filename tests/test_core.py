@@ -1573,7 +1573,7 @@ class UpdatesTest(unittest.TestCase):
         self.assertEqual((h["state"], h["files"]), ("conflict", ["a.txt"]))
         self.assertTrue(h["branch"].startswith("lfg-update/upstream-"))
         self.assertTrue(os.path.exists(os.path.join(h["worktree"], ".git")))
-        for s in (h["worktree"], "a.txt", "git commit --no-edit"):
+        for s in (h["worktree"], "a.txt", "git commit", "Kept:"):
             self.assertIn(s, h["prompt"])
         self.U._CACHE.update(ts=0, data=None)
         d = self.U.check(max_age=0)
@@ -1677,6 +1677,28 @@ class UpdatesTest(unittest.TestCase):
         self.assertEqual(j["status"], "failed")
         self.assertIn("couldn't find the cause", j["why"])
         self.assertEqual((self.head(), self.held()["state"]), (before, "tests"))
+
+    def test_fix_prompt_carries_your_standing_decisions_and_asks_for_kept_lists(self):
+        self.fork_commit("FORK.md", "# Decisions\n- Never take upstream's Commit approval.\n")
+        h = self.conflict()["conflict"]
+        for s in ("Never take upstream's Commit approval", "Kept:", "Not kept:", self.U.NEEDS_YOU):
+            self.assertIn(s, h["prompt"])
+
+    def test_fix_that_needs_a_decision_stops_and_hands_you_the_question(self):
+        h = self.conflict()["conflict"]
+        before = self.head()
+
+        def claude(prompt, cwd, log):
+            self.write(cwd, self.U.NEEDS_YOU, "Should a.txt say what your fork says or what upstream says?\n"
+                                              "- Yours (recommended): ...\n")
+            return "stopped for a decision"
+        j = self.run_fix(claude)
+        self.assertEqual(j["status"], "needs_you")
+        self.assertIn("what your fork says", j["question"])
+        for s in (h["worktree"], "what your fork says", "FORK.md", "Kept:"):
+            self.assertIn(s, j["session"])
+        self.assertFalse(os.path.exists(os.path.join(h["worktree"], self.U.NEEDS_YOU)))  # nothing left behind
+        self.assertEqual((self.head(), self.held()["state"]), (before, "conflict"))  # nothing applied
 
     def test_fix_with_nothing_held_does_nothing(self):
         self.assertEqual(self.run_fix(lambda *a: self.fail("Claude ran"))["status"], "failed")

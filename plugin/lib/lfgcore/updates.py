@@ -14,6 +14,11 @@ You decide upstream's commits one at a time: Keep (the default), Skip or Later, 
 ~/.lfg/state/upstream-picks.json. Apply merges upstream up to the first commit that isn't Keep, then cherry-picks
 (`-x`) the kept ones after it, so a Skip or Later never lands and a Later can still be kept weeks on: it stays
 listed until it is kept or skipped. A commit counts as in once main has it, merged or cherry-picked.
+
+FORK.md in your checkout holds your standing decisions about upstream ("never take X", "ours does Y this way"). Fix
+with Claude follows them, writes what it kept and left out into the commit, and when an upstream change overlaps
+something your fork does that no decision covers, it stops and leaves the question for you (NEEDS_YOU) instead of
+guessing; the dashboard shows it with a prompt for a Claude Code session.
 """
 import json
 import os
@@ -82,6 +87,12 @@ def _repo_name(url):
 
 
 VERDICTS = ("keep", "skip", "later")
+DECISIONS = "FORK.md"  # your standing decisions about upstream, in the fork's own checkout
+NEEDS_YOU = ".lfg-needs-you.md"  # left in the held worktree by Fix with Claude when it needs a decision
+
+
+def decisions(root):
+    return (C.read_text(os.path.join(root, DECISIONS)) or "").strip() if root else ""
 PICKED = re.compile(r"cherry picked from commit ([0-9a-f]{40})")
 
 
@@ -194,7 +205,8 @@ def _held_all(root):
             h.update(state="tests", output=last.get("output") or "")
         h.update(_notes(root, b))
         if h["state"] != "ready":
-            h["prompt"] = fix_prompt(h, _repo_name(_remote_url(root, "upstream")) or "the original LFG")
+            h["prompt"] = fix_prompt(h, _repo_name(_remote_url(root, "upstream")) or "the original LFG",
+                                     decisions(wt or root))
         yield h
 
 
@@ -203,22 +215,40 @@ def held(root):
     return next((h for h in _held_all(root) if h["state"] != "ready" or h["ahead"]), None)
 
 
-def fix_prompt(h, upstream):
-    """One line to hand Claude: finish the merge on the held branch. Claude can commit there; it never merges."""
+def fix_prompt(h, upstream, rules=""):
+    """What to hand Claude: finish the update on the held branch. Claude can commit there; it never merges."""
     if h["state"] == "tests":
         return ("In %s (branch %s), LFG's update stopped because its tests fail there:\n%s\nFind the cause and fix "
                 "it so `python3 -m unittest discover -s tests` passes there, then `git add` the files and `git commit` "
                 "the fix. Don't run git merge, rebase or push, and don't touch main; I'll finish the update after."
                 % (h["worktree"], h["branch"], h.get("output") or "(see the test run)"))
     files = ", ".join(h["files"][:20]) or "the files git status lists"
-    where = "In %s (branch %s), LFG's update is part way through merging %s's main (upstream/main)" % (
+    where = "In %s (branch %s), LFG's update is part way through merging %s's main (upstream/main) into my fork" % (
         h["worktree"], h["branch"], upstream)
-    todo = ("and these files conflict: %s. Resolve each conflict keeping both sides' changes (once: if one side "
-            "already has the other's change, in its own words, keep that one), run" % files
-            if h["state"] == "conflict" else "and the conflicts look resolved but aren't committed. Check them, run")
-    return ("%s %s `python3 -m unittest discover -s tests` there until it passes, then `git add` the files and "
-            "`git commit --no-edit` to finish the merge (or the cherry-pick). Don't run git merge, rebase or push, and don't touch main; "
-            "I'll finish the update after." % (where, todo))
+    todo = ("and these files conflict: %s. Resolve each conflict" % files if h["state"] == "conflict"
+            else "and the conflicts look resolved but aren't committed. Check them")
+    rules = ("My standing decisions about upstream (%s); follow them, in conflicting files and in files that merged "
+             "cleanly alike:\n%s\nOtherwise k" % (DECISIONS, rules)) if rules else "K"
+    return ("%s %s. %seep both sides' changes (once: if one side already has the other's change, in its own "
+            "words, keep that one). If an upstream change overlaps or contradicts something my fork already does and "
+            "no decision above covers it, don't guess and don't commit: write %s in %s whose first line is one plain "
+            "sentence saying what I have to decide, in terms of what I will see or be able to do, followed by the "
+            "choices and which one you recommend and why, then stop. Otherwise run `python3 -m unittest discover -s "
+            "tests` there until it passes, then `git add` the files and `git commit` with a message whose body ends "
+            "with a \"Kept:\" list and a \"Not kept:\" list (\"- \" lines, plain words, one per upstream change) to "
+            "finish the merge (or the cherry-pick). Don't run git merge, rebase or push, and don't touch main; I'll "
+            "finish the update after." % (where, todo, rules, NEEDS_YOU, h["worktree"]))
+
+
+def session_prompt(h, question, upstream):
+    """For a Claude Code session you run yourself, when Fix with Claude stopped for a decision."""
+    return ("This is a fresh session to finish an LFG update that stopped for a decision. In %s (branch %s), LFG is "
+            "merging %s's changes into my fork, and Fix with Claude stopped with this question:\n\n%s\n\nTalk it "
+            "through with me. Once I decide, add the decision as one line to %s in that worktree so the next update "
+            "follows it, finish the merge that way, run `python3 -m unittest discover -s tests` until it passes, and "
+            "`git commit` with \"Kept:\" and \"Not kept:\" lists at the end of the message. Don't run git merge, "
+            "rebase or push, and don't touch main; I'll press Update in the dashboard after."
+            % (h["worktree"], h["branch"], upstream, question.strip(), DECISIONS))
 
 
 _CACHE = {"ts": 0, "data": None}
@@ -509,6 +539,13 @@ def fix(log=print):
     except subprocess.TimeoutExpired:
         return end("failed", "Claude didn't finish within an hour")
     j["said"] = said[-2000:]
+    ask = os.path.join(h["worktree"], NEEDS_YOU)
+    if os.path.isfile(ask):  # it stopped for a decision only you can make
+        question = C.read_text(ask).strip()
+        os.remove(ask)  # an untracked file would stop the worktree being removed afterwards
+        j.update(question=question, session=session_prompt(h, question, _repo_name(_remote_url(root, "upstream"))
+                                                            or "the original LFG"))
+        return end("needs_you", "Claude needs a decision from you: " + (question.splitlines() or [""])[0])
     after = next((x for x in _held_all(root) if x["branch"] == h["branch"]), None)
     if not after or after["state"] != "ready":
         return end("failed", "Claude finished without committing a fix" + (": " + said[-600:] if said else ""))
