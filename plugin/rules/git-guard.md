@@ -19,7 +19,7 @@ Agents read git and GitHub; the human writes. Every change is left **unstaged** 
 
 Wrapping doesn't change the verdict: `cd x && git push`, `sh -c`, `bash -lc`, `eval`, `xargs`, aliases, variables and subshells are parsed by `lfg-guard` and blocked the same way.
 
-If the user's Preferences are switched on (`lfg prefs status` says hooks: true), they decide `git commit`, `git push` (including force-push and amend) and `gh pr merge`, and their own check runs before each command: follow `lfg-preferences.md` and any rules changed for this session, including committing or pushing without being asked when they say so. Everything else in rules 1 to 3 still holds.
+If the user's Preferences are switched on (`lfg prefs status` says hooks: true), they decide `git commit`, `git push` (including force-push and amend), `gh pr create` and `gh pr merge`, and their own check runs before each command: follow `lfg-preferences.md` and any rules changed for this session, including committing or pushing without being asked when they say so. Everything else in rules 1 to 3 still holds.
 
 If `guard.allow_commit` is `true` in `~/.lfg/config.json`, `git commit` (not `--amend`) is allowed and you commit when the user asks. Everything else in rule 1, and rules 2 and 3, still holds.
 
