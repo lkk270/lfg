@@ -1640,19 +1640,21 @@ class UpdatesTest(unittest.TestCase):
         self.assertTrue(h["branch"].startswith("lfg-update/tests-"))
         self.assertTrue(os.path.exists(os.path.join(h["worktree"], "tests", "test_bad.py")))
 
-    def run_fix(self, claude):
+    def run_fix(self, claude, commit_hangs=False):
         real = C.run
 
         def fake(cmd, *a, **kw):  # as in run_apply: the install step only has to succeed
             if "setup" in cmd:
                 return subprocess.CompletedProcess(cmd, 0, "", "")
+            if commit_hangs and cmd[:2] == ["git", "commit"]:  # signing waits on a locked 1Password
+                return subprocess.CompletedProcess(cmd, 124, "", "timeout after 60s")
             return real(cmd, *a, **kw)
         with mock.patch.object(self.U, "_claude", side_effect=claude), \
                 mock.patch.object(C, "which", return_value="/bin/claude"), \
                 mock.patch.object(C, "run", side_effect=fake):
             return self.U.fix(log=lambda m: None)
 
-    def test_fix_with_claude_commits_on_the_branch_then_finishes_the_update(self):
+    def test_fix_with_claude_stages_a_fix_and_lfg_commits_it_then_finishes_the_update(self):
         h = self.conflict()["conflict"]
         seen = {}
 
@@ -1660,14 +1662,60 @@ class UpdatesTest(unittest.TestCase):
             seen.update(prompt=prompt, cwd=cwd)
             self.write(cwd, "a.txt", "both\n")
             self.git(cwd, "add", "a.txt")
-            self.git(cwd, "commit", "-q", "--no-edit")
+            self.write(cwd, self.U.COMMIT_MSG, "Merge upstream\n\nKept:\n- both lines\n")
             return "merged both sides"
         j = self.run_fix(claude)
         self.assertEqual(j["status"], "done", j.get("why"))
         self.assertEqual(seen["cwd"], h["worktree"])
         self.assertIn("unattended", seen["prompt"])
+        self.assertIn("LFG commits it", seen["prompt"])
+        self.assertIn("Bash(git commit *)", self.U.FIX_DENY)
         self.assertEqual(self.git(self.co, "show", "HEAD:a.txt"), "both\n")
+        self.assertIn("Kept:\n- both lines", self.git(self.co, "log", "-1", "--format=%B"))
         self.assertEqual(self.U.fix_job()["status"], "done")
+
+    def test_a_commit_that_hangs_keeps_the_fix_and_try_again_commits_it_without_claude(self):
+        self.upstream_commit("tests/test_bad.py", self.BAD)
+        before = self.head()
+        self.run_apply()
+        h = self.held()
+
+        def claude(prompt, cwd, log):
+            os.remove(os.path.join(cwd, "tests", "test_bad.py"))
+            self.git(cwd, "add", "-A", "tests")
+            return "removed the broken test"
+        j = self.run_fix(claude, commit_hangs=True)
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("1Password", j["why"])
+        self.assertEqual((self.head(), self.held()["state"]), (before, "uncommitted"))
+        j = self.run_fix(lambda *a: self.fail("Claude ran again"))  # 1Password unlocked: Try again
+        self.assertEqual(j["status"], "done", j.get("why"))
+        self.assertFalse(os.path.exists(os.path.join(self.co, "tests", "test_bad.py")))
+        self.assertFalse(os.path.exists(h["worktree"]))
+        self.assertEqual(len(os.listdir(C.lfg_path("state", "update-fix-logs"))), 2)  # each try keeps its log
+
+    def test_try_again_after_a_wrong_fix_starts_claude_from_that_fix_not_a_merge(self):
+        self.upstream_commit("tests/test_bad.py", self.BAD)
+        self.run_apply()
+        h = self.held()
+        self.write(h["worktree"], "notes.txt", "a first try\n")  # staged, but the tests still fail
+        self.git(h["worktree"], "add", "notes.txt")
+        seen = {}
+
+        def claude(prompt, cwd, log):
+            seen["prompt"] = prompt
+            return "still stuck"
+        j = self.run_fix(claude)
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("An earlier try already changed notes.txt", seen["prompt"])
+        self.assertIn("self.fail('no')", seen["prompt"])  # this run's test output
+        self.assertNotIn("part way through merging", seen["prompt"])
+
+    def test_a_remote_that_doesnt_answer_says_to_unlock_1password(self):
+        cp = subprocess.CompletedProcess([], 124, "", "timeout after 120s")
+        self.assertIn("unlock 1Password", self.U._unreachable("origin", cp))
+        cp = subprocess.CompletedProcess([], 128, "", "fatal: repository not found")
+        self.assertEqual(self.U._unreachable("origin", cp), "couldn't reach origin: fatal: repository not found")
 
     def test_fix_that_commits_nothing_stops_without_applying(self):
         self.upstream_commit("tests/test_bad.py", self.BAD)

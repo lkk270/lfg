@@ -75,6 +75,14 @@ def _lines(cp):
     return [ln for ln in (cp.stdout or "").splitlines() if ln]
 
 
+def _unreachable(r, cp):
+    """Why fetching from or pushing to a remote failed, in words you can act on."""
+    if cp.returncode == 124:
+        return ("%s didn't answer in time. If git reaches GitHub through 1Password's SSH agent, unlock 1Password and "
+                "try again" % r)
+    return "couldn't reach %s: %s" % (r, (cp.stderr or "").strip()[-200:])
+
+
 def _remote_url(root, name):
     return _git(root, "remote", "get-url", name).stdout.strip()
 
@@ -88,6 +96,7 @@ def _repo_name(url):
 
 VERDICTS = ("keep", "skip", "later")
 DECISIONS = "FORK.md"  # your standing decisions about upstream, in the fork's own checkout
+COMMIT_MSG = ".lfg-commit-msg"  # Fix with Claude's commit message, left in the held worktree for LFG to commit
 NEEDS_YOU = ".lfg-needs-you.md"  # left in the held worktree by Fix with Claude when it needs a decision
 
 
@@ -196,13 +205,19 @@ def _held_all(root):
         h = {"branch": b, "worktree": wt, "state": "ready", "files": [], "prompt": "", "ahead": _count(root, BRANCH, b)}
         unmerged = _lines(_git(wt, "diff", "--name-only", "--diff-filter=U")) if wt else []
         if unmerged:
-            h.update(state="conflict", files=unmerged)
-        elif wt and (any(_git(wt, "rev-parse", "-q", "--verify", x).returncode == 0
-                         for x in ("MERGE_HEAD", "CHERRY_PICK_HEAD"))
-                     or _git(wt, "status", "--porcelain", "--untracked-files=no").stdout.strip()):
-            h.update(state="uncommitted", files=_lines(_git(wt, "diff", "--name-only", "HEAD")))
-        elif tested.get("branch") == b and _git(root, "rev-parse", b).stdout.strip() == tested.get("head"):
-            h.update(state="tests", output=last.get("output") or "")
+            h.update(state="conflict", files=unmerged, files_unmerged=unmerged)
+        else:
+            merging = bool(wt) and any(_git(wt, "rev-parse", "-q", "--verify", x).returncode == 0
+                                       for x in ("MERGE_HEAD", "CHERRY_PICK_HEAD"))
+            same = tested.get("branch") == b and _git(root, "rev-parse", b).stdout.strip() == tested.get("head")
+            if same:
+                h["output"] = last.get("output") or ""
+            if merging or (wt and _git(wt, "status", "--porcelain", "--untracked-files=no").stdout.strip()):
+                # leftover: an earlier Fix with Claude changed files on a branch whose tests failed, not mid-merge
+                h.update(state="uncommitted", files=_lines(_git(wt, "diff", "--name-only", "HEAD")),
+                         leftover=not merging)
+            elif same:
+                h["state"] = "tests"
         h.update(_notes(root, b))
         if h["state"] != "ready":
             h["prompt"] = fix_prompt(h, _repo_name(_remote_url(root, "upstream")) or "the original LFG",
@@ -215,13 +230,19 @@ def held(root):
     return next((h for h in _held_all(root) if h["state"] != "ready" or h["ahead"]), None)
 
 
-def fix_prompt(h, upstream, rules=""):
-    """What to hand Claude: finish the update on the held branch. Claude can commit there; it never merges."""
-    if h["state"] == "tests":
-        return ("In %s (branch %s), LFG's update stopped because its tests fail there:\n%s\nFind the cause and fix "
-                "it so `python3 -m unittest discover -s tests` passes there, then `git add` the files and `git commit` "
-                "the fix. Don't run git merge, rebase or push, and don't touch main; I'll finish the update after."
-                % (h["worktree"], h["branch"], h.get("output") or "(see the test run)"))
+def fix_prompt(h, upstream, rules="", commit=True):
+    """What to hand Claude: finish the update on the held branch. It never merges. commit=False (Fix with Claude):
+    it leaves the message in COMMIT_MSG and LFG commits, so a commit-signing prompt nobody answers can't eat the run."""
+    done = "`git add` the files and `git commit`" if commit else (
+        "`git add` the files and write the commit message to %s in the worktree (don't add that file and don't run "
+        "`git commit`: LFG commits it)" % COMMIT_MSG)
+    if h["state"] == "tests" or h.get("leftover"):
+        before = (" An earlier try already changed %s here and didn't commit; start from that and check it's right."
+                  % (", ".join(h["files"][:20]) or "files")) if h.get("leftover") else ""
+        return ("In %s (branch %s), LFG's update stopped because its tests fail there:\n%s\n%s Find the cause and "
+                "fix it so `python3 -m unittest discover -s tests` passes there, then %s the fix. Don't run git "
+                "merge, rebase or push, and don't touch main; I'll finish the update after."
+                % (h["worktree"], h["branch"], h.get("output") or "(see the test run)", before, done))
     files = ", ".join(h["files"][:20]) or "the files git status lists"
     where = "In %s (branch %s), LFG's update is part way through merging %s's main (upstream/main) into my fork" % (
         h["worktree"], h["branch"], upstream)
@@ -234,10 +255,10 @@ def fix_prompt(h, upstream, rules=""):
             "no decision above covers it, don't guess and don't commit: write %s in %s whose first line is one plain "
             "sentence saying what I have to decide, in terms of what I will see or be able to do, followed by the "
             "choices and which one you recommend and why, then stop. Otherwise run `python3 -m unittest discover -s "
-            "tests` there until it passes, then `git add` the files and `git commit` with a message whose body ends "
-            "with a \"Kept:\" list and a \"Not kept:\" list (\"- \" lines, plain words, one per upstream change) to "
-            "finish the merge (or the cherry-pick). Don't run git merge, rebase or push, and don't touch main; I'll "
-            "finish the update after." % (where, todo, rules, NEEDS_YOU, h["worktree"]))
+            "tests` there until it passes, then %s, with a message whose body ends with a \"Kept:\" list and a "
+            "\"Not kept:\" list (\"- \" lines, plain words, one per upstream change), to finish the merge (or the "
+            "cherry-pick). Don't run git merge, rebase or push, and don't touch main; I'll finish the update after."
+            % (where, todo, rules, NEEDS_YOU, h["worktree"], done))
 
 
 def session_prompt(h, question, upstream):
@@ -267,7 +288,7 @@ def check(max_age=60, fetch=True):
         for r in remotes:
             cp = _git(root, "fetch", "-q", r, BRANCH, timeout=60)
             if cp.returncode:
-                out["errors"].append("couldn't reach %s: %s" % (r, (cp.stderr or "").strip()[-200:]))
+                out["errors"].append(_unreachable(r, cp))
     installed = (C.read_json(_state_path(), {}) or {}).get("installed_head") or ""
     head = _git(root, "rev-parse", BRANCH).stdout.strip()
     for r in remotes:
@@ -388,8 +409,9 @@ def apply(log=print):
         if not _remote_url(root, r):
             continue
         say("Getting %s's latest" % r)
-        if _git(root, "fetch", "-q", r, BRANCH, timeout=120).returncode:
-            return fail("couldn't reach %s" % r)
+        cp = _git(root, "fetch", "-q", r, BRANCH, timeout=120)
+        if cp.returncode:
+            return fail(_unreachable(r, cp))
     if _remote_url(root, "origin") and _count(root, BRANCH, "origin/" + BRANCH):
         say("Bringing in your fork's new commits")
         if _git(root, "merge", "--ff-only", "-q", "origin/" + BRANCH).returncode:
@@ -464,8 +486,9 @@ def apply(log=print):
         _tidy(root, branch)
     if _remote_url(root, "origin") and _count(root, "origin/" + BRANCH, BRANCH):
         say("Saving it to your fork")
-        if _git(root, "push", "-q", "origin", BRANCH, timeout=120).returncode:
-            say("Couldn't push to your fork; installing anyway (push it later)")
+        cp = _git(root, "push", "-q", "origin", BRANCH, timeout=120)
+        if cp.returncode:
+            say("Couldn't push to your fork (%s); installing anyway, push it later" % _unreachable("origin", cp))
     say("Installing")
     cp = C.run([sys.executable, os.path.join(root, "plugin", "bin", "lfg"), "setup", "--yes"], cwd=root, timeout=600)
     if cp.returncode:
@@ -479,10 +502,48 @@ def apply(log=print):
 
 
 FIX_ALLOW = ["Read", "Grep", "Glob", "Edit", "Write", "Bash(git status)", "Bash(git status *)", "Bash(git diff)",
-             "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)", "Bash(git add *)", "Bash(git commit *)",
+             "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)", "Bash(git add *)",
              "Bash(python3 -m unittest *)"]
 FIX_DENY = ["Bash(git push *)", "Bash(git merge *)", "Bash(git rebase *)", "Bash(git reset *)",
-            "Bash(git checkout *)", "Bash(git switch *)", "Bash(git commit --amend *)", "Bash(lfg *)"]
+            "Bash(git checkout *)", "Bash(git switch *)", "Bash(git commit)", "Bash(git commit *)", "Bash(lfg *)"]
+FIX_LOGS = 10  # Fix with Claude logs kept, newest first
+
+
+def _commit(wt):
+    """Commit what Fix with Claude staged in the held worktree, with its message. Signing can wait on you (1Password,
+    a hardware key), so it gets a minute; returns why it didn't commit, or ""."""
+    msg = os.path.join(wt, COMMIT_MSG)
+    _git(wt, "rm", "-q", "--cached", "--ignore-unmatch", COMMIT_MSG)
+    merging = _git(wt, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
+    if os.path.isfile(msg):
+        args = ["-F", msg]
+    elif merging:
+        args = ["--no-edit"]
+    else:
+        args = ["-m", "Fix LFG's tests for the update"]
+    cp = _git(wt, "commit", "-q", *args, timeout=60)
+    if cp.returncode == 124:
+        return ("the commit didn't finish within a minute, usually because commit signing is waiting on you. If you "
+                "sign with 1Password, unlock it, then press Try again: it commits the same fix without redoing it")
+    if cp.returncode:
+        return "git couldn't commit the fix: " + ((cp.stderr or cp.stdout).strip()[-300:] or "no reason given")
+    if os.path.isfile(msg):
+        os.remove(msg)  # an untracked file would stop the worktree being removed afterwards
+    return ""
+
+
+def _fix_log():
+    """A new log for this try; older tries' logs are kept, up to FIX_LOGS."""
+    d = C.ensure_dir(C.lfg_path("state", "update-fix-logs"))
+    old = sorted(f for f in os.listdir(d) if f.endswith(".log"))
+    for f in old[:max(0, len(old) - FIX_LOGS + 1)]:
+        os.remove(os.path.join(d, f))
+    path = os.path.join(d, time.strftime("%Y%m%d-%H%M%S") + ".log")
+    n = 1
+    while os.path.exists(path):  # two tries in one second
+        path, n = os.path.join(d, time.strftime("%Y%m%d-%H%M%S") + "-%d.log" % n), n + 1
+    C.write_text(path, "", mode=0o600)
+    return path
 
 
 def _claude(prompt, cwd, log):
@@ -506,8 +567,9 @@ def _claude(prompt, cwd, log):
 
 
 def fix(log=print):
-    """Fix with Claude: hand the held branch's fix prompt to an unattended Claude Code session in its worktree, and
-    once it has committed, apply again (which re-runs the tests). Claude never touches main, merges or pushes."""
+    """Fix with Claude: hand the held branch's fix prompt to an unattended Claude Code session in its worktree, commit
+    what it staged, then apply again (which re-runs the tests). Claude never commits, touches main, merges or pushes.
+    A retry first checks a fix an earlier try left uncommitted: if the tests pass on it, it is committed as it is."""
     root = source()
     j = {"status": "running", "pid": os.getpid(), "started": C.now_iso(), "why": ""}
 
@@ -529,13 +591,22 @@ def fix(log=print):
     if not h["worktree"]:  # pruned since; the branch is all that's needed
         W.new(root, h["branch"])
         h = next(x for x in _held_all(root) if x["branch"] == h["branch"])
-    j.update(branch=h["branch"], state=h["state"], log=C.lfg_path("state", "update-fix.log"))
+    j.update(branch=h["branch"], state=h["state"], log=_fix_log())
     C.write_json(_fix_path(), j)
+    upstream = _repo_name(_remote_url(root, "upstream")) or "the original LFG"
+    if h["state"] == "uncommitted" and not h.get("files_unmerged"):
+        # an earlier try fixed it and stopped before the commit (signing waited on you): if it passes, just commit it
+        log("Checking the fix an earlier try left in %s" % h["worktree"])
+        t = C.run(TESTS, cwd=h["worktree"], timeout=900, env={"PYTHONDONTWRITEBYTECODE": "1"})
+        if not t.returncode:
+            return _finish(h, j, end, log, "The earlier fix passes the tests; committing it")
+        h["output"] = "\n".join(((t.stderr or "") + (t.stdout or "")).strip().splitlines()[-12:])
     log("Claude is fixing %s in %s" % (h["branch"], h["worktree"]))
     try:
-        said = _claude(h["prompt"] + " You are running unattended from the LFG dashboard: nobody can answer "
-                       "questions. Run each shell command on its own, never chained with ; or &&. If you can't fix "
-                       "it, don't commit, and say why in your last message.", h["worktree"], j["log"])
+        said = _claude(fix_prompt(h, upstream, decisions(h["worktree"]), commit=False) + " You are running "
+                       "unattended from the LFG dashboard: nobody can answer questions. Run each shell command on its "
+                       "own, never chained with ; or &&. If you can't fix it, stage nothing, and say why in your last "
+                       "message.", h["worktree"], j["log"])
     except subprocess.TimeoutExpired:
         return end("failed", "Claude didn't finish within an hour")
     j["said"] = said[-2000:]
@@ -543,18 +614,27 @@ def fix(log=print):
     if os.path.isfile(ask):  # it stopped for a decision only you can make
         question = C.read_text(ask).strip()
         os.remove(ask)  # an untracked file would stop the worktree being removed afterwards
-        j.update(question=question, session=session_prompt(h, question, _repo_name(_remote_url(root, "upstream"))
-                                                            or "the original LFG"))
+        j.update(question=question, session=session_prompt(h, question, upstream))
         return end("needs_you", "Claude needs a decision from you: " + (question.splitlines() or [""])[0])
     after = next((x for x in _held_all(root) if x["branch"] == h["branch"]), None)
-    if not after or after["state"] != "ready":
-        return end("failed", "Claude finished without committing a fix" + (": " + said[-600:] if said else ""))
-    log("Claude committed a fix; running the update again")
+    if not after or after["state"] not in ("ready", "uncommitted") or after.get("files_unmerged"):
+        return end("failed", "Claude finished without a fix" + (": " + said[-600:] if said else ""))
+    return _finish(after, j, end, log, "Claude made a fix; committing it")
+
+
+def _finish(h, j, end, log, what):
+    """Commit the held branch's staged fix (if any), then run the update again, which re-runs the tests."""
+    if h["state"] == "uncommitted":
+        log(what)
+        why = _commit(h["worktree"])
+        if why:
+            return end("failed", why)
+    log("Running the update again")
     r = apply(log)  # the fix stays "running" until this ends, so the dashboard goes straight from one to the other
     if r["status"] == "done":
         end("done")
     else:
-        end("failed", "Claude committed a fix, but the update still stopped: " + r.get("why", ""))
+        end("failed", "The fix is committed, but the update still stopped: " + r.get("why", ""))
     return r
 
 
