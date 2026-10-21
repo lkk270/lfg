@@ -113,6 +113,14 @@ def snapshot():
     return {"repos": repos, "services": services(), "checked_at": C.now_iso()}
 
 
+def only(snap, root):
+    """The snapshot with just root's repo and its worktrees (root None: all of them)."""
+    if not root or not snap.get("repos"):
+        return snap
+    want = os.path.realpath(root)
+    return dict(snap, repos=[r for r in snap["repos"] if os.path.realpath(r["root"]) == want])
+
+
 def _ts(s):
     try:
         return time.mktime(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))

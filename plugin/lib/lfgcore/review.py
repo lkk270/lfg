@@ -518,6 +518,17 @@ def queue(max_age=120):
 REMOTE = re.compile(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
 
 
+def github_names(root):
+    """owner/repo of every GitHub remote of the checkout at root, lowercased. All remotes, not `gh repo view`: in a
+    fork gh picks upstream, which would leave out your own PRs on the fork."""
+    names = set()
+    for line in C.run(["git", "remote", "-v"], cwd=root, timeout=5).stdout.splitlines():
+        m = REMOTE.search(line.split()[1] if len(line.split()) > 1 else "")
+        if m:
+            names.add(m.group(1).lower())
+    return names
+
+
 def local_checkout(repo):
     """A checkout of owner/repo on this machine: the repos LFG knows, and their sibling folders."""
     roots = set((C.enabled_state()["repos"] or {}).keys())
@@ -802,13 +813,19 @@ def progress(repo, number, lines=8):
     return dict(j, steps=steps[-lines:])
 
 
-def dashboard(fresh=False):
-    """Everything the Reviews page shows: the request queue, saved reviews, and running jobs."""
+def dashboard(fresh=False, only=None):
+    """Everything the Reviews page shows: the request queue, saved reviews, and running jobs. `only`: a main checkout;
+    keeps the PRs in its GitHub repos (all of them when it has no GitHub remote, with `no_remote` set)."""
     try:
         q, qwhy = queue(max_age=0 if fresh else 120), ""
     except ReviewError as e:
         q, qwhy = [], str(e)
     recs = all_records()
+    names = github_names(only) if only else set()
+    if names:
+        q = [x for x in q if x["repo"].lower() in names]
+        recs = [r for r in recs if r["repo"].lower() in names]
+    q = [dict(x) for x in q]  # the cached queue is shared by every filter: annotate copies
     have = {(r["repo"], r["number"]): r for r in recs}
     for x in q:
         r = have.get((x["repo"], x["number"]))
@@ -830,4 +847,4 @@ def dashboard(fresh=False):
                     "url": r.get("url"), "ticket": r.get("ticket"), "passes": len(r["passes"]),
                     "score": p.get("score"), "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
                     "job": job(r["repo"], r["number"]), "gh": st.get((r["repo"], r["number"]))})
-    return {"queue": q, "queue_why": qwhy, "reviews": out}
+    return {"queue": q, "queue_why": qwhy, "reviews": out, "no_remote": bool(only) and not names}
