@@ -2370,7 +2370,8 @@ class RepoPickerTest(unittest.TestCase):
     def test_pr_reviews_match_every_github_remote_of_the_repo(self):
         q = [{"repo": r, "number": 1, "title": "t", "author": "x", "url": "u", "updated": "", "draft": False}
              for r in ("lkk270/lfg", "varun-singhh/LFG", "acme/api")]
-        with mock.patch.object(R, "queue", return_value=q), mock.patch.object(R, "all_records", return_value=[]), \
+        with mock.patch.object(R, "queue", lambda age, which: q if which == "requested" else []), \
+                mock.patch.object(R, "all_records", return_value=[]), \
                 mock.patch.object(R, "gh_status", return_value={}):
             rows, key = (lambda v: v["queue"]), (lambda r: r["repo"])
             self.assertEqual(self.names("prreviews", rows, key), ["lkk270/lfg", "varun-singhh/LFG"])
@@ -2380,3 +2381,51 @@ class RepoPickerTest(unittest.TestCase):
             d = ui.api("prreviews", {"repo": [self.rid]})
             self.assertEqual((len(d["queue"]), d["no_remote"]), (3, True))  # no GitHub remote: everything, said so
         self.assertNotIn("passes", q[0])  # the cached queue isn't changed by one page's view of it
+
+
+class OwnPrsTest(unittest.TestCase):
+    """PR reviews lists your own open PRs, keeps both lists to the picked repo, and posts only comments on yours."""
+
+    def setUp(self):
+        import shutil
+        shutil.rmtree(R.reviews_dir(), ignore_errors=True)
+        R._QUEUE.clear()
+        self.root, self.rid = git_repo("lfg-own-")
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/lkk270/lfg.git"], cwd=self.root,
+                       check=True)
+
+    def search(self, args, *a, **kw):
+        row = lambda repo, n, who: {"repository": {"nameWithOwner": repo}, "number": n, "title": "t",  # noqa: E731
+                                    "author": {"login": who}, "url": "u", "updatedAt": "", "isDraft": False}
+        if "--author=@me" in args:
+            return [row("lkk270/lfg", 1, "me"), row("acme/api", 2, "me")]
+        return [row("lkk270/lfg", 3, "dev"), row("acme/api", 4, "dev")]
+
+    def page(self, **q):
+        with mock.patch.object(R, "gh_json", side_effect=self.search), \
+                mock.patch.object(R, "gh_status", return_value={}):
+            d = ui.api("prreviews", {"repo": [self.rid], **{k: [v] for k, v in q.items()}})
+        return sorted(x["number"] for x in d["mine"]), sorted(x["number"] for x in d["queue"])
+
+    def test_your_open_prs_show_in_their_own_section_and_follow_the_picked_repo(self):
+        self.assertEqual(self.page(), ([1], [3]))
+        self.assertEqual(self.page(all="1"), ([1, 2], [3, 4]))
+
+    def test_a_pr_of_yours_is_not_also_waiting_on_you(self):
+        with mock.patch.object(R, "gh_json", side_effect=lambda args, *a, **kw: [
+                {"repository": {"nameWithOwner": "lkk270/lfg"}, "number": 1, "title": "t", "author": {"login": "me"},
+                 "url": "u", "updatedAt": "", "isDraft": False}]), mock.patch.object(R, "gh_status", return_value={}):
+            d = R.dashboard()
+        self.assertEqual(([x["number"] for x in d["mine"]], d["queue"]), ([1], []))
+
+    def test_on_your_own_pr_only_a_comment_can_be_posted(self):
+        meta = dict(ReviewTest.META, author="me")
+        R.save("o/r", 7, {"findings": [{"title": "t", "severity": "minor", "body": "b"}]}, meta=meta)
+        R.mark("o/r", 7, [f["id"] for f in R.findings(R.load("o/r", 7))], status="keep")
+        with mock.patch.object(R, "me", return_value="me"):
+            for event in ("approve", "request-changes"):
+                with self.assertRaisesRegex(R.ReviewError, "your own PR"):
+                    R.post("o/r", 7, event, dry_run=True)
+            self.assertEqual(R.post("o/r", 7, "comment", dry_run=True)["event"], "COMMENT")
+        with mock.patch.object(R, "me", return_value="someone-else"):
+            self.assertEqual(R.post("o/r", 7, "approve", dry_run=True)["event"], "APPROVE")

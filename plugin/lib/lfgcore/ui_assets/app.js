@@ -1775,10 +1775,11 @@ PAGES.prs = async arg => {
     { k: "passes", label: "Reviews", num: true },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
   ];
-  return `${head("PR reviews", `Pull requests waiting on your review, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login. ${scopeLine("prs")}`)}
+  return `${head("PR reviews", `Pull requests waiting on your review, your own open ones, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login. ${scopeLine("prs")}`)}
     ${d.no_remote && !allRepos("prs") ? `<p class="muted small">${esc(repoName())} has no GitHub remote, so this shows PRs from every repo.</p>` : ""}
     ${lock}
     ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
+    ${section("Your open PRs", d.mine_why ? unavailable({ why: d.mine_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.mine, qcols, { emptyTitle: "No open PRs", emptyBody: "You have no open pull requests here." })}</div>`, "review your own work before others do; on your own PR you can only comment")}
     ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}`;
 };
 function prFinding(f, pr, unlocked, live) {
@@ -1833,10 +1834,11 @@ async function prDetail(arg) {
   const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
   const pending = p.findings.filter(f => f.status === "pending").length;
   const kept = p.findings.filter(f => f.status === "keep").length;
+  const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
   const postBar = live ? `<div class="panel"><div class="k" style="margin-top:0">Post to GitHub</div>
       <textarea class="editor small" id="pr-post-body" placeholder="Optional: a note above the comments"></textarea>
-      <div class="row mt">${[["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]].map(([e, l]) => `<button class="btn${e === "request-changes" ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
-      <span class="muted small" id="pr-post-hint">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}</span></div></div>`
+      <div class="row mt">${(own ? [["comment", "Comment only"]] : [["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]]).map(([e, l]) => `<button class="btn${e === "request-changes" || own ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
+      <span class="muted small" id="pr-post-hint">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}${own ? " This is your own PR, so GitHub only takes a comment." : ""}</span></div></div>`
     : p.posted ? `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`
     : `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
   const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
