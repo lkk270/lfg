@@ -721,6 +721,22 @@ class TrackerTest(unittest.TestCase):
                 cli.main(["run", "set", "stage=nope"])
 
 
+    def test_run_skip_records_a_skipped_step_with_its_reason(self):
+        from lfgcore import cli
+        root, rid = git_repo()
+        run = C.new_run(root, "x")
+        with mock.patch.object(C, "need_repo", return_value=(root, rid)):
+            self.assertEqual(cli.main(["run", "skip", "design", "settled in the Linear ticket"]), 0)
+            self.assertEqual(C.read_json(os.path.join(run, "run.json"), {})["skipped"],
+                             {"design": "settled in the Linear ticket"})
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "skip", "nope", "why"])
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "skip", "tasks"])  # a reason is required
+            self.assertEqual(cli.main(["run", "unskip", "design"]), 0)
+            self.assertEqual(C.read_json(os.path.join(run, "run.json"), {})["skipped"], {})
+
+
 class SettingsTest(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix="lfg-test-user-")
@@ -1329,6 +1345,27 @@ class RunChecksTest(unittest.TestCase):
             self.assertTrue(dash.run_detail(rid, "20261003-0000-now")["checking"])  # its pid is alive
             self.assertEqual(ui.run_checks(rid, "20261003-0000-now"), {"started": False, "running": True})
             self.assertEqual(len(started), 1)
+
+
+class RunStepsTest(unittest.TestCase):
+    def test_skipped_steps_and_work_done_outside_lfg_show_on_the_run(self):
+        root, rid = git_repo()
+        C.run(["git", "commit", "-q", "--allow-empty", "-m", "start"], cwd=root)
+        wt = os.path.join(tempfile.mkdtemp(), "wt")
+        C.run(["git", "worktree", "add", "-q", "-b", "lee/x", wt], cwd=root)
+        for i in range(3):
+            C.run(["git", "commit", "-q", "--allow-empty", "-m", "by hand %d" % i], cwd=wt)
+        run = os.path.join(C.runs_dir(root), "20261021-1249-x")
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "skipped": {"design": "settled in Linear",
+                                                                                   "bogus": "x"},
+                                                   "worktrees": [{"path": wt, "branch": "lee/x"}]})
+        C.write_text(os.path.join(run, "01-brief.md"), "# Brief: X\n")
+        r = dash._run_summary(run)
+        self.assertEqual(r["skipped"], {"design": "settled in Linear"})  # only real steps
+        self.assertEqual(r["outside"], {"build": 3})
+        self.assertFalse(r["stages"]["build"])  # no build notes: LFG didn't build it
+        C.write_text(os.path.join(run, "03-build-t1.md"), "built")
+        self.assertEqual(dash._run_summary(run)["outside"], {})  # /lfg:build did: nothing outside to show
 
 
 class UpdateBannerTest(unittest.TestCase):
