@@ -678,6 +678,16 @@ function showRule(name) {
   };
 }
 // ------------------------------------------------------------------ settings → Claude Code (LFG's footprint, all undoable)
+/* Dictate's own options, right on its pack row */
+function dictateControls(o, dis) {
+  if (o.preview) dis = "disabled";
+  return `<div class="dictate-opts${o.preview ? " preview" : ""}">${o.preview ? '<div class="preview-note">These controls work once Dictate is on.</div>' : ""}
+    <label>Shortcut <select data-dict="dictate.shortcut" ${dis}>${o.shortcuts.map(([k, l]) => `<option value="${esc(k)}" ${k === o.shortcut ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+    <label>Put text in by <select data-dict="dictate.insert" ${dis}><option value="paste" ${o.insert === "paste" ? "selected" : ""}>Pasting</option><option value="type" ${o.insert === "type" ? "selected" : ""}>Typing</option></select></label>
+    <label class="row"><input type="checkbox" data-dict="dictate.cleanup" ${o.cleanup ? "checked" : ""} ${dis}><span>Clean up with Claude <span class="meta">· removes filler words; sends the text (never audio) to Claude</span></span></label>
+    <a href="#" class="small" data-tour-start="${o.preview ? "dictate-intro" : "dictate"}">Take the tour</a>
+  </div>`;
+}
 function settingsClaudeCode() {
   return '<div id="cc-box"><div class="loading">Looking at your Claude Code setup…</div></div>';
 }
@@ -694,7 +704,7 @@ async function loadClaudeCode() {
     const j = d.jobs[name];
     return j ? `<div class="meta">${j.status === "running" ? "Installing…" : j.status === "done" ? "Installed." : "Install failed."}</div>${j.log.length ? `<pre class="joblog">${esc(j.log.slice(-12).join("\n"))}</pre>` : ""}` : "";
   };
-  const packRows = d.packs.map(p => `<li>${dot(p.on ? (p.missing.length ? "warn" : "ok") : "")}<div class="grow"><div class="title">${esc(p.title)}</div><div class="meta">${esc(p.about)}${p.on && p.missing.length ? ` · missing: ${esc(p.missing.map(m => m.split(":")[1]).join(", "))}` : ""}</div>${job(p.name)}</div>
+  const packRows = d.packs.map(p => `<li data-pack="${esc(p.name)}">${dot(p.on ? (p.missing.length ? "warn" : "ok") : "")}<div class="grow"><div class="title">${esc(p.title.replace(" (experimental)", ""))}${p.experimental ? ' <span class="tag">Experimental</span>' : ""}</div><div class="meta">${esc(p.about)}${p.detail ? `<br>${fmtWhy(p.detail)}` : ""}${p.settings ? dictateControls(p.settings, dis) : ""}${p.on && p.missing.length ? ` · missing: ${esc(p.missing.map(m => m.split(":")[1]).join(", "))}` : ""}</div>${job(p.name)}</div>
     ${p.name === "core" ? '<span class="muted small">always on</span>' : p.on && !p.missing.length ? `<button class="btn small" data-cc="pack_remove" data-name="${esc(p.name)}" ${dis}>Turn off</button>` : `<button class="btn small" data-cc="pack_add" data-name="${esc(p.name)}" ${dis || ((d.jobs[p.name] || {}).status === "running" ? "disabled" : "")}>${p.on ? "Install missing" : "Add"}</button>`}</li>`).join("");
   const hrOpts = [["off", "Off"], ["repos", "Only repos where LFG is on"], ["everywhere", "Every Claude Code session"]];
   const hrBlocked = hr.cloud_provider ? `Not available: Claude Code uses ${esc(hr.cloud_provider)} here.` : !hr.installed ? "Add the Headroom pack first." : "";
@@ -725,6 +735,11 @@ async function loadClaudeCode() {
       </ul></div></div>
     <div class="set-section"><h4>Changes LFG made outside ~/.lfg</h4>${changes}
       <p class="muted small mt">To remove LFG completely, run <code>lfg uninstall</code> in your terminal. It lists everything it will undo before it does anything.</p></div>`;
+  $$("[data-dict]", box).forEach(el => el.onchange = async () => {
+    el.disabled = true;
+    state.ccMsg = await save("config", { values: { [el.dataset.dict]: el.type === "checkbox" ? el.checked : el.value } });
+    loadClaudeCode();
+  });
   $$("[data-cc]", box).forEach(el => {
     const act = el.dataset.cc, ev = el.type === "checkbox" ? "onchange" : "onclick";
     el[ev] = async () => {
@@ -738,6 +753,8 @@ async function loadClaudeCode() {
     };
   });
   if (state.ccMsg) { saidMsg($("#cc-msg", box), state.ccMsg, state.ccMsg.ok ? "Done." : ""); state.ccMsg = null; }
+  $$("[data-tour-start]", box).forEach(l => l.onclick = e => { e.preventDefault(); startTour(l.dataset.tourStart); });
+  if (state.pendingTour && $('[data-pack="dictate"]', box)) { const t = state.pendingTour; state.pendingTour = null; setTimeout(() => startTour(t), 250); }
   clearTimeout(ccTimer);
   if (Object.values(d.jobs).some(j => j.status === "running")) ccTimer = setTimeout(() => { if (document.body.contains(box)) loadClaudeCode(); }, 2000);
 }
@@ -908,6 +925,123 @@ async function showSkill(name) {
     if (!r.ok) return saidMsg($("#skill-msg"), r);
     await refreshList();
     showSkill(name);
+  };
+}
+
+// ------------------------------------------------------------------ guided tours (first time, skippable)
+const shortcutLabel = () => { const o = $('[data-dict="dictate.shortcut"]'); return o ? o.options[o.selectedIndex].text : "your shortcut"; };
+/* One walkthrough of every Dictate control. While Dictate is off the controls are shown greyed and the last step is
+   Add; once it's on, the same steps end with Turn off. */
+function dictateTour(on) {
+  const pre = on ? "" : " Works once Dictate is on.";
+  return [
+    { sel: '[data-pack="dictate"]', title: on ? "Meet LFG Dictate" : "New: LFG Dictate", body: () => `Speech-to-text that works in any app on your Mac: Slack, your editor, the browser, Claude. Speech is turned into text on this computer, so audio never leaves it and nothing you say is saved.${on ? " This row shows its shortcut, whether it's running and how many times you used it today." : " It's off until you add it."}` },
+    { title: "How to talk to it", body: () => `<b>Hold ${esc(shortcutLabel())}</b>, speak, and let go: the words appear where your cursor is.<br><br><b>Double-tap</b> it for hands-free dictation; press it again or <b>Esc</b> to finish.<br><br>While it listens, a small pill at the bottom of your screen shows bars that move with your voice:<div class="tour-pill" aria-hidden="true">${"<i></i>".repeat(9)}</div>` },
+    { sel: '[data-dict="dictate.shortcut"]', title: "Shortcut", body: () => `Which keys start Dictate: Option+Space, Right Option, Fn (globe), Control+Space or Command+Shift+Space. Right Option and Fn work on their own. Pick another one if an app already uses yours (the ChatGPT app and Raycast like Option+Space).${pre}` },
+    { sel: '[data-dict="dictate.insert"]', title: "Put text in by", body: () => `Your words always go two places: where your cursor is, and your clipboard, so you can paste them again anywhere with ⌘V. <b>Pasting</b> is instant. <b>Typing</b> is for the odd app that blocks pasting; it's slower for long text.${pre}` },
+    { sel: '[data-dict="dictate.cleanup"]', title: "Clean up with Claude", body: () => `On by default. Removes filler words ("um", "like"), applies spoken corrections ("Tuesday, no, Wednesday") and fixes punctuation: the text, never the audio, goes to Claude with your Claude Code sign-in. Untick it to keep everything on your Mac.${pre}` },
+    on ? { sel: '[data-pack="dictate"] [data-cc="pack_remove"]', title: "Turn it off", body: () => "Stops Dictate and deletes everything it installed: the model, its app and its login item. You can add it again any time." }
+       : { sel: '[data-pack="dictate"] [data-cc="pack_add"]', title: "Turn it on", body: () => '<b>Add</b> downloads the speech model (about 90 MB, into ~/.lfg/dictate) and starts Dictate. macOS then asks for <b>Microphone</b> and <b>Accessibility</b> permission for "LFG Dictate". After that, the controls above come alive.' },
+    { title: "From the terminal", body: () => `The same controls, if you prefer typing:<pre class="out">lfg add dictate                    # turn it on\nlfg dictate status\nlfg dictate shortcut right_option\nlfg dictate insert type            # or paste\nlfg dictate cleanup off            # or on\nlfg remove dictate                 # turn it off</pre>Replay this tour any time with <b>Take the tour</b> on the Dictate row.` },
+  ];
+}
+const TOURS = { get dictate() { return dictateTour(true); }, get "dictate-intro"() { return dictateTour(false); } };
+let TOUR = null;
+function startTour(name) {
+  endTour();
+  const box = document.createElement("div");
+  box.className = "tour";
+  box.innerHTML = '<div class="tour-shade"></div><div class="tour-hole" hidden></div><div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title"></div>';
+  document.body.append(box);
+  TOUR = { name, i: 0, box, onKey: e => { if (e.key === "Escape") finishTour("skipped"); else if (e.key === "ArrowRight") tourGo(1); else if (e.key === "ArrowLeft") tourGo(-1); } };
+  document.addEventListener("keydown", TOUR.onKey);
+  window.addEventListener("resize", tourDraw);
+  tourDraw();
+}
+function tourGo(d) { if (!TOUR) return; const n = TOUR.i + d; if (n >= TOURS[TOUR.name].length) return finishTour("finished"); TOUR.i = Math.max(0, n); tourDraw(); }
+function tourDraw() {
+  if (!TOUR) return;
+  const steps = TOURS[TOUR.name], st = steps[TOUR.i], last = TOUR.i === steps.length - 1;
+  const hole = $(".tour-hole", TOUR.box), card = $(".tour-card", TOUR.box), shade = $(".tour-shade", TOUR.box);
+  const target = st.sel && $(st.sel);
+  card.innerHTML = `<div class="tour-step">${TOUR.i + 1} of ${steps.length}</div><h3 id="tour-title">${esc(st.title)}</h3><div class="tour-body">${st.body()}</div>
+    <div class="tour-actions"><button class="link" data-t="skip">Skip tour</button><span class="grow"></span>${TOUR.i ? '<button class="btn small" data-t="back">Back</button>' : ""}<button class="btn small primary" data-t="next">${last ? "Done" : "Next"}</button></div>`;
+  $('[data-t="skip"]', card).onclick = () => finishTour("skipped");
+  $('[data-t="next"]', card).onclick = () => tourGo(1);
+  const back = $('[data-t="back"]', card); if (back) back.onclick = () => tourGo(-1);
+  shade.classList.toggle("solid", !target);
+  if (!target) {  // a step about how to use it, not a button: centred card
+    hole.hidden = true;
+    card.style.left = `${Math.max(16, (innerWidth - card.offsetWidth) / 2)}px`; card.style.top = `${Math.max(16, (innerHeight - card.offsetHeight) / 2)}px`;
+  } else {
+    const el = target.closest("label") && !target.closest("li > .grow > .title") && target.type === "checkbox" ? target.closest("label") : target;
+    el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect(), pad = 6;
+    Object.assign(hole.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + 2 * pad}px`, height: `${r.height + 2 * pad}px` });
+    hole.hidden = false;
+    const below = r.bottom + pad + 12, h = card.offsetHeight, w = card.offsetWidth;
+    card.style.top = `${below + h < innerHeight - 8 ? below : Math.max(8, r.top - pad - 12 - h)}px`;
+    card.style.left = `${Math.min(innerWidth - w - 16, Math.max(16, r.left))}px`;
+  }
+  $('[data-t="next"]', card).focus();
+}
+function finishTour(how) {
+  if (!TOUR) return;
+  const name = TOUR.name;
+  try { localStorage.setItem("lfg.tour." + name, how); } catch (e) { /* private window: the server copy still counts */ }
+  save("tour_done", { name, how });
+  endTour();
+  const p = $("#tour-prompt"); if (p) p.remove();
+}
+function endTour() {
+  if (!TOUR) return;
+  document.removeEventListener("keydown", TOUR.onKey);
+  window.removeEventListener("resize", tourDraw);
+  TOUR.box.remove();
+  TOUR = null;
+}
+/* The first time the dashboard opens after Dictate is set up: offer the tour, or skip it for good */
+async function offerTours() {
+  let t;
+  try { t = await api("tours"); } catch (e) { return; }
+  const seen = k => { try { return localStorage.getItem("lfg.tour." + k); } catch (e) { return null; } };
+  const remember = (k, how) => { try { localStorage.setItem("lfg.tour." + k, how); } catch (e) { /* ignore */ } save("tour_done", { name: k, how }); };
+  const d = t.dictate || {};
+  const promo = $("#promo");
+  promo.innerHTML = "";
+  // Dictate off: a banner on every page until it is turned on or closed (new installs and updates alike)
+  if (!d.on && !d.banner_closed && !seen("dictate-banner")) {
+    promo.innerHTML = `<div class="promo" role="region" aria-label="New: LFG Dictate">
+      <div class="tour-pill" aria-hidden="true">${"<i></i>".repeat(9)}</div>
+      <div class="grow"><div class="promo-title"><span class="tag">New</span> LFG Dictate</div>
+        <div class="promo-text">Hold <b>Option+Space</b> anywhere on your Mac, speak, and let go: the words appear where your cursor is. Your voice is transcribed on this Mac and never saved; Claude tidies up the text.</div></div>
+      <div class="promo-actions"><button class="btn small primary" data-promo="on">Turn it on</button><button class="btn small" data-promo="tour">Take the tour</button>
+        <button class="icon-btn" data-promo="close" aria-label="Close" title="Don't show again">&times;</button></div></div>`;
+    const go = () => { sessionStorage.setItem("lfg.tab.settings", "claudecode"); if ((location.hash.slice(1) || "home").split("/")[0] === "settings") route(); else location.hash = "#settings"; };
+    $('[data-promo="close"]', promo).onclick = () => { remember("dictate-banner", "closed"); promo.innerHTML = ""; };
+    $('[data-promo="tour"]', promo).onclick = () => { state.pendingTour = "dictate-intro"; go(); };
+    $('[data-promo="on"]', promo).onclick = async e => {
+      const r = await save("pack_add", { name: "dictate" });
+      if (!r.ok) { e.target.closest(".promo").querySelector(".promo-text").innerHTML = `${fmtWhy(r.why || "Couldn't start it.")} You can also run <code>lfg add dictate</code> in your terminal.`; return; }
+      promo.innerHTML = "";
+      go();  // Settings → Claude Code shows the download's progress
+    };
+    return;
+  }
+  // Dictate on: offer the controls tour once
+  // (the walkthrough taken before turning it on already showed every control, so it counts)
+  if (!d.on || d.done || seen("dictate") || seen("dictate-intro") === "finished" || $("#tour-prompt")) return;
+  const card = document.createElement("div");
+  card.id = "tour-prompt"; card.className = "tour-prompt"; card.setAttribute("role", "dialog"); card.setAttribute("aria-label", "LFG Dictate is ready");
+  card.innerHTML = `<div class="tour-pill small" aria-hidden="true">${"<i></i>".repeat(7)}</div><div class="grow"><b>LFG Dictate is ready</b><div class="meta">Take a 1-minute tour of its controls?</div></div>
+    <button class="link" data-p="skip">Skip</button><button class="btn small primary" data-p="go">Start tour</button>`;
+  document.body.append(card);
+  $('[data-p="skip"]', card).onclick = () => { remember("dictate", "skipped"); card.remove(); };
+  $('[data-p="go"]', card).onclick = () => {
+    card.remove();
+    state.pendingTour = "dictate";
+    sessionStorage.setItem("lfg.tab.settings", "claudecode");
+    if ((location.hash.slice(1) || "home").split("/")[0] === "settings") route(); else location.hash = "#settings";
   };
 }
 
@@ -1117,23 +1251,40 @@ PAGES.code = async () => {
     ${section("Explore", `<div class="row"><button class="btn" data-view="architecture" data-target="explore">Map of the code</button><button class="btn" data-view="callflow" data-target="explore">How calls flow</button><button class="btn" data-view="code" data-target="explore">Detailed code graph</button><button class="btn" data-view="health" data-target="explore">Health report</button></div><div id="explore"></div>`)}`;
 };
 
-const DOC_SHOWN = 12;
+/* Docs: a tree. Project docs (LFG's wiki, glossary, decisions, guides you asked for) at the root, then one folder
+   per branch for docs about that branch's work. */
 PAGES.docs = async arg => {
   const d = await api("docs");
   if (d.available === false) return unavailable(d);
   const parts = (arg || "").split("/");
   let src = parts[0], path = decodeURIComponent(parts.slice(1).join("/"));
-  const first = d.groups.find(g => g.items.length);
-  if (!src && first) { src = first.id; path = first.items[0].path; }
-  const nav = d.groups.filter(g => g.items.length).map(g => `<div class="grp"><span>${esc(g.title)}</span><span>${g.items.length}</span></div>
-    <div data-grp="${esc(g.id)}">${g.items.map((it, i) => `<a href="#docs/${esc(g.id)}/${encodeURIComponent(it.path)}" class="${g.id === src && it.path === path ? "on" : ""}${i >= DOC_SHOWN && !(g.id === src && it.path === path) ? " extra" : ""}" title="${esc(it.title)}">${esc(it.title)}</a>`).join("")}${g.items.length > DOC_SHOWN ? `<a href="#" class="more" data-doc-more>Show all ${g.items.length}</a>` : ""}</div>`).join("");
-  let body = empty("No docs yet", "LFG writes them from the code map automatically. They'll appear after the next update.");
+  const all = t => t.items.concat(...t.folders.map(f => f.items));
+  const every = all(d.root).concat(...d.branches.map(all));
+  if (!src && every.length) {
+    const cur = d.branches.find(b => b.name === state.branch);
+    const pick = (d.root.folders[0] || {}).items?.[0] || (cur && all(cur)[0]) || every[0];
+    src = pick.src; path = pick.path;
+  }
+  const on = it => it.src === src && it.path === path;
+  const link = it => `<a href="#docs/${esc(it.src)}/${encodeURIComponent(it.path)}" class="${on(it) ? "on" : ""}" title="${esc(it.title)}">${esc(it.title)}</a>`;
+  const folder = (name, items, tag, open) => `<details class="doc-folder"${open || items.some(on) ? " open" : ""}><summary>${icon("folder")}<span class="grow">${esc(name)}</span>${tag || ""}<span class="count">${items.length}</span></summary>${items.map(link).join("")}</details>`;
+  const fold = (f, openAuto) => folder(f.name, f.items, f.generated ? '<span class="tag" title="Written by LFG from the code map">auto</span>' : "", openAuto && f.generated);
+  const tree = (t, openAuto) => t.folders.filter(f => f.generated).map(f => fold(f, openAuto)).join("") + t.items.map(link).join("") + t.folders.filter(f => !f.generated).map(f => fold(f)).join("");
+  const STATE = { current: "current", default: "default", merged: "merged", deleted: "deleted" };
+  const rootHtml = tree(d.root, true);
+  const branchHtml = d.branches.map(b => folder(b.name, all(b), b.state ? `<span class="tag${b.state === "current" ? " blue" : ""}">${STATE[b.state]}</span>` : "", b.name === state.branch || b.state === "current")).join("");
+  const nav = `<div class="grp"><span>Project</span></div>${rootHtml || '<p class="meta small pad">Nothing yet.</p>'}
+    <div class="grp"><span>Branches</span></div>${branchHtml || '<p class="meta small pad">No branch docs yet.</p>'}`;
+  const how = `<p>Ask Claude in a repo where LFG is on, for example <i>"write a doc explaining how billing retries work"</i>. Docs about the whole project go to the top; docs about what you're building on a branch (<i>"write up this branch's design"</i>) go in that branch's folder.</p>
+    <p class="meta small">Project: <code>${esc(d.paths.project)}</code><br>Branches: <code>${esc(d.paths.branches)}/&lt;branch&gt;</code></p>`;
+  let body = `<div class="readable">${empty("No docs yet", "LFG's wiki (onboarding tour, landmines, test gaps) appears after the code map is built.")}${how}</div>`;
   if (src && path) {
     const doc = await api("doc", { src, path });
     body = doc.text === "not found" ? empty("Document not found", "") : `<div class="md">${md(doc.text, true)}</div>`;
   }
-  return `${head("Docs", "Guides and runbooks written from the code, kept up to date as it changes.")}
-    <div class="docs"><div class="box doc-nav"><div class="table-tools"><input type="search" id="doc-filter" placeholder="Search docs…"></div>${nav}</div>
+  return `${head("Docs", "LFG's wiki for this project and the docs you asked LFG to write: project-wide at the top, then one folder per branch.")}
+    <div class="docs"><div class="box doc-nav"><div class="table-tools"><input type="search" id="doc-filter" placeholder="Search docs…"></div>${nav}
+    <details class="doc-help"><summary>How to add a doc</summary>${how}</details></div>
     <div class="box" id="doc-body" data-src="${esc(src || "")}" data-path="${esc(path || "")}">${body}</div></div>`;
 };
 
@@ -2051,6 +2202,7 @@ const ICON = {
   prs: "M6 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 7v10M6 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17V9a3 3 0 0 0-3-3h-4M13 3.5 10.5 6 13 8.5",
   code: "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
+  folder: "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z",
   knowledge: "M4 5.5C6.5 4 9.5 4 12 6c2.5-2 5.5-2 8-.5V19c-2.5-1.5-5.5-1.5-8 .5-2.5-2-5.5-2-8-.5zM12 6v13.5",
   usage: "M4 20V10M10 20V4M16 20v-6M2 20h20",
   skills: "M13 2 4 14h7l-1 8 9-12h-7z",
@@ -2150,8 +2302,15 @@ function wireDocs() {
     location.hash = `#docs/${body.dataset.src}/${encodeURIComponent(parts.join("/"))}`;
   });
   const f = $("#doc-filter");
-  if (f) f.oninput = () => { const q = f.value.toLowerCase(); $(".doc-nav").classList.toggle("searching", !!q); $$(".doc-nav a:not(.more)").forEach(a => (a.style.display = !q || a.textContent.toLowerCase().includes(q) ? "" : "none")); };
-  $$("[data-doc-more]").forEach(m => m.onclick = e => { e.preventDefault(); m.parentNode.classList.add("all"); });
+  if (f) f.oninput = () => {
+    const q = f.value.toLowerCase();
+    $$(".doc-nav a").forEach(a => (a.style.display = !q || a.textContent.toLowerCase().includes(q) ? "" : "none"));
+    $$(".doc-folder").forEach(dt => {
+      const hit = $$("a", dt).some(a => a.style.display !== "none") || dt.querySelector("summary").textContent.toLowerCase().includes(q);
+      dt.style.display = !q || hit ? "" : "none";
+      if (q && hit) { dt.dataset.wasOpen ??= dt.open ? "1" : ""; dt.open = true; } else if (!q && "wasOpen" in dt.dataset) { dt.open = !!dt.dataset.wasOpen; delete dt.dataset.wasOpen; }
+    });
+  };
   const on = $(".doc-nav a.on");
   if (on) on.scrollIntoView({ block: "nearest" });
 }
@@ -2188,6 +2347,7 @@ async function init() {
   await loadBranches();
   mapStatus();
   route();
+  offerTours();
 }
 async function loadBranches() {
   /* runs and checks are tagged with the branch they ran on; the code map is one per project */

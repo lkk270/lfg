@@ -479,11 +479,21 @@ DOC_SOURCES = [  # (id, title, base dir: relative to ~/.lfg, or {graphify}/{crg}
     ("playbooks", "Start here", "playbooks/{rid}", "onboarding tour, landmines, test gaps, incident runbooks"),
     ("guides", "From your docs", "{graphify}/wiki", "what your team's own docs and runbooks say"),
     ("gwiki", "Parts of the code", "{graphify}/wiki", "one page per area of the code, largest first"),
-    ("repo", "Decisions", "repos/{rid}/docs", "decision records and notes LFG keeps for this project"),
+    ("repo", "Decisions", "{docs}", "decision records and notes LFG keeps for this project"),
 ]
 
 
+def _repo_docs(rid):
+    """The project's docs: <checkout>/.lfg/docs, committed with the repo; ~/.lfg/repos/<rid>/docs for a repo LFG has
+    no checkout for (or one not migrated yet)."""
+    root = repo_root(rid)
+    d = os.path.join(root, ".lfg", "docs") if root else ""
+    return d if d and os.path.isdir(d) else C.lfg_path("repos", rid, "docs")
+
+
 def _doc_base(rid, base):
+    if base == "{docs}":
+        return _repo_docs(rid)
     for kind in ("graphify", "crg"):
         tag = "{%s}" % kind
         if base.startswith(tag):
@@ -507,31 +517,70 @@ MIN_AREA_NODES = 10
 THIRD_PARTY = D.THIRD_PARTY
 
 
+DOC_FOLDERS = {"adr": "Decisions"}
+WIKI = (("onboarding.md", "Onboarding tour"), ("landmines.md", "Landmines"), ("test-gaps.md", "Test gaps"),
+        ("incidents.md", "Incident runbooks"))
+
+
+def _doc_files(base, prefix="", top=True):
+    """Markdown under base as {items, folders}: one level of folders, titles from each file's first heading. Paths
+    are prefix + the path under base."""
+    d = base
+    items, folders = [], []
+    if not os.path.isdir(d):
+        return {"items": items, "folders": folders}
+    for name in sorted(os.listdir(d)):
+        p = os.path.join(d, name)
+        if name.startswith("."):
+            continue
+        if os.path.isdir(p):
+            if top and name == "branches":
+                continue
+            sub = sorted(glob.glob(os.path.join(p, "**", "*.md"), recursive=True))
+            if sub:
+                folders.append({"name": DOC_FOLDERS.get(name, name.replace("-", " ").replace("_", " ").capitalize()),
+                                "items": [{"src": "repo", "path": prefix + os.path.relpath(x, base), "title": _title(x)}
+                                          for x in sub]})
+        elif name.endswith(".md"):
+            items.append({"src": "repo", "path": prefix + name,
+                          "title": "Glossary" if name == "GLOSSARY.md" else _title(p)})
+    return {"items": items, "folders": folders}
+
+
 def docs_index(rid):
-    groups = []
-    for sid, title, base, desc in DOC_SOURCES:
-        d = _doc_base(rid, base)
-        if sid in ("guides", "gwiki"):
-            pages = D.wiki_pages(rid)
-            if sid == "guides":
-                items = [{"path": p["path"], "title": p["title"], "tag": "runbook" if p["runbook"] else ""}
-                         for p in pages if p["kind"] == "doc" and not all(THIRD_PARTY.search(x) for x in p["sources"])]
-            else:
-                # areas big enough to be worth a page; tiny clusters and single-symbol pages are noise to a reader
-                items = [{"path": p["path"], "title": p["title"], "tag": "tests" if p["tests"] else ""}
-                         for p in pages if p["kind"] == "code" and p["nodes"] >= MIN_AREA_NODES]
-        else:
-            paths = sorted(glob.glob(os.path.join(d, "**", "*.md"), recursive=True)) if os.path.isdir(d) else []
-            items = [{"path": os.path.relpath(p, d), "title": _title(p)} for p in paths]
-            items.sort(key=lambda i: (0 if i["path"] in ("index.md", "onboarding.md") else 1, i["title"].lower()))
-        if sid in ("guides", "gwiki"):  # two areas in the same folder: tell them apart by their main file
-            lead = {p["path"]: p["lead"] for p in pages}
-            seen = collections.Counter(i["title"] for i in items)
-            for i in items:
-                if seen[i["title"]] > 1 and lead.get(i["path"]):
-                    i["title"] += " · " + lead[i["path"]]
-        groups.append({"id": sid, "title": title, "description": desc, "items": items})
-    return {"groups": groups, "state": D.docs_state(rid), "due": D.due(rid)}
+    """The Docs page as a tree. Root: what applies to the whole project (LFG's wiki: onboarding, landmines, test
+    gaps, playbooks /learn wrote; the glossary, decisions and guides the user asked for). Then one folder per branch
+    for docs about that branch's work (`lfg repo docs --branch`). The repo's own markdown and graphify's per-cluster
+    pages aren't listed: the first is in the repo already, the second isn't written for people."""
+    base = _repo_docs(rid)
+    root = _doc_files(base)
+    pb = C.lfg_path("playbooks", rid)
+    wiki, known = [], dict(WIKI)
+    if os.path.isdir(pb):
+        for name in [w[0] for w in WIKI] + sorted(n for n in os.listdir(pb) if n.endswith(".md") and n not in known):
+            p = os.path.join(pb, name)
+            if os.path.isfile(p):
+                wiki.append({"src": "playbooks", "path": name, "title": known.get(name) or _title(p)})
+    if wiki:
+        root["folders"].insert(0, {"name": "Wiki", "items": wiki, "generated": True})
+    gb = git_branches(repo_root(rid))
+    out = []
+    bdir = os.path.join(base, "branches")
+    for slug in sorted(os.listdir(bdir)) if os.path.isdir(bdir) else []:
+        d = os.path.join(bdir, slug)
+        if not os.path.isdir(d):
+            continue
+        name = (C.read_text(os.path.join(d, ".branch")) or slug).strip() or slug
+        tree = _doc_files(d, "branches/%s/" % slug, top=False)  # paths from the docs root, as `doc` reads them
+        if not tree["items"] and not tree["folders"]:
+            continue
+        state = "" if gb is None else ("current" if name == gb["current"] else "default" if name == gb["default"]
+                                       else "merged" if name in gb["merged"] else "" if name in gb["local"]
+                                       else "deleted")
+        out.append(dict(tree, name=name, state=state))
+    out.sort(key=lambda b: (b["state"] != "current", b["state"] != "default", b["name"].lower()))
+    return {"root": root, "branches": out, "state": D.docs_state(rid), "due": D.due(rid),
+            "paths": {"project": base, "branches": bdir}}
 
 
 def doc(rid, src, path):

@@ -61,7 +61,7 @@ Trigger phrases, inputs and outputs for each: `lfg ui` → Skills, or the guide 
 
 ## What LFG never does
 
-Commit, push, merge, write to GitHub, read `.env` or key files, deploy, or `docker push`. Writes to Linear happen only after you approve the exact text. To do any of these, you do it yourself in your own terminal.
+Commit, push, merge, rebase, write to GitHub, read `.env` or key files, deploy, or `docker push`. Writes to Linear happen only after you approve the exact text. To do any of these, you do it yourself in your own terminal.
 
 ## Credits
 

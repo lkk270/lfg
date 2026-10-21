@@ -38,6 +38,11 @@ HARDENED_DENY = [
     "Bash(gh secret set:*)", "Bash(docker push:*)", "Bash(docker login:*)", "Bash(printenv:*)",
     "Bash(env)", "Bash(npm publish:*)", "Bash(sudo:*)"]
 
+def hardened_rules():
+    """The deny rules hardened mode writes. This fork has no Commit approval: Preferences decide commits."""
+    return list(HARDENED_DENY)
+
+
 # Optional packs. Core is what every LFG repo needs; the rest are only installed when you ask for them.
 PACKS = {
     "core": {"title": "Core", "about": "Plugin, guard, code graphs, runs and the dashboard.",
@@ -47,14 +52,21 @@ PACKS = {
                  "uv": ["picklescan"]},
     "shipcheck": {"title": "Ship check", "about": "Builds, runs and smoke-tests your container (needs Docker).",
                   "cask": ["docker"], "needs_cmd": ["docker"]},
-    "pentest": {"title": "Pentest", "about": "Offline Strix attack with a local Ollama model (needs Ship check).",
+    "pentest": {"title": "Pentest (experimental)",
+                "about": "Offline Strix attack with a local Ollama model (needs Ship check). Installs about 10 GB "
+                         "(Ollama + a model, LuLu firewall) and asks before running Strix's curl | bash installer.",
                 "brew": ["ollama"], "cask": ["lulu"], "script": "strix", "requires": ["shipcheck"]},
     "knowledge": {"title": "Knowledge graphs", "about": "dev-graph and second-brain (local Omnigraph servers).",
                   "tap": "ModernRelay/tap", "brew": ["ModernRelay/tap/omnigraph", "node"]},
     "linear": {"title": "Linear", "about": "Read Linear issues (/lfg:inbox); you sign in with /mcp.", "mcp": "linear"},
     "headroom": {"title": "Headroom (experimental)",
-                 "about": "Local proxy that compresses context; only LFG repos unless you choose everywhere.",
+                 "about": "Third-party local proxy that rewrites Claude Code's context to compress it; only LFG "
+                          "repos unless you choose everywhere.",
                  "uv": ["headroom-ai"]},
+    "dictate": {"title": "Dictate",
+                "about": "Hold Option+Space anywhere on your Mac to dictate; on-device speech-to-text (Whistle), "
+                         "audio never leaves the Mac. Clean up with Claude (text only) is on by default. "
+                         "Downloads about 90 MB when turned on.", "custom": "dictate"},
 }
 UV_BIN = {"graphifyy": "graphify", "headroom-ai": "headroom"}
 CASK_CHECK = {"docker": ("/Applications/Docker.app", "docker"), "lulu": ("/Applications/LuLu.app", None)}
@@ -126,12 +138,31 @@ def pack_missing(name):
         miss.append("script:strix")
     if p.get("mcp") == "linear" and not _mcp_user_server("linear"):
         miss.append("mcp:linear")
+    if p.get("custom") == "dictate":
+        from . import dictate
+        if not dictate.installed():
+            miss.append("dictate:model")
     return miss
 
 
 def packs_view():
-    return [{"name": n, "title": p["title"], "about": p["about"], "on": pack_on(n), "missing": pack_missing(n),
-             "requires": p.get("requires", [])} for n, p in PACKS.items()]
+    out = [{"name": n, "title": p["title"], "about": p["about"], "on": pack_on(n), "missing": pack_missing(n),
+            "requires": p.get("requires", []), "experimental": "(experimental)" in p["title"]}
+           for n, p in PACKS.items()]
+    for r in out:
+        if r["name"] == "dictate":  # its controls show even while it's off (greyed), so people see what it offers
+            from . import dictate
+            st = dictate.settings()
+            r["settings"] = {"shortcut": st["shortcut"], "insert": st["insert"], "cleanup": st["cleanup"],
+                             "shortcuts": [[k, v["label"]] for k, v in dictate.SHORTCUTS.items()],
+                             "preview": not r["on"]}
+        if r["name"] == "dictate" and r["on"]:
+            from . import dictate
+            st = dictate.status()
+            r["detail"] = ("%s to talk · %s%s%s" % (st["shortcut_label"], "running" if st["agent"] else "not running",
+                                                    " · %d today" % st["today"] if st["today"] else "",
+                                                    " · %s" % st["error"] if st["error"] else ""))
+    return out
 
 
 def add_pack(name, yes=False, log=print, allow_scripts=True):
@@ -177,6 +208,9 @@ def add_pack(name, yes=False, log=print, allow_scripts=True):
         OG.setup(launchd=True, mcp=False)
     if name == "linear":
         notes.append(_add_linear())
+    if name == "dictate":
+        from . import dictate
+        notes += dictate.install(log)
     if name == "headroom":
         from . import headroom as HR
         res = HR.setup(new_scope=C.config()["headroom"].get("scope") if C.config()["headroom"].get("scope")
@@ -199,6 +233,9 @@ def remove_pack(name):
         CC.undo_where(tag="omnigraph-agent")
     if name == "linear":
         CC.undo_where(tag="mcp-linear")
+    if name == "dictate":
+        from . import dictate
+        dictate.uninstall()
     _set_pack(name, False)
     return {"pack": name, "on": False}
 
@@ -289,7 +326,7 @@ def enable(path, hardened=None, build=True):
         done.append(".lfg/ visible to git again (the repo's shared knowledge)")
     _set_enabled(root, True)
     if hardened if hardened is not None else C.config()["guard"].get("hardened"):
-        if CC.json_list_add(_local_settings(root), ["permissions", "deny"], HARDENED_DENY,
+        if CC.json_list_add(_local_settings(root), ["permissions", "deny"], hardened_rules(),
                             "Hardened mode: deny rules behind the guard", "repo", tag="hardened", repo=root):
             done.append("hardened deny rules")
     from . import headroom as HR
@@ -480,6 +517,33 @@ def _repos_with_graphs():
         if r and os.path.exists(os.path.join(r, ".git")):
             out.append(os.path.realpath(r))
     return sorted(set(out))
+
+
+# ---------------------------------------------------------------- what's new (printed once after an update)
+
+WHATS_NEW = {
+    "0.3.0": ["LFG Dictate: hold Option+Space anywhere on your Mac to dictate, on-device. Off until you turn it on: "
+              "`lfg add dictate`. Open `lfg ui` for a 1-minute tour.",
+              "Pentest and Headroom are now labelled Experimental."],
+}
+
+
+def _ver(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3])
+
+
+def whats_new(mark_seen=True):
+    """Lines for every version newer than the last one this machine saw (nothing on a first install, which gets the
+    dashboard's tour instead). Remembered in ~/.lfg/state/version.json."""
+    p = C.lfg_path("state", "version.json")
+    seen = (C.read_json(p, {}) or {}).get("seen")
+    if not seen and (os.path.exists(C.lfg_path("state", "ledger.json")) or os.path.exists(C.lfg_path("enabled.json"))):
+        seen = "0.2.0"  # installed before LFG kept track of versions
+    lines = [] if not seen else [line for v in sorted(WHATS_NEW, key=_ver) if _ver(seen) < _ver(v) <= _ver(C.VERSION)
+                                 for line in WHATS_NEW[v]]
+    if mark_seen and seen != C.VERSION:
+        C.write_json(p, {"seen": C.VERSION})
+    return lines
 
 
 # ---------------------------------------------------------------- plan + apply

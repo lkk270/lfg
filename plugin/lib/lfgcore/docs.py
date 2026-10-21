@@ -328,7 +328,7 @@ def _onboarding(rid, root, g, sections, db):
         out.append("".join("- [%s](lfgdoc:guides/%s)%s, from `%s`\n" % (
             p["title"], p["path"], " **(runbook)**" if p["runbook"] else "", "`, `".join(p["sources"][:2]))
             for p in guides))
-        out.append("\nEvery guide and the full architecture wiki are in `lfg ui` → Docs.\n\n")
+        out.append("\nThe originals are in the repo; the code map is in `lfg ui` → Code.\n\n")
     if g:
         deg = g["_degree"]
         nodes = {n["id"]: n for n in g.get("nodes", [])}
@@ -369,7 +369,8 @@ def _onboarding(rid, root, g, sections, db):
                               for f in flows]))
     surprising = section(sections, "Surprising")
     out.append("\n## 6. Surprising connections\n\n%s\n" % (surprising or "_None reported._"))
-    out.append("\n## Next\n\n- Browse the graphify and code-review-graph wikis in `lfg ui` → Docs.\n"
+    out.append("\n## Next\n\n- Explore the code map in `lfg ui` → Code; ask Claude to write a doc on anything that "
+               "isn't covered (it lands in `lfg ui` → Docs).\n"
                "- Ask the graph: `graphify query \"<question>\"` from the repo root (from a worktree add "
                "`--graph \"$(lfg repo graph)\"`).\n")
     return "".join(out)

@@ -108,7 +108,7 @@ def hardened(on):
     if on:
         for root in C.enabled_state()["repos"]:
             if os.path.isdir(root) and CC.json_list_add(
-                    os.path.join(root, ".claude", "settings.local.json"), ["permissions", "deny"], SU.HARDENED_DENY,
+                    os.path.join(root, ".claude", "settings.local.json"), ["permissions", "deny"], SU.hardened_rules(),
                     "Hardened mode: deny rules behind the guard", "repo", tag="hardened", repo=root):
                 n += 1
     else:
@@ -162,6 +162,34 @@ def legacy_fix(item_id):
         raise Invalid("nothing to fix for %r (reload the page)" % item_id)
     _quiet(item["apply"])
     return {"fixed": item_id}
+
+
+# ---------------------------------------------------------------- guided tours (shown once, skippable)
+
+TOURS = ("dictate", "dictate-intro", "dictate-banner")
+
+
+def tours_view():
+    """What to offer, once each, on a fresh install or after an update alike: the Dictate intro while Dictate is off
+    (what it is, how to turn it on), the controls tour once it is on. Finished or skipped is remembered."""
+    from . import dictate as DI
+    from . import setup as SU
+    done = C.read_json(C.lfg_path("state", "tours.json"), {}) or {}
+    on = SU.pack_on("dictate") and DI.installed()
+    full = bool(done.get("dictate")) or (done.get("dictate-intro") or {}).get("how") == "finished"  # saw every control
+    return {"dictate": {"ready": on, "on": on, "done": full,
+                        "intro_done": bool(done.get("dictate-intro") or done.get("dictate")),
+                        "banner_closed": bool(done.get("dictate-banner"))}}
+
+
+def tour_done(name, how="finished"):
+    if name not in TOURS:
+        raise Invalid("unknown tour")
+    p = C.lfg_path("state", "tours.json")
+    d = C.read_json(p, {}) or {}
+    d[name] = {"how": "skipped" if how == "skipped" else "finished", "at": C.now_iso()}
+    C.write_json(p, d)
+    return {"tour": name, "done": True}
 
 
 # ---------------------------------------------------------------- Skills: everything Claude Code loads

@@ -26,6 +26,25 @@ A repo's LFG knowledge now lives in the repo, in `.lfg/`, committed with the wor
 ### Upgrading
 Install this version first, then run `lfg knowledge migrate --dry-run` in each repo, then without `--dry-run`. Until a repo is migrated, its old runs stay in `~/.lfg` and session start says so.
 
+## 0.3.0 (2026-10-20)
+
+### Added
+- **Docs page as a tree**: project docs at the top (LFG's Wiki, glossary, Decisions, docs you asked for), then one folder per branch. Claude writes docs you ask for to `lfg repo docs` (project-wide) or the new `lfg repo docs --branch` (this branch's work), into the repo's `.lfg/docs` (this fork keeps project docs in the repo). The repo's own markdown and graphify's per-cluster pages ("plugin · re") are no longer listed.
+- **LFG Dictate** (`lfg add dictate`, or Settings → Claude Code → Feature packs): hold Option+Space anywhere on the Mac to dictate, double-tap for hands-free, Esc or the shortcut again to finish. Text always goes two places: where the cursor is (pasted, or typed with `dictate.insert type`) and the clipboard, so it can be pasted again. Transcription runs on-device with Cactus Compute's Whistle model through cactus-needle 3.2.8, which LFG always starts with its telemetry off and Hugging Face offline. **Clean up with Claude** (on by default, `lfg dictate cleanup off` to keep everything on the Mac) sends text only (never audio) to Claude and falls back to the raw text if that fails. No audio or transcript is kept. Ships dormant: nothing is downloaded, installed or asked for until turned on, and `lfg remove dictate` deletes everything through the change ledger. The shortcut can be changed (Right Option, Fn, Control+Space, Command+Shift+Space), with a warning when a known app also claims it. Dictate runs as its own small app, **LFG Dictate** (`~/.lfg/dictate/LFG Dictate.app`, built and signed locally), so macOS asks for Microphone and Accessibility permission by that name. A quiet pill at the bottom centre of the screen shows only voice-level bars while listening, dimmed bars while transcribing, and text only when it has something to say. Its options (shortcut, paste or type, Clean up) sit on the Dictate row in Settings → Claude Code and in `lfg dictate cleanup on|off`, `lfg dictate insert paste|type` and `lfg dictate shortcut <preset>`; these are user-only (the guard blocks agents from them). `lfg dictate status|restart` (status also says where the last dictation went and why, never the words). Everyone, on a fresh install or after an update, learns about Dictate once: while it's off, a **New: LFG Dictate** banner sits above every dashboard page (Turn it on / Take the tour / close) with a tour; once it's on, the tour is offered once (Start tour / Skip) unless it was already finished. The tour walks through every control (gestures and the listening pill, shortcut, paste or type, Clean up, Add or Turn off, terminal commands); the Dictate row shows its controls greyed while it's off so they can be pointed at. Both are remembered in `~/.lfg/state/tours.json` and can be replayed from "Take the tour" on the Dictate row. `lfg setup` prints "New in LFG 0.3.0" after an update.
+
+### Fixed (Dictate)
+- Dictation in Chrome, Electron apps (Slack, VS Code, Claude) and other apps that don't report their focused field was left on the clipboard ("Copied") instead of being pasted. Dictate now always pastes (or types) where the cursor is, and also leaves the text on the clipboard.
+
+### Changed
+- Pentest and Headroom are labelled **Experimental** in setup, `lfg packs`, the dashboard and the README, each with a one-line warning.
+- LFG is macOS-only: `lfg setup` now refuses other systems, like `install.sh`.
+
+### Fixed
+- The guard no longer treats a heredoc's text as commands (`cat > notes.md <<'EOF' ... git commit ... EOF` is a file write). A heredoc fed to a shell (`bash <<EOF`) is still checked, and so is `$(...)` in an unquoted heredoc.
+- The guard allows `curl <api> | python3 -c "<parse>"`: inline code reads the download as data. Piping into a bare interpreter, or inline code that executes what it reads, is still blocked.
+
+This fork leaves out 0.3.0's Commit approval: your Preferences (Git → Commits) decide when Claude commits.
+
 ## 0.2.0 (2026-10-14)
 
 LFG no longer changes Claude Code for every session on the machine. It is now installed off, turned on per repo, and every change it makes outside `~/.lfg` is recorded and reversible.

@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
     "headroom": {"port": 8787, "mode": "token", "scope": "off"},
     "guard": {"hardened": False, "allow_commit": False},
     "review": {"sources": []},
+    "dictate": {"shortcut": "option+space", "insert": "paste", "cleanup": True},
     "omnigraph": {
         "cookbooks_repo": "https://github.com/ModernRelay/omnigraph-cookbooks.git",
         "cookbooks_ref": "f797c6841c264d6b135aa1523e7c3fc023bbf3cd",
@@ -269,6 +270,7 @@ def knowledge_dir(root, create=True):
 
 
 def repo_docs_dir(root):
+    """Docs about the whole project (glossary, ADRs, guides the user asked for): the root of the Docs page."""
     d = os.path.join(knowledge_dir(root), "docs")
     ensure_dir(os.path.join(d, "adr"))
     return d
@@ -277,6 +279,20 @@ def repo_docs_dir(root):
 def repo_file(root, name, create=False):
     """A repo-level knowledge file (commands.json, shipcheck.json) in <checkout>/.lfg. create=True only to write it."""
     return os.path.join(knowledge_dir(root, create), name)
+
+
+def branch_slug(branch):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", branch).strip("-.") or "branch"
+
+
+def branch_docs_dir(root, branch):
+    """Docs about the work on one branch: DOCS/branches/<branch>/, with the real branch name kept in `.branch`
+    (folder names can't hold every character a branch name can)."""
+    d = ensure_dir(os.path.join(repo_docs_dir(root), "branches", branch_slug(branch)))
+    marker = os.path.join(d, ".branch")
+    if not os.path.exists(marker):
+        write_text(marker, branch + "\n")
+    return d
 
 
 # ---------------------------------------------------------------- run folders

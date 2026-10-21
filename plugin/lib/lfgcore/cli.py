@@ -114,6 +114,8 @@ def _yes(q, default=True):
 
 def cmd_setup(a):
     from . import setup as SU
+    if sys.platform != "darwin":
+        C.die("LFG supports macOS only for now.", 2)
     packs = ["core"] + [x for x in (a.packs or "").split(",") if x and x != "core"]
     unknown = [x for x in packs if x not in SU.PACKS]
     if unknown:
@@ -143,6 +145,7 @@ def cmd_setup(a):
         from . import updates as U
         U.remember_source(C.LFG_ROOT)
         print("\nNothing to do: LFG is installed and up to date. `lfg enable` turns it on in a repo.")
+        _print_whats_new(SU)
         return 0
     print("\nPlan (nothing has changed yet):")
     for i, st in enumerate(steps, 1):
@@ -171,7 +174,14 @@ def cmd_setup(a):
     U.remember_source(C.LFG_ROOT)
     print("\nDone. Next:\n  cd <your repo> && lfg enable     turn LFG on there\n  lfg ui                         "
           "dashboard (packs, settings, skills)\n  lfg doctor                     check everything")
+    _print_whats_new(SU)
     return 0
+
+
+def _print_whats_new(SU):
+    lines = SU.whats_new()
+    if lines:
+        print("\nNew in LFG %s:\n%s" % (C.VERSION, "\n".join("  - " + x for x in lines)))
 
 
 def cmd_enable(a):
@@ -578,6 +588,11 @@ def cmd_repo(a):
         print(C.main_root(root))
     elif a.action == "graph":
         print(os.path.join(C.main_root(root), "graphify-out", "graph.json"))
+    elif a.action == "docs" and a.branch is not None:
+        branch = a.branch or C.git_branch(root)
+        if not branch or branch.startswith("detached@"):
+            C.die("not on a branch: write it to the project docs (`lfg repo docs`) or pass --branch <name>", 2)
+        print(C.branch_docs_dir(root, branch))
     else:
         print(C.repo_docs_dir(root) if a.action == "docs" else rid)
     return 0
@@ -1046,6 +1061,12 @@ def main(argv=None):
     un.add_argument("--dry-run", action="store_true")
     un.add_argument("--keep-data", action="store_true", help="keep ~/.lfg (runs, graphs bookkeeping, config)")
     un.add_argument("--yes", "-y", action="store_true")
+    dc = sp.add_parser("dictate", help="LFG Dictate: status or restart (turn it on with `lfg add dictate`)")
+    dc.add_argument("action", choices=["status", "restart", "cleanup", "insert", "shortcut"], nargs="?",
+                    default="status", help="cleanup on|off · insert paste|type · shortcut %s" % "|".join(
+                        ["option+space", "right_option", "fn", "ctrl+space", "cmd+shift+space"]))
+    dc.add_argument("value", nargs="?")
+    dc.add_argument("--json", action="store_true")
     mc = sp.add_parser("mcp", help="(used by the plugin) start one of LFG's MCP servers")
     mc.add_argument("name")
     d = sp.add_parser("doctor")
@@ -1098,6 +1119,8 @@ def main(argv=None):
     rp = sp.add_parser("repo")
     rp.add_argument("action", choices=["docs", "id", "root", "graph"],
                     help="root: main checkout (also from a worktree); graph: graphify graph.json path")
+    rp.add_argument("--branch", nargs="?", const="", default=None, metavar="NAME",
+                    help="docs: the folder for docs about this branch's work (the checked-out branch by default)")
     la = sp.add_parser("lane")
     la.add_argument("--json", action="store_true")
     ga = sp.add_parser("gate")
@@ -1217,6 +1240,33 @@ def main(argv=None):
         print("%s: %s" % (r["path"], "LFG block removed" if r["removed"] else "you edited the LFG block, so it was "
                           "left as is" if r.get("edited") else "no LFG block"))
         return 0
+    if a.cmd == "dictate":
+        from . import dictate as DI
+        if a.action == "restart":
+            return 0 if DI.restart() else 1
+        if a.action in ("cleanup", "insert", "shortcut"):
+            from . import settings as S
+            try:
+                r = DI.set_option(a.action, a.value)
+            except S.Invalid as e:
+                C.die(str(e), 2)
+            print("Dictate %s: %s%s" % (a.action, a.value, "".join("\n  " + n for n in r.get("notes", []))))
+            return 0
+        st = DI.status()
+        if a.json:
+            _print(st)
+        elif not st["installed"]:
+            print("Dictate is off. Turn it on with `lfg add dictate` (downloads about 90 MB, all on-device).")
+        else:
+            print("Dictate: %s · hold %s to talk, double-tap for hands-free · %s%s%s" % (
+                "running" if st["agent"] else "not running", st["shortcut_label"],
+                "types" if st["insert"] == "type" else "pastes", " · cleans up with Claude" if st["cleanup"] else "",
+                " · %s" % st["error"] if st["error"] else ""))
+            if st["last"]:
+                print("Last dictation: %s into %s (focused: %s)" % (
+                    {"paste": "copied and pasted", "type": "copied and typed", "clipboard": "copied"}.get(
+                        st["last"].get("went"), "?"), st["last"].get("app") or "?", st["last"].get("focus")))
+        return 0 if not st["installed"] or st["agent"] else 1
     if a.cmd == "mcp":
         from . import mcp
         return mcp.serve(a.name)

@@ -184,6 +184,9 @@ def api(view, q):
     if view == "claude":
         from . import control as K
         return K.claude_view()
+    if view == "tours":
+        from . import control as K
+        return K.tours_view()
     if view == "allskills":
         from . import control as K
         return K.skills_inventory(_rid(q))
@@ -241,7 +244,7 @@ def api(view, q):
 
 
 MAX_BODY = 600_000
-NO_KEY = {"/api/save/graphs_build"}
+NO_KEY = {"/api/save/graphs_build", "/api/save/tour_done"}  # neither changes your settings
 
 
 def save(what, body):
@@ -362,6 +365,7 @@ def save(what, body):
         "pack_remove": lambda: K.pack_remove(body.get("name")), "change_undo": lambda: K.change_undo(body.get("id")),
         "legacy_fix": lambda: K.legacy_fix(body.get("id")),
         "skill_auto": lambda: K.skill_auto(body.get("id"), bool(body.get("auto"))),
+        "tour_done": lambda: K.tour_done(body.get("name"), body.get("how")),
     }
     if what in actions:
         res = actions[what]()

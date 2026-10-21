@@ -271,12 +271,36 @@ class DocsTest(unittest.TestCase):
         got = [(p["kind"], p["title"]) for p in D.wiki_pages(rid)]
         self.assertEqual(got, [("doc", "runbooks · linux"), ("doc", "Agent"), ("code", "Big"),
                                ("code", "internal/a"), ("node", "Node")])
-        groups = {g["id"]: g for g in dash.docs_index(rid)["groups"]}
-        self.assertEqual([g["id"] for g in dash.docs_index(rid)["groups"]], ["playbooks", "guides", "gwiki", "repo"])
-        self.assertEqual([i["path"] for i in groups["guides"]["items"]], ["linux.mdx.md", "README.md.md"])
-        self.assertEqual(groups["guides"]["items"][0]["tag"], "runbook")
-        self.assertEqual([i["path"] for i in groups["gwiki"]["items"]], ["Big.md", "a_test.go.md"])  # no tiny pages
-        self.assertIn("linux", dash.doc(rid, "guides", "linux.mdx.md")["text"])
+        self.assertIn("linux", dash.doc(rid, "guides", "linux.mdx.md")["text"])  # still readable for wiki links
+        idx = dash.docs_index(rid)  # but not listed: the repo's own docs and cluster pages aren't LFG docs
+        self.assertEqual((idx["root"], idx["branches"]), ({"items": [], "folders": []}, []))
+
+    def test_docs_tree_project_at_root_then_one_folder_per_branch(self):
+        rid = "docs-test-tree"
+        C.write_text(C.lfg_path("playbooks", rid, "landmines.md"), "# Landmines\n")
+        C.write_text(C.lfg_path("playbooks", rid, "onboarding.md"), "# Onboarding\n")
+        C.write_text(C.lfg_path("playbooks", rid, "add-a-route.md"), "# How to add a route\n")
+        root = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        C.write_json(C.lfg_path("graphs", rid, "state.json"), {"repo_root": root})
+        docs = C.repo_docs_dir(root)
+        self.assertEqual(docs, os.path.join(root, ".lfg", "docs"))  # in the repo, committed with the work
+        C.write_text(os.path.join(docs, "GLOSSARY.md"), "# Billing\n")
+        C.write_text(os.path.join(docs, "billing-retries.md"), "# How billing retries work\n")
+        C.write_text(os.path.join(docs, "adr", "0001-x.md"), "# Use Postgres\n")
+        C.write_text(os.path.join(C.branch_docs_dir(root, "feature/retry-v2"), "design.md"), "# Retry v2 design\n")
+        C.branch_docs_dir(root, "empty-branch")
+        idx = dash.docs_index(rid)
+        self.assertEqual([i["title"] for i in idx["root"]["items"]], ["Glossary", "How billing retries work"])
+        wiki, adr = idx["root"]["folders"]
+        self.assertEqual((wiki["name"], [i["title"] for i in wiki["items"]]),
+                         ("Wiki", ["Onboarding tour", "Landmines", "How to add a route"]))
+        self.assertEqual((adr["name"], adr["items"][0]["title"]), ("Decisions", "Use Postgres"))
+        self.assertEqual(len(idx["branches"]), 1)  # folders with no docs are left out
+        b = idx["branches"][0]
+        self.assertEqual((b["name"], b["items"][0]["title"]), ("feature/retry-v2", "Retry v2 design"))
+        self.assertIn("Retry v2", dash.doc(rid, "repo", b["items"][0]["path"])["text"])
+        self.assertEqual(dash.doc(rid, "repo", "branches/../../x.md")["text"], "not found")
 
     def test_community_pages_get_readable_names(self):
         rid = "docs-test-0003"

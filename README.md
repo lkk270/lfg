@@ -52,17 +52,28 @@ LFG is built so that installing it can't disturb how you already use Claude Code
 lfg packs                 # what's on, what's missing
 lfg add security          # gitleaks, semgrep, osv-scanner, trivy, hadolint, actionlint, zizmor
 lfg add shipcheck         # Docker, for the container ship check
-lfg add pentest           # Ollama + Strix + LuLu, for offline pentests (asks before any curl | bash)
+lfg add pentest           # experimental: Ollama + Strix + LuLu (~10 GB), offline pentests; asks before any curl | bash
 lfg add knowledge         # dev-graph and second-brain (local Omnigraph servers)
 lfg add linear            # Linear MCP (reuses yours if you have one)
-lfg add headroom          # experimental context-compression proxy, LFG repos only by default
+lfg add headroom          # experimental: third-party proxy that rewrites context to compress it; LFG repos only by default
+lfg add dictate           # LFG Dictate: hold Option+Space anywhere on your Mac to dictate (on-device)
 ```
 
 Or use the dashboard: **Settings → Claude Code → Feature packs**.
 
+## LFG Dictate
+
+Hold **Option+Space** anywhere on your Mac, in any app, speak, and let go: the words appear where your cursor is. Double-tap for hands-free dictation until you press the shortcut again or Esc.
+
+- **Off until you turn it on:** nothing is downloaded or asked for until `lfg add dictate` (or Settings → Claude Code → Feature packs). It then fetches Cactus Compute's on-device [Whistle](https://cactuscompute.com/blog/whistle) model (17 MB) into `~/.lfg/dictate` and asks macOS for Microphone and Accessibility permission.
+- **On-device:** audio never leaves the Mac, usage telemetry is switched off, and no audio or transcript is kept. **Clean up with Claude** is on by default: it sends the text (never audio) to Claude, with your Claude Code sign-in, to remove filler words, apply spoken corrections and fix punctuation. Turn it off (`lfg dictate cleanup off` or the Dictate row) to keep everything on the Mac.
+- **Both, every time:** the text is put where your cursor is and also left on your clipboard, so you can paste it again anywhere. Pasting is the default; choose **Type instead** for apps that block pasting.
+- While it listens, a small pill at the bottom of the screen shows bars that move with your voice; that's all.
+- Change the shortcut, paste/type and Clean up on the Dictate row in Settings → Claude Code, or with `lfg dictate shortcut right_option`, `lfg dictate insert type`, `lfg dictate cleanup on|off`. macOS lists it as **LFG Dictate** under Privacy & Security. `lfg remove dictate` deletes it all.
+
 ## Requirements
 
-macOS (Apple silicon or Intel), Python 3.9+, [Claude Code](https://claude.com/claude-code), and Homebrew for any tools you don't have yet. Linux support is on the roadmap.
+macOS only (Apple silicon or Intel), Python 3.9+, [Claude Code](https://claude.com/claude-code), and Homebrew for any tools you don't have yet. Linux support is on the roadmap.
 
 ## Everyday commands
 
