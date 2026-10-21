@@ -222,7 +222,7 @@ def api(view, q):
                 rec = R.need(repo, number)
                 p = next((x for x in rec["passes"] if x["n"] == int(_arg(q, "n") or 0)), None)
                 return {"steps": R.activity((p or {}).get("run", {}).get("log") or "")}
-            rec = R.load(repo, number)
+            rec = R.backfill(repo, number)
             for p in (rec or {}).get("passes") or []:
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
@@ -429,6 +429,8 @@ def review_action(what, body):
             return R.link_session(R.ref(repo, number), body.get("id"), on=body.get("on", True) is not False)
         if what == "review_discard":
             return R.discard(repo, number, int(body.get("pass") or 0))
+        if what == "review_ask":
+            return R.ask(repo, number, body.get("pass"), body.get("question"))
         if what == "review_rewrite":
             return R.rewrite(repo, number, str(body.get("id") or ""), body.get("instruction"))
         if what == "review_sessions":

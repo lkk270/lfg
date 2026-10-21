@@ -99,7 +99,8 @@ BUILTIN = [
      "Code\" line in PR bodies."},
 ] + [
     # How Claude talks to you: instructions only, never enforced. Condensed from Lee's answering rules.
-    {"id": pid, "group": STYLE, "title": title, "kind": "switch", "default": pid == "style_paste_blocks",
+    {"id": pid, "group": STYLE, "title": title, "kind": "switch",
+     "default": pid in ("style_paste_blocks", "style_ticket_titles"),
      "about": about, "text": text, "off_text": ""} for pid, title, about, text in (
         ("style_answer_first", "Lead with the answer",
          "Replies open with two or three sentences that are the answer, saying who, what, where and when. A fix says "
@@ -158,6 +159,11 @@ BUILTIN = [
          "No padding, no speculative follow-ups, no work I didn't ask for."),
         ("style_no_em_dash", "Use hyphens instead of em dashes", "No em dashes anywhere, in replies or in code.",
          "Never use em dashes, in prose or code. Use a hyphen, a colon, or restructure the sentence."),
+        ("style_ticket_titles", "Name tickets by ID and title",
+         "A Linear ticket is named by its ID and its title, e.g. ATO-4212 (Fix the export timeout), not the ID "
+         "alone.",
+         "When you mention a Linear ticket, give its ID and its title together, e.g. ATO-4212 (Fix the export "
+         "timeout), never the ID alone. Look the title up if you don't have it."),
         ("style_us_spelling", "Use US spelling", "US spelling in replies and in code.",
          "Use US spelling, in code and prose."),
         ("style_tables", "Use tables only to compare",

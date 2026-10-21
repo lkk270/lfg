@@ -1201,7 +1201,8 @@ class RepoNameTest(unittest.TestCase):
             C.write_json(C.lfg_path("graphs", rid, "state.json"), st)
         with mock.patch.object(dash, "repo_ids", lambda: ["api-aaaaaaaa", "api-bbbbbbbb", "web-cccccccc"]):
             names = {r["id"]: r["name"] for r in dash.repos()["repos"]}
-        self.assertEqual(names, {"api-aaaaaaaa": "api (one)", "api-bbbbbbbb": "api (two)", "web-cccccccc": "web"})
+        # web was never set up: it has no folder, so picking it couldn't narrow Sessions or PR reviews to it
+        self.assertEqual(names, {"api-aaaaaaaa": "api (one)", "api-bbbbbbbb": "api (two)"})
 
 
 class OnboardingTourTest(unittest.TestCase):
@@ -1328,6 +1329,25 @@ class RunChecksTest(unittest.TestCase):
             self.assertTrue(dash.run_detail(rid, "20261003-0000-now")["checking"])  # its pid is alive
             self.assertEqual(ui.run_checks(rid, "20261003-0000-now"), {"started": False, "running": True})
             self.assertEqual(len(started), 1)
+
+
+class OwnRunTest(unittest.TestCase):
+    def test_a_run_in_the_checkout_is_this_repos_own_with_its_title_and_worktree(self):
+        rid, root = "own-44444444", tempfile.mkdtemp()
+        run = os.path.join(C.runs_dir(root), "20261021-1249-ato-1-queue")
+        C.write_json(os.path.join(run, "run.json"),
+                     {"branch": "main", "worktrees": [{"path": root, "branch": "lee/x"}]})
+        C.write_text(os.path.join(run, "01-brief.md"),
+                     "# Brief: Queue runs, one at a time     Source: ATO-1     Lane hint: standard\n\n"
+                     "## Problem\nTwo at once.\n")
+        C.write_text(os.path.join(C.runs_dir(root), "CURRENT"), "20261021-1249-ato-1-queue")
+        with mock.patch.object(dash, "repo_ids", lambda: [rid]), mock.patch.object(dash, "repo_root", lambda r: root), \
+                mock.patch.object(dash, "checkouts", lambda r: [root]):
+            det = dash.run_detail(rid, "20261021-1249-ato-1-queue")
+        self.assertEqual((det["owner_name"], det["current"]), ("", True))  # not "filed under runs"
+        self.assertEqual(det["title"], "Queue runs, one at a time")
+        self.assertFalse(det["stages"]["tasks"])  # no tasks.json yet
+        self.assertEqual(det["worktrees"], [{"path": root, "branch": "lee/x", "here": True}])
 
 
 class KnowledgeDetailTest(unittest.TestCase):
@@ -1986,13 +2006,13 @@ class PrefsTest(unittest.TestCase):
         os.remove(S._rule_override("zz-api-style"))
         self.assertIn("removed these rules", self.hook("prompt", {"session_id": sid})[1])
 
-    def test_style_rules_render_when_on_and_only_paste_markers_start_on(self):
+    def test_style_rules_render_when_on_and_only_paste_markers_and_ticket_titles_start_on(self):
         P = self.P
         d = P.load()
         style = P.style_ids(d)
-        self.assertEqual(len(style), 14)
+        self.assertEqual(len(style), 15)
         on = {p for p in style if P.effective(None, d)[p] not in (False, "none")}
-        self.assertEqual(on, {"style_paste_blocks"})
+        self.assertEqual(on, {"style_paste_blocks", "style_ticket_titles"})
         text = P.render(P.effective(None, d), d)
         self.assertIn("## How Claude talks to you\n- Anything I have to paste", text)
         self.assertNotIn("em dashes", text)
@@ -2608,6 +2628,29 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(R.mark_echoes("o/r", 7, said=[rabbit]), 0)  # never twice
         with self.assertRaises(R.ReviewError):
             R._clean_finding(self.finding(echoes=[{"url": "x"}]), 1)
+
+    def test_an_older_review_gets_its_session_from_the_job_log_and_can_be_asked_about(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
+        log = os.path.join(self.tmp_dir(), "run.log")
+        with open(log, "w") as f:
+            f.write(json.dumps({"type": "system", "subtype": "init", "session_id": sid}))
+        C.write_json(R.job_path("o/r", 7), {"status": "done", "started": "2000-01-01T00:00:00", "cwd": "/w",
+                                             "log": log})
+        with self.assertRaises(R.ReviewError):
+            R.ask("o/r", 7, 1, "why?")  # nothing to ask yet
+        p = R.backfill("o/r", 7)["passes"][-1]
+        self.assertEqual((p["run"]["session_id"], p["run"]["cwd"]), (sid, "/w"))
+        answer = subprocess.CompletedProcess([], 0, stdout=json.dumps({"result": "Because the caller passes None."}))
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", return_value=answer) as run:
+            self.assertEqual(R.ask("o/r", 7, 1, "why is it a blocker?")["a"], "Because the caller passes None.")
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--resume") + 1], sid)
+        self.assertEqual(run.call_args[1]["cwd"], "/w")
+        self.assertNotIn("review save", cmd[cmd.index("--allowedTools") + 1])
+        self.assertEqual(R.load("o/r", 7)["passes"][-1]["chat"][0]["q"], "why is it a blocker?")
 
     def test_links_go_both_ways_and_a_session_can_be_linked_by_hand(self):
         R.link("o/api#7", "https://github.com/o/web/pull/9")

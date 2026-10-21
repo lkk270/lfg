@@ -70,6 +70,8 @@ def repos():
     for rid in repo_ids():
         st = C.read_json(C.lfg_path("graphs", rid, "state.json"), {}) or {}
         root = st.get("repo_root")
+        if not root:  # never set up (`lfg init`), only an empty runs folder: nothing to scope pages to
+            continue
         out.append({"id": rid, "root": root, "synced_at": st.get("synced_at"), "error": bool(st.get("last_error")),
                     "name": os.path.basename((root or "").rstrip("/")) or re.sub(r"-[0-9a-f]{8}$", "", rid),
                     "branch": C.git_branch(root) if root and os.path.isdir(root) else ""})
@@ -196,6 +198,7 @@ def _about(d, review=None):
         s = line.strip()
         if s.startswith("# ") and not title:
             title = s[2:].split(":", 1)[-1].strip() if s[2:].lower().startswith("brief:") else s[2:].strip()
+            title = re.split(r"\s{2,}(?=[A-Z][\w ]*:)", title)[0]  # "...  Source: ATO-1  Lane hint: x" on one line
         elif s.startswith("#"):
             if about:
                 break
@@ -356,14 +359,20 @@ def run_detail(rid, run):
     tasks = C.read_json(os.path.join(d, "tasks.json"), None)
     tl = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", []) if isinstance(tasks, dict) else []
     ready = C.read_json(os.path.join(d, "ready.json"), None) or {}
-    owner = os.path.basename(os.path.dirname(d))
+    # runs live in <checkout>/.lfg/runs/, so the folder above a run is "runs", not a repo: it's this repo's own run
+    # when it is one of this repo's, else the repo whose shared run it is
+    owner = rid if _run_dirs(rid).get(run) == d else next((o for o, x, _ in shared_runs(rid) if x == d), rid)
     summary = _run_summary(d)
     if owner != rid:  # opened from another repo it has tasks for: that repo's part of it
         tl = [t for t in _tasks(d) if repo_matches(rid, t.get("repo"))]
         summary = _for_repo(summary, tl, d, rid)
         ready = {}  # its checks ran in the owner's repo, on the owner's code
-    summary["current"] = owner == rid and C.read_text(C.lfg_path("runs", rid, "CURRENT")).strip() == run
-    return dict(summary, files=files, tasks_list=tl, owner_name=_repo_name(owner) if owner != rid else "",
+    summary["current"] = owner == rid and run in _current_runs(rid)
+    meta = C.read_json(os.path.join(d, "run.json"), {}) or {}
+    wts = [{"path": w.get("path"), "branch": w.get("branch") or "", "here": os.path.isdir(w.get("path") or "")}
+           for w in meta.get("worktrees") or [] if isinstance(w, dict) and w.get("path")]
+    return dict(summary, files=files, worktrees=wts, tasks_list=tl,
+                owner_name=_repo_name(owner) if owner != rid else "",
                 checks=[dict({k: c.get(k) for k in ("name", "cmd", "exit", "seconds")},
                              tail=str(c.get("tail") or "")[-2000:]) for c in ready.get("checks", [])])
 
