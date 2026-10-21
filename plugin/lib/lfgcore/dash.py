@@ -240,7 +240,9 @@ def _run_summary(d):
         ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
     return {"run": os.path.basename(d), "slug": meta.get("slug"), "created": meta.get("created"),
             "title": title, "about": about, "ticket": _ticket(d),
-            "branch": meta.get("branch") or "",
+            # the run starts on one branch and its work moves to the worktree `lfg worktree new` gives it
+            "branch": next((w["branch"] for w in reversed(meta.get("worktrees") or [])
+                            if isinstance(w, dict) and w.get("branch")), meta.get("branch") or ""),
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()),
             "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),
@@ -279,7 +281,7 @@ def _for_repo(summary, mine, d=None, rid=None):
     about the owner's work, so they neither count nor show here."""
     every = bool(mine) and all(t.get("passes") for t in mine)
     st = summary["stages"]
-    stages = {k: (bool(st.get(k)) if k in ("brief", "design") else k == "tasks" or (k == "build" and every))
+    stages = {k: (bool(st.get(k)) if k in ("brief", "design", "tasks") else k == "build" and every)
               for k, _, _ in STAGES}
     part = {}  # this repo's own stage results in the shared run (04-qa-portal.md, 05-secure-portal.json, ...)
     for key, _, pat in STAGES:

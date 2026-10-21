@@ -1348,6 +1348,13 @@ class OwnRunTest(unittest.TestCase):
         self.assertEqual((det["title"], det["ticket"]), ("Queue runs, one at a time", "ATO-1"))
         self.assertFalse(det["stages"]["tasks"])  # no tasks.json yet
         self.assertEqual(det["worktrees"], [{"path": root, "branch": "lee/x", "here": True}])
+        self.assertEqual(det["branch"], "lee/x")  # the work is on the worktree's branch, not where it started
+
+    def test_a_shared_run_ticks_the_task_list_only_when_there_is_one(self):
+        summary = {"stages": {"brief": True, "design": False, "tasks": False}}
+        self.assertFalse(dash._for_repo(summary, [])["stages"]["tasks"])
+        planned = dict(summary, stages=dict(summary["stages"], tasks=True))
+        self.assertTrue(dash._for_repo(planned, [])["stages"]["tasks"])
 
 
 class KnowledgeDetailTest(unittest.TestCase):
