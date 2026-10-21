@@ -1345,7 +1345,7 @@ class OwnRunTest(unittest.TestCase):
                 mock.patch.object(dash, "checkouts", lambda r: [root]):
             det = dash.run_detail(rid, "20261021-1249-ato-1-queue")
         self.assertEqual((det["owner_name"], det["current"]), ("", True))  # not "filed under runs"
-        self.assertEqual(det["title"], "Queue runs, one at a time")
+        self.assertEqual((det["title"], det["ticket"]), ("Queue runs, one at a time", "ATO-1"))
         self.assertFalse(det["stages"]["tasks"])  # no tasks.json yet
         self.assertEqual(det["worktrees"], [{"path": root, "branch": "lee/x", "here": True}])
 
