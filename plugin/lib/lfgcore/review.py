@@ -1,4 +1,5 @@
-"""PR reviews of other people's work: the review record, triage, posting and re-review state. Stdlib only.
+"""PR reviews, of other people's work or your own open PRs: the review record, triage, posting and re-review state.
+Stdlib only.
 
 One record per PR in ~/.lfg/reviews/<owner>__<repo>/<number>.json. Each review of the PR is a pass that remembers the
 commit it read, so a re-review can tell what changed since. Findings keep the GitHub comment id they were posted as,
@@ -340,6 +341,8 @@ def plan_post(rec, event, body="", lines=None):
 
 def post(repo, number, event, body="", dry_run=False):
     rec = need(repo, number)
+    if event != "comment" and rec.get("author") and rec["author"] == me():
+        raise ReviewError("this is your own PR: GitHub only takes a comment on it, not approve or request changes")
     plan = plan_post(rec, event, body)
     if dry_run:
         return dict(plan, dry_run=True)
@@ -498,20 +501,23 @@ def context(repo, number):
 
 # ---------------------------------------------------------------- the dashboard: queue, checkouts, background runs
 
-_QUEUE = {"ts": 0, "data": None}
+_QUEUE = {}
+SEARCHES = {"requested": "--review-requested=@me", "mine": "--author=@me"}
 
 
-def queue(max_age=120):
-    """Open PRs where GitHub has you as a requested reviewer (cached for max_age seconds)."""
+def queue(max_age=120, which="requested"):
+    """Open PRs where GitHub has you as a requested reviewer ("requested") or that you opened ("mine"), each search
+    cached for max_age seconds. GitHub never asks you to review your own PR, so "mine" is the only way to see them."""
     import time
-    if _QUEUE["data"] is not None and time.time() - _QUEUE["ts"] < max_age:
-        return _QUEUE["data"]
-    rows = gh_json(["search", "prs", "--review-requested=@me", "--state=open", "--limit", "50",
+    hit = _QUEUE.get(which)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    rows = gh_json(["search", "prs", SEARCHES[which], "--state=open", "--limit", "50",
                     "--json", "repository,number,title,author,url,updatedAt,isDraft"])
     data = [{"repo": r["repository"]["nameWithOwner"], "number": r["number"], "title": r["title"],
              "author": (r.get("author") or {}).get("login", ""), "url": r["url"], "updated": r["updatedAt"],
              "draft": r.get("isDraft", False)} for r in rows or []]
-    _QUEUE.update(ts=time.time(), data=data)
+    _QUEUE[which] = (time.time(), data)
     return data
 
 
@@ -814,28 +820,38 @@ def progress(repo, number, lines=8):
 
 
 def dashboard(fresh=False, only=None):
-    """Everything the Reviews page shows: the request queue, saved reviews, and running jobs. `only`: a main checkout;
-    keeps the PRs in its GitHub repos (all of them when it has no GitHub remote, with `no_remote` set)."""
-    try:
-        q, qwhy = queue(max_age=0 if fresh else 120), ""
-    except ReviewError as e:
-        q, qwhy = [], str(e)
+    """Everything the Reviews page shows: the request queue, your own open PRs, saved reviews, and running jobs.
+    `only`: a main checkout; keeps the PRs in its GitHub repos (all of them when it has no GitHub remote, with
+    `no_remote` set)."""
+    import concurrent.futures
+    lists = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = {w: pool.submit(queue, 0 if fresh else 120, w) for w in SEARCHES}
+    for w, j in jobs.items():
+        try:
+            lists[w] = (j.result(), "")
+        except ReviewError as e:
+            lists[w] = ([], str(e))
+    (q, qwhy), (mine, mwhy) = lists["requested"], lists["mine"]
+    yours = {(x["repo"], x["number"]) for x in mine}
+    q = [x for x in q if (x["repo"], x["number"]) not in yours]
     recs = all_records()
     names = github_names(only) if only else set()
     if names:
         q = [x for x in q if x["repo"].lower() in names]
+        mine = [x for x in mine if x["repo"].lower() in names]
         recs = [r for r in recs if r["repo"].lower() in names]
-    q = [dict(x) for x in q]  # the cached queue is shared by every filter: annotate copies
+    q, mine = [dict(x) for x in q], [dict(x) for x in mine]  # the cached lists are shared by every filter
     have = {(r["repo"], r["number"]): r for r in recs}
-    for x in q:
+    for x in q + mine:
         r = have.get((x["repo"], x["number"]))
         x["passes"] = len(r["passes"]) if r else 0
         x["job"] = job(x["repo"], x["number"])
-    import concurrent.futures
-    want = {(x["repo"], x["number"]) for x in q} | {(r["repo"], r["number"]) for r in recs if r.get("state") == "OPEN"}
+    want = {(x["repo"], x["number"]) for x in q + mine}
+    want |= {(r["repo"], r["number"]) for r in recs if r.get("state") == "OPEN"}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         st = dict(zip(want, pool.map(lambda k: gh_status(*k), want)))
-    for x in q:
+    for x in q + mine:
         x["gh"] = st.get((x["repo"], x["number"]))
     out = []
     for r in recs:
@@ -847,4 +863,5 @@ def dashboard(fresh=False, only=None):
                     "url": r.get("url"), "ticket": r.get("ticket"), "passes": len(r["passes"]),
                     "score": p.get("score"), "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
                     "job": job(r["repo"], r["number"]), "gh": st.get((r["repo"], r["number"]))})
-    return {"queue": q, "queue_why": qwhy, "reviews": out, "no_remote": bool(only) and not names}
+    return {"queue": q, "queue_why": qwhy, "mine": mine, "mine_why": mwhy, "reviews": out,
+            "no_remote": bool(only) and not names}
