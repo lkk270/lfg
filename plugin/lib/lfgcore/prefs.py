@@ -76,6 +76,14 @@ BUILTIN = [
          {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
          {"value": "squash", "label": "When I say so, squashed",
           "text": "Merge a PR only when I ask, and always as one squashed commit (`gh pr merge --squash`)."}]},
+    {"id": "delete_merged", "group": "GitHub", "title": "Delete the branch after merging", "kind": "switch",
+     "default": False, "enforce": True, "shown_if": ["merge_pr", "squash"],
+     "about": "On: when Claude merges a PR, it also deletes the PR's branch, on GitHub and on this computer "
+              "(`gh pr merge --delete-branch`). LFG looks up the PR's branch first and never deletes main, master, "
+              "qa or prod. Off: the branch stays.",
+     "text": "When you merge a PR, delete its branch too: `gh pr merge --squash --delete-branch`. Never when the PR's "
+             "branch is main, master, qa or prod.",
+     "off_text": "When you merge a PR, leave its branch: no `--delete-branch`."},
     {"id": "gh_default_branch", "group": "GitHub", "title": "Default branch of your repos", "kind": "switch",
      "default": False, "enforce": True,
      "about": "On: Claude may change which branch is the default on a GitHub repo you own "
@@ -539,6 +547,42 @@ def _my_open_pr(cwd, branch):
     return pr.get("state") == "OPEN" and bool(me) and (pr.get("author") or {}).get("login") == me
 
 
+MERGE_VALUE_FLAGS = {"-R", "--repo", "-b", "--body", "-F", "--body-file", "-t", "--subject", "-A",
+                     "--author-email", "--match-head-commit"}
+
+
+def _merge_target(argv):
+    """(PR selector or None, ["-R", repo] or [], deletes the branch?) for `gh pr merge ...`."""
+    pr, repo, delete, i = None, [], False, 3
+    while i < len(argv):
+        a = argv[i]
+        if a in MERGE_VALUE_FLAGS:
+            if a in ("-R", "--repo") and i + 1 < len(argv):
+                repo = ["-R", argv[i + 1]]
+            i += 2
+            continue
+        if a.startswith("--repo="):
+            repo = ["-R", a.split("=", 1)[1]]
+        elif a in ("-d", "--delete-branch") or (a.startswith("-") and not a.startswith("--") and "d" in a[1:]
+                                                 and a[1:].isalpha()):
+            delete = True
+        elif not a.startswith("-") and pr is None:
+            pr = a
+        i += 1
+    return pr, repo, delete
+
+
+def _pr_head(cwd, pr, repo):
+    """The branch a PR comes from, asked of GitHub ("" if gh can't say)."""
+    try:
+        cp = subprocess.run(["gh", "pr", "view"] + ([pr] if pr else []) + repo + ["--json", "headRefName", "-q",
+                                                                                  ".headRefName"],
+                            cwd=cwd or None, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return cp.stdout.strip() if cp.returncode == 0 else ""
+
+
 def _rewrite_allowed(values, cwd, amend_all=False, push=False):
     """None if amending (or force-pushing the amend) is within your rule here, else why not."""
     mode = values.get("rewrite", "never")
@@ -608,6 +652,18 @@ def check_command(cmd, values, cwd=None):
                 return "your rule for this session is that you merge PRs, not Claude"
             if "--squash" not in argv and "-s" not in argv:
                 return "PRs are merged as one squashed commit: add --squash"
+            pr, repo, delete = _merge_target(argv)
+            if delete or values.get("delete_merged"):
+                head = _pr_head(cwd, pr, repo)
+                if not head:
+                    return "LFG couldn't ask GitHub which branch this PR comes from, so it can't check the delete"
+                if head in PROTECTED_BRANCHES:
+                    if delete:
+                        return "this PR comes from %s, which is never deleted: drop --delete-branch" % head
+                elif delete and not values.get("delete_merged"):
+                    return "deleting the branch after a merge is off: drop --delete-branch"
+                elif not delete:
+                    return "your rule is to delete the PR's branch (%s) after merging: add --delete-branch" % head
         if base == "lfg" and argv[1:3] == ["prefs", "set"] and "--by-user" in argv:
             return "--by-user is only for your own terminal"
     return None

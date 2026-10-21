@@ -1890,6 +1890,34 @@ class PrefsTest(unittest.TestCase):
         C.write_json(self.P._state_path(), {"defaults": {"amend": True, "force_push": True}})
         self.assertEqual(self.P.effective()["rewrite"], "review")
 
+    def test_merging_deletes_the_branch_only_when_on_and_never_main_qa_or_prod(self):
+        P = self.P
+        v = dict(P.effective(), merge_pr="squash")
+        asked = []
+
+        def head(cwd, pr, repo):
+            asked.append((pr, repo))
+            return {"4": "lee/fix-login", "5": "qa"}.get(pr, "")
+        with mock.patch.object(P, "_pr_head", side_effect=head):
+            self.assertIsNone(P.check_command("gh pr merge 4 --squash", v))  # off: nothing to look up
+            self.assertEqual(asked, [])
+            self.assertIn("is off", P.check_command("gh pr merge 4 --squash --delete-branch", v))
+            v["delete_merged"] = True
+            self.assertIn("add --delete-branch", P.check_command("gh pr merge 4 --squash", v))
+            self.assertIsNone(P.check_command("gh pr merge 4 --squash --delete-branch", v))
+            self.assertIsNone(P.check_command("gh pr merge -R lkk270/lfg 4 -s -d", v))
+            self.assertEqual(asked[-1], ("4", ["-R", "lkk270/lfg"]))
+            self.assertIn("never deleted", P.check_command("gh pr merge 5 --squash -d", v))
+            self.assertIsNone(P.check_command("gh pr merge 5 --squash", v))  # from qa: merge, keep the branch
+            self.assertIn("couldn't ask GitHub", P.check_command("gh pr merge 9 --squash -d", v))
+        with self.assertRaises(PermissionError):  # turning it on loosens: yours, not Claude's
+            P.set_pref("delete_merged", True, by_agent=True)
+        P.set_pref("merge_pr", "squash")
+        P.set_pref("delete_merged", True)
+        with open(self.md) as f:
+            self.assertIn("--squash --delete-branch", f.read())
+        self.assertIn("delete_merged", [p["id"] for p in ui.api("prefs", {})["catalog"]])
+
     def test_defaults_file_and_hard_rules(self):
         P = self.P
         P.set_pref("merge_pr", "squash")
