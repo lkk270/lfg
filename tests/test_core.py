@@ -2159,6 +2159,17 @@ class SessionsTest(unittest.TestCase):
         d = get(90)
         self.assertEqual((d["spend"]["30d"], d["spend"]["range"]), (4.0, 8.0))
 
+    def test_the_usage_page_gets_the_review_sessions_and_waits_while_adding_up(self):
+        every = {"available": True, "days": [], "models": [], "unpriced": [], "reviews": [{"pr": "o/r#1"}],
+                 "spend": {"today": 0, "7d": 0, "30d": 0, "range": 0}}
+        with mock.patch.object(dash, "in_background", side_effect=lambda key, *a: every if key.startswith("all_usage")
+                               else {"available": False}):
+            d = dash.usage("x-00000000")
+        self.assertEqual((d["reviews"], d.get("pending")), ([{"pr": "o/r#1"}], None))
+        pending = {"available": False, "pending": True, "why": "adding up usage"}
+        with mock.patch.object(dash, "in_background", return_value=pending):
+            self.assertTrue(dash.usage("x-00000000")["pending"])
+
     def test_pr_review_sessions_and_their_subagents_count_as_reviews(self):
         u = {"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0,
              "cache_creation_input_tokens": 0}

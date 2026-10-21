@@ -1533,6 +1533,10 @@ function addRows(rs, keys) {
 }
 PAGES.usage = async () => {
   const [d, H] = await Promise.all([api("usage", { days: UR.days > 30 ? 90 : 30 }), api("headroom", { days: UR.days > 30 ? 90 : 30 })]);
+  if (d.pending) {
+    setTimeout(() => { if ((location.hash.slice(1) || "").startsWith("usage")) softRoute(); }, 2500);
+    return `${head("Usage", "What Claude Code used and what it would cost at API prices, across every session on this computer.")}<div class="loading">Adding up every session's usage… the first time after an update this reads every transcript again, which can take a minute.</div>`;
+  }
   const hrDay = Object.fromEntries((((H || {}).when || {}).days || []).map(x => [x.day, x]));
   const since = new Date(Date.now() - (UR.days - 1) * 864e5).toISOString().slice(0, 10);
   const days = (d.days || []).filter(x => x.day >= since).map(x => ({ ...x, hr_saved: (hrDay[x.day] || {}).saved || 0, hr_usd: (hrDay[x.day] || {}).usd || 0 }));
@@ -1542,6 +1546,8 @@ PAGES.usage = async () => {
   const hrTokens = days.reduce((a, x) => a + (x.hr_saved || 0), 0);
   const t = days.reduce((a, x) => { for (const k of ["input", "output", "cache_read", "cache_write"]) a[k] += x[k] || 0; return a; }, { input: 0, output: 0, cache_read: 0, cache_write: 0 });
   const hit = pct(t.cache_read, t.cache_read + t.input + t.cache_write);
+  /* models with no price, and how many tokens of theirs fall in the range shown (their dollars count as $0) */
+  const unpriced = (d.unpriced || []).map(m => ({ m, tokens: days.reduce((a, x) => { const v = (x.models || {})[m] || {}; return a + (v.input || 0) + (v.output || 0) + (v.cache_read || 0) + (v.cache_write_5m || 0) + (v.cache_write_1h || 0); }, 0) })).filter(x => x.tokens);
   const hr = d.headroom || {}, life = hr.lifetime || {}, sp = d.spend || {};
   const seg = (key, opts) => `<div class="seg inline">${opts.map(([v, l]) => `<label class="${UR[key] === v ? "on" : ""}"><input type="radio" name="ur-${key}" data-ur="${key}" value="${v}" ${UR[key] === v ? "checked" : ""}>${l}</label>`).join("")}</div>`;
   const rows = bucket(days, UR.by, rs => addRows(rs, ["input", "output", "cache_read", "cache_write", "usd", "hr_saved", "hr_usd"]));
@@ -1558,7 +1564,7 @@ PAGES.usage = async () => {
   return `${head("Usage", "What Claude Code used and what it would cost at API prices, across every session on this computer.")}
     ${filters_row}
     <div class="cols">${stat(`Cost, last ${UR.days} days`, usd(rangeUsd), "the work priced at Anthropic's API rates, from every session's log; on a subscription you pay your plan, not this")}${stat("Cost today", usd(sp.today || 0), "since midnight")}${stat(`PR reviews, last ${UR.days} days`, usd(revUsd), revs.length ? `${pct(revUsd, rangeUsd)}% of the cost, ${plural(revs.length, "review session")}` : "no review sessions")}${stat(`Saved by Headroom, last ${UR.days} days`, hrTokens ? usd(hrUsd) : "—", hrTokens ? `${compact(hrTokens)} tokens removed, by Headroom's count` : hrPending ? "checking…" : "nothing recorded")}</div>
-    ${(d.unpriced || []).length ? `<div class="callout warn">Not priced: <span class="mono">${esc(d.unpriced.join(", "))}</span>. LFG has no price for ${d.unpriced.length === 1 ? "this model" : "these models"}, so ${d.unpriced.length === 1 ? "its" : "their"} work counts as $0 and the costs here are low by that much.</div>` : ""}
+    ${unpriced.length ? `<div class="callout warn">Not priced: ${unpriced.map(x => `<span class="mono">${esc(x.m)}</span> (${compact(x.tokens)} tokens)`).join(", ")}. Claude Code logged this work without a model LFG has a price for, so it's left out of the dollar figures above, which are low by that much. The token figures include it.</div>` : ""}
     <div class="cols">${stat(`Tokens sent, last ${UR.days} days`, compact(t.input + t.cache_read + t.cache_write), `${hit}% reused from cache, which costs about a tenth as much`)}${stat(`Tokens written, last ${UR.days} days`, compact(t.output), "Claude's replies")}</div>
     ${section(UR.measure === "usd" ? `Cost per ${UR.by}` : `Tokens per ${UR.by}`, `<div class="box pad" id="usage-main">${chart}<div id="usage-detail"></div></div>`, UR.measure === "usd"
       ? `the solid bar is what that ${UR.by}'s work cost at Anthropic's API prices; the dashed part on top is what Headroom saved, so the whole bar is what it would have cost without Headroom${hrPending ? " (Headroom's numbers are still loading)" : ""}. Hover for numbers, click for the breakdown by model.`
