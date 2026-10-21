@@ -1440,7 +1440,8 @@ function wireSessions(root) {
     b.disabled = true;
     const r = await save("pref_remind", { session: b.dataset.sessRemind });
     if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
-    b.textContent = "Reminds it with your next message";
+    b.textContent = "Reminder set";
+    b.title = "Your style rules go out with the next message you send in that session";
   });
   $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
 }
