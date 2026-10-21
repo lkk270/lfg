@@ -242,6 +242,38 @@ def _known(sid):
     return sid
 
 
+def recent(sid, n=4):
+    """The last n turns of a session, oldest first, so you can tell which chat it is: what you typed and the start of
+    what Claude wrote back. Read on demand from the transcript; nothing is indexed."""
+    sid = _known(sid)
+    path = glob.glob(os.path.join(PROJECTS, "*", sid + ".jsonl"))[0]
+    turns = []
+    with open(path, "rb") as fh:
+        for ln in fh:
+            if b'"user"' not in ln and b'"assistant"' not in ln:
+                continue
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if ev.get("type") not in ("user", "assistant") or ev.get("isMeta") or ev.get("isSidechain"):
+                continue
+            content = (ev.get("message") or {}).get("content")
+            text = _prompt_text(content)
+            if ev.get("type") == "assistant":  # its own words, not reminders Claude Code put in the same message
+                text = next((x.get("text") or "" for x in content if isinstance(x, dict) and x.get("type") == "text"
+                             and not (x.get("text") or "").lstrip().startswith("<")), "") \
+                    if isinstance(content, list) else text
+            if ev.get("type") == "user":
+                said = _prompt_of(text)
+                if said:
+                    turns.append({"who": "you", "text": said[:400], "at": ev.get("timestamp") or ""})
+            elif text.strip() and turns and turns[-1]["who"] == "you":  # Claude's first words after your message
+                turns.append({"who": "claude", "text": text.strip()[:400], "at": ev.get("timestamp") or ""})
+            turns = turns[-2 * n:]
+    return {"id": sid, "turns": turns}
+
+
 def rename(sid, name):
     """Your own name for a session, shown in LFG only (Claude Code's /rename title is left alone). Empty clears it."""
     sid, p = _known(sid), prefs()

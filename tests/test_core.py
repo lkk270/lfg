@@ -2101,6 +2101,23 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(rows[a]["resume"], "cd /nowhere/app && claude --resume " + a)
         self.assertEqual(rows[a]["prompts"], 1)  # the meta line isn't a message you sent
 
+    def test_recent_messages_show_what_you_typed_and_how_claude_answered(self):
+        a = "%08d-0000-0000-0000-000000000000" % 5
+        self.write(a, "/nowhere/app", "main", "fix the login bug")
+        p = glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0]
+        note = {"type": "text", "text": "<system-reminder>r</system-reminder>"}
+        ev = [{"type": "assistant", "message": {"content": [note, {"type": "text", "text": "Found it in auth.py."}]}},
+              {"type": "assistant", "message": {"content": [{"type": "text", "text": "Fixed."}]}},
+              {"type": "user", "message": {"content": "<system-reminder>x</system-reminder>"}},
+              {"type": "user", "message": {"content": "now add a test"}}]
+        with open(p, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in ev))
+        turns = [(t["who"], t["text"]) for t in self.SS.recent(a)["turns"]]
+        self.assertEqual(turns, [("you", "fix the login bug"), ("claude", "Found it in auth.py."),
+                                 ("you", "now add a test")])
+        self.assertEqual(self.SS.recent(a, n=1)["turns"][-1]["text"], "now add a test")
+        self.assertFalse(ui.api("sessionrecent", {"id": ["../etc"]})["available"])
+
     def test_usage_counts_each_reply_once_and_prices_it(self):
         a = "%08d-0000-0000-0000-000000000000" % 1
         self.write(a, "/nowhere/app", "main", "hello")
@@ -2471,6 +2488,19 @@ class ReviewTest(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(C.lfg_path("graphs", "known-1"))
+
+    def test_sessions_about_a_pr_resume_and_name_the_dashboards_runs(self):
+        run = "Read %s/SKILL.md and follow it to review o/r#7. You are running unattended" % os.path.join(
+            ui.C.PLUGIN_ROOT, "skills", "review")
+        rows = ui.pr_sessions([{"id": "a" * 8, "title": run, "cwd": "/x/r", "path": "p1"},
+                               {"id": "b" * 8, "title": "/review-pr 7", "cwd": "/x/r", "path": "p2"}])
+        self.assertEqual([(r["dashboard"], r["title"]) for r in rows],
+                         [(True, "Review run from the dashboard"), (False, "/review-pr 7")])
+        self.assertEqual(rows[0]["resume"], "cd /x/r && claude --resume " + "a" * 8)
+        with open(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        self.assertIn("Copy summary and findings", js)
+        self.assertIn("## Approach notes", js)
 
     def test_progress_reads_tool_calls_and_result(self):
         log = os.path.join(tempfile.mkdtemp(), "x.log")
