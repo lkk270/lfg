@@ -1201,7 +1201,8 @@ class RepoNameTest(unittest.TestCase):
             C.write_json(C.lfg_path("graphs", rid, "state.json"), st)
         with mock.patch.object(dash, "repo_ids", lambda: ["api-aaaaaaaa", "api-bbbbbbbb", "web-cccccccc"]):
             names = {r["id"]: r["name"] for r in dash.repos()["repos"]}
-        self.assertEqual(names, {"api-aaaaaaaa": "api (one)", "api-bbbbbbbb": "api (two)", "web-cccccccc": "web"})
+        # web was never set up: it has no folder, so picking it couldn't narrow Sessions or PR reviews to it
+        self.assertEqual(names, {"api-aaaaaaaa": "api (one)", "api-bbbbbbbb": "api (two)"})
 
 
 class OnboardingTourTest(unittest.TestCase):
@@ -1328,6 +1329,25 @@ class RunChecksTest(unittest.TestCase):
             self.assertTrue(dash.run_detail(rid, "20261003-0000-now")["checking"])  # its pid is alive
             self.assertEqual(ui.run_checks(rid, "20261003-0000-now"), {"started": False, "running": True})
             self.assertEqual(len(started), 1)
+
+
+class OwnRunTest(unittest.TestCase):
+    def test_a_run_in_the_checkout_is_this_repos_own_with_its_title_and_worktree(self):
+        rid, root = "own-44444444", tempfile.mkdtemp()
+        run = os.path.join(C.runs_dir(root), "20261021-1249-ato-1-queue")
+        C.write_json(os.path.join(run, "run.json"),
+                     {"branch": "main", "worktrees": [{"path": root, "branch": "lee/x"}]})
+        C.write_text(os.path.join(run, "01-brief.md"),
+                     "# Brief: Queue runs, one at a time     Source: ATO-1     Lane hint: standard\n\n"
+                     "## Problem\nTwo at once.\n")
+        C.write_text(os.path.join(C.runs_dir(root), "CURRENT"), "20261021-1249-ato-1-queue")
+        with mock.patch.object(dash, "repo_ids", lambda: [rid]), mock.patch.object(dash, "repo_root", lambda r: root), \
+                mock.patch.object(dash, "checkouts", lambda r: [root]):
+            det = dash.run_detail(rid, "20261021-1249-ato-1-queue")
+        self.assertEqual((det["owner_name"], det["current"]), ("", True))  # not "filed under runs"
+        self.assertEqual(det["title"], "Queue runs, one at a time")
+        self.assertFalse(det["stages"]["tasks"])  # no tasks.json yet
+        self.assertEqual(det["worktrees"], [{"path": root, "branch": "lee/x", "here": True}])
 
 
 class KnowledgeDetailTest(unittest.TestCase):

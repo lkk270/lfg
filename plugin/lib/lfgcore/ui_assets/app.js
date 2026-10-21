@@ -24,8 +24,8 @@ function ago(ts) {
   const s = (Date.now() - new Date(ts).getTime()) / 1000;
   if (isNaN(s)) return esc(ts);
   if (s < 60) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + " min ago";
-  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
   const d = Math.floor(s / 86400);
   return d === 1 ? "yesterday" : d + " days ago";
 }
@@ -89,6 +89,17 @@ const dot = t => `<span class="dot ${t}"></span>`;
 const fmtWhy = w => esc(w || "").replace(/`([^`]+)`/g, "<code>$1</code>");
 
 /* Pipeline steps, in the words a person uses */
+const STEP_WHY = {
+  brief: "/lfg:grill or /lfg:lfg writes up the idea: problem, users, acceptance criteria (01-brief.md)",
+  design: "/lfg:plan designs the change from the code graphs (02-design.md). Small changes can skip it",
+  tasks: "/lfg:plan breaks the plan into tickets with tests agreed up front (tasks.json)",
+  build: "/lfg:build writes the code, test first, one note per ticket (03-build-*.md)",
+  qa: "The QA agent proves each acceptance criterion with a test (04-qa.md)",
+  gate: "/lfg:check runs lint, types, tests and build like CI (ready.json)",
+  secure: "/lfg:secure vets new packages, URLs and security-sensitive code (05-secure.json)",
+  review: "/lfg:expert reviews standards, spec and blast radius (06-review.json)",
+  ship: "/lfg:ship builds, runs and smoke-tests it in Docker (07-shipcheck.json)",
+  packet: "/lfg:ship writes the commit message and PR body for you (COMMIT_MSG.md)" };
 const STEP = { brief: "Idea written up", design: "Plan", tasks: "Task list", build: "Built", qa: "Tested", gate: "Checks run",
   secure: "Security check", review: "Code review", ship: "Ship check", packet: "Ready to commit" };
 const NEXT = { brief: "write up the idea", design: "make a plan", tasks: "split it into tasks", build: "build it", qa: "test it",
@@ -1143,7 +1154,8 @@ async function runDetail(run) {
   if (d.available === false) return unavailable(d);
   const p = runPlace(all.stages, d.stages, d), attn = runAttention(d);
   const stuck = { "fix-checks": "gate", "fix-review": "review", "fix-block": "review", "fix-security": "secure", "fix-ship": "ship" }[p.next];
-  const steps = `<div class="steps">${all.stages.map(([k]) => `<span class="${k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : ""}">${esc(STEP[k] || k)}</span>`).join("")}</div>`;
+  const keys = all.stages.map(([k]) => k), last = keys.reduce((m, k, i) => (d.stages[k] ? i : m), -1);
+  const steps = `<div class="steps">${keys.map((k, i) => { const skip = !d.stages[k] && i < last && k !== p.next; return `<span class="${k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : skip ? "skipped" : ""}" title="${esc((skip ? "Skipped. " : "") + (STEP_WHY[k] || ""))}">${esc(STEP[k] || k)}</span>`; }).join("")}</div>`;
   const files = d.files.filter(f => fileName(f.name)).map(f => ({ ...f, run, label: fileName(f.name) }))
     .sort((a, b) => fileRank(a.name) - fileRank(b.name) || a.name.localeCompare(b.name));
   const tasks = d.tasks_list.length ? `<div class="box items">${d.tasks_list.map(taskItem).join("")}</div>` : "";
@@ -1159,6 +1171,7 @@ async function runDetail(run) {
     ${attn.length ? section("Needs your attention", `<div class="callout ${attn.some(a => a[0] === "bad") ? "bad" : "warn"}"><ul class="attn">${attn.map(([tn, text]) => `<li>${dot(tn)}<span class="grow">${esc(text)}</span></li>`).join("")}</ul></div>`) : ""}
     ${tasks ? section("Tasks", tasks, `${d.tasks.done} of ${d.tasks.total} done · click one for its steps`) : ""}
     ${checks ? section("Checks", d.ready === "stale" && d.checks.length ? `<p class="muted small">These ran ${ago(d.checked_at)}, before the latest work on this run, so they may no longer hold. Run <code>/lfg:check</code> for a fresh result.</p>${checks}` : checks, d.ready === "stale" ? "out of date" : "click a failed one to see why") : d.owner_name ? section("Checks", `<p class="muted small">This run's checks run in ${esc(d.owner_name)}, on its code, so they aren't shown here.</p>`) : ""}
+    ${(d.worktrees || []).length ? section("Worktrees", `<div class="box"><ul class="list">${d.worktrees.map(w => `<li><span class="grow mono small">${esc(w.path)}</span><span class="muted small mono">${esc(w.branch)}</span>${w.here ? "" : ' <span class="tag">removed</span>'}</li>`).join("")}</ul></div>`, 'where this run\'s code is being written. <a href="#environment">Environment</a> lists every worktree') : ""}
     ${files.length ? section("Documents", `<div class="box"><ul class="list">${files.map(f => `<li><a href="#" class="grow" data-run-file='${esc(JSON.stringify([f.run, f.name]))}'>${esc(f.label)}</a><span class="muted small nowrap" title="${esc(f.mtime)}">${ago(f.mtime.replace(" ", "T"))}</span></li>`).join("")}</ul></div>`) : ""}`;
 }
 

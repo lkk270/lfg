@@ -180,6 +180,8 @@ a.now:hover { background: var(--soft-2); }
 .steps .next { color: var(--blue-tx); background: var(--blue-bg); box-shadow: none; font-weight: 500; }
 .steps .stuck { color: var(--red-tx); background: var(--red-bg); box-shadow: none; font-weight: 500; }
 .steps .stuck::before { content: "! "; }
+.steps .skipped { font-style: italic; }
+.steps .skipped::after { content: " (skipped)"; }
 
 /* lists */
 .list { list-style: none; margin: 0; padding: 0; }
