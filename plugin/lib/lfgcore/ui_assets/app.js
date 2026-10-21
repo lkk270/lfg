@@ -1239,23 +1239,40 @@ PAGES.code = async () => {
     ${section("Explore", `<div class="row"><button class="btn" data-view="architecture" data-target="explore">Map of the code</button><button class="btn" data-view="callflow" data-target="explore">How calls flow</button><button class="btn" data-view="code" data-target="explore">Detailed code graph</button><button class="btn" data-view="health" data-target="explore">Health report</button></div><div id="explore"></div>`)}`;
 };
 
-const DOC_SHOWN = 12;
+/* Docs: a tree. Project docs (LFG's wiki, glossary, decisions, guides you asked for) at the root, then one folder
+   per branch for docs about that branch's work. */
 PAGES.docs = async arg => {
   const d = await api("docs");
   if (d.available === false) return unavailable(d);
   const parts = (arg || "").split("/");
   let src = parts[0], path = decodeURIComponent(parts.slice(1).join("/"));
-  const first = d.groups.find(g => g.items.length);
-  if (!src && first) { src = first.id; path = first.items[0].path; }
-  const nav = d.groups.filter(g => g.items.length).map(g => `<div class="grp"><span>${esc(g.title)}</span><span>${g.items.length}</span></div>
-    <div data-grp="${esc(g.id)}">${g.items.map((it, i) => `<a href="#docs/${esc(g.id)}/${encodeURIComponent(it.path)}" class="${g.id === src && it.path === path ? "on" : ""}${i >= DOC_SHOWN && !(g.id === src && it.path === path) ? " extra" : ""}" title="${esc(it.title)}">${esc(it.title)}</a>`).join("")}${g.items.length > DOC_SHOWN ? `<a href="#" class="more" data-doc-more>Show all ${g.items.length}</a>` : ""}</div>`).join("");
-  let body = empty("No docs yet", "LFG writes them from the code map automatically. They'll appear after the next update.");
+  const all = t => t.items.concat(...t.folders.map(f => f.items));
+  const every = all(d.root).concat(...d.branches.map(all));
+  if (!src && every.length) {
+    const cur = d.branches.find(b => b.name === state.branch);
+    const pick = (d.root.folders[0] || {}).items?.[0] || (cur && all(cur)[0]) || every[0];
+    src = pick.src; path = pick.path;
+  }
+  const on = it => it.src === src && it.path === path;
+  const link = it => `<a href="#docs/${esc(it.src)}/${encodeURIComponent(it.path)}" class="${on(it) ? "on" : ""}" title="${esc(it.title)}">${esc(it.title)}</a>`;
+  const folder = (name, items, tag, open) => `<details class="doc-folder"${open || items.some(on) ? " open" : ""}><summary>${icon("folder")}<span class="grow">${esc(name)}</span>${tag || ""}<span class="count">${items.length}</span></summary>${items.map(link).join("")}</details>`;
+  const fold = (f, openAuto) => folder(f.name, f.items, f.generated ? '<span class="tag" title="Written by LFG from the code map">auto</span>' : "", openAuto && f.generated);
+  const tree = (t, openAuto) => t.folders.filter(f => f.generated).map(f => fold(f, openAuto)).join("") + t.items.map(link).join("") + t.folders.filter(f => !f.generated).map(f => fold(f)).join("");
+  const STATE = { current: "current", default: "default", merged: "merged", deleted: "deleted" };
+  const rootHtml = tree(d.root, true);
+  const branchHtml = d.branches.map(b => folder(b.name, all(b), b.state ? `<span class="tag${b.state === "current" ? " blue" : ""}">${STATE[b.state]}</span>` : "", b.name === state.branch || b.state === "current")).join("");
+  const nav = `<div class="grp"><span>Project</span></div>${rootHtml || '<p class="meta small pad">Nothing yet.</p>'}
+    <div class="grp"><span>Branches</span></div>${branchHtml || '<p class="meta small pad">No branch docs yet.</p>'}`;
+  const how = `<p>Ask Claude in a repo where LFG is on, for example <i>"write a doc explaining how billing retries work"</i>. Docs about the whole project go to the top; docs about what you're building on a branch (<i>"write up this branch's design"</i>) go in that branch's folder.</p>
+    <p class="meta small">Project: <code>${esc(d.paths.project)}</code><br>Branches: <code>${esc(d.paths.branches)}/&lt;branch&gt;</code></p>`;
+  let body = `<div class="readable">${empty("No docs yet", "LFG's wiki (onboarding tour, landmines, test gaps) appears after the code map is built.")}${how}</div>`;
   if (src && path) {
     const doc = await api("doc", { src, path });
     body = doc.text === "not found" ? empty("Document not found", "") : `<div class="md">${md(doc.text, true)}</div>`;
   }
-  return `${head("Docs", "Guides and runbooks written from the code, kept up to date as it changes.")}
-    <div class="docs"><div class="box doc-nav"><div class="table-tools"><input type="search" id="doc-filter" placeholder="Search docs…"></div>${nav}</div>
+  return `${head("Docs", "LFG's wiki for this project and the docs you asked LFG to write: project-wide at the top, then one folder per branch.")}
+    <div class="docs"><div class="box doc-nav"><div class="table-tools"><input type="search" id="doc-filter" placeholder="Search docs…"></div>${nav}
+    <details class="doc-help"><summary>How to add a doc</summary>${how}</details></div>
     <div class="box" id="doc-body" data-src="${esc(src || "")}" data-path="${esc(path || "")}">${body}</div></div>`;
 };
 
@@ -1452,6 +1469,7 @@ const ICON = {
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
   code: "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
+  folder: "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z",
   knowledge: "M4 5.5C6.5 4 9.5 4 12 6c2.5-2 5.5-2 8-.5V19c-2.5-1.5-5.5-1.5-8 .5-2.5-2-5.5-2-8-.5zM12 6v13.5",
   usage: "M4 20V10M10 20V4M16 20v-6M2 20h20",
   skills: "M13 2 4 14h7l-1 8 9-12h-7z",
@@ -1544,8 +1562,15 @@ function wireDocs() {
     location.hash = `#docs/${body.dataset.src}/${encodeURIComponent(parts.join("/"))}`;
   });
   const f = $("#doc-filter");
-  if (f) f.oninput = () => { const q = f.value.toLowerCase(); $(".doc-nav").classList.toggle("searching", !!q); $$(".doc-nav a:not(.more)").forEach(a => (a.style.display = !q || a.textContent.toLowerCase().includes(q) ? "" : "none")); };
-  $$("[data-doc-more]").forEach(m => m.onclick = e => { e.preventDefault(); m.parentNode.classList.add("all"); });
+  if (f) f.oninput = () => {
+    const q = f.value.toLowerCase();
+    $$(".doc-nav a").forEach(a => (a.style.display = !q || a.textContent.toLowerCase().includes(q) ? "" : "none"));
+    $$(".doc-folder").forEach(dt => {
+      const hit = $$("a", dt).some(a => a.style.display !== "none") || dt.querySelector("summary").textContent.toLowerCase().includes(q);
+      dt.style.display = !q || hit ? "" : "none";
+      if (q && hit) { dt.dataset.wasOpen ??= dt.open ? "1" : ""; dt.open = true; } else if (!q && "wasOpen" in dt.dataset) { dt.open = !!dt.dataset.wasOpen; delete dt.dataset.wasOpen; }
+    });
+  };
   const on = $(".doc-nav a.on");
   if (on) on.scrollIntoView({ block: "nearest" });
 }

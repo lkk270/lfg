@@ -224,8 +224,23 @@ def need_repo():
 
 
 def repo_docs_dir(rid):
+    """Docs about the whole project (glossary, ADRs, guides the user asked for): the root of the Docs page."""
     d = lfg_path("repos", rid, "docs")
     ensure_dir(os.path.join(d, "adr"))
+    return d
+
+
+def branch_slug(branch):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", branch).strip("-.") or "branch"
+
+
+def branch_docs_dir(rid, branch):
+    """Docs about the work on one branch: DOCS/branches/<branch>/, with the real branch name kept in `.branch`
+    (folder names can't hold every character a branch name can)."""
+    d = ensure_dir(os.path.join(lfg_path("repos", rid, "docs"), "branches", branch_slug(branch)))
+    marker = os.path.join(d, ".branch")
+    if not os.path.exists(marker):
+        write_text(marker, branch + "\n")
     return d
 
 

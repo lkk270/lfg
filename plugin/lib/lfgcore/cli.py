@@ -495,6 +495,11 @@ def cmd_repo(a):
         print(C.main_root(root))
     elif a.action == "graph":
         print(os.path.join(C.main_root(root), "graphify-out", "graph.json"))
+    elif a.action == "docs" and a.branch is not None:
+        branch = a.branch or C.git_branch(root)
+        if not branch or branch.startswith("detached@"):
+            C.die("not on a branch: write it to the project docs (`lfg repo docs`) or pass --branch <name>", 2)
+        print(C.branch_docs_dir(rid, branch))
     else:
         print(C.repo_docs_dir(rid) if a.action == "docs" else rid)
     return 0
@@ -846,6 +851,8 @@ def main(argv=None):
     rp = sp.add_parser("repo")
     rp.add_argument("action", choices=["docs", "id", "root", "graph"],
                     help="root: main checkout (also from a worktree); graph: graphify graph.json path")
+    rp.add_argument("--branch", nargs="?", const="", default=None, metavar="NAME",
+                    help="docs: the folder for docs about this branch's work (the checked-out branch by default)")
     la = sp.add_parser("lane")
     la.add_argument("--json", action="store_true")
     ga = sp.add_parser("gate")

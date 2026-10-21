@@ -122,6 +122,10 @@ CONTEXT = [
     "guard is enforced in code; if it blocks something CLAUDE.md asks for, tell the user instead of working around it. "
     "LFG's skills are named `lfg:<name>`: when an LFG skill or agent says to run `/grill`, `/ship` and so on, use the "
     "`lfg:` one, never a same-named skill from elsewhere.",
+    "When the user asks for a doc (an explainer, guide, design write-up, notes) and doesn't name a path in the repo, "
+    "write it as Markdown with a `# Title` into LFG's docs, not the repo: about the whole project -> the dir "
+    "`lfg repo docs` prints; about this branch's work -> the dir `lfg repo docs --branch` prints. They show on the "
+    "dashboard's Docs page.",
     "LFG never creates a Linear issue on its own: ask first with the exact title and text. `lfg issue sync` writes "
     "only to the local dev-graph.",
     "Remember: when the user states a decision, constraint or preference, or work uncovers a root cause or landmine, "
