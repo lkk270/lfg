@@ -1331,6 +1331,25 @@ class RunChecksTest(unittest.TestCase):
             self.assertEqual(len(started), 1)
 
 
+class UpdateBannerTest(unittest.TestCase):
+    def test_a_check_from_before_the_last_install_is_not_shown(self):
+        from lfgcore import dash, updates as U
+        before = {"available": True, "not_installed": 3, "checked_at": "2026-10-21T16:45:00-07:00"}
+        after = {"available": True, "not_installed": 0, "checked_at": "2026-10-21T16:47:00-07:00"}
+        dash._CACHE["update"] = (time.time(), before)
+        self.addCleanup(dash.forget, "update")
+        done = {"status": "done", "ended": "2026-10-21T16:46:19-07:00"}
+        with mock.patch.object(U, "job", return_value=done), mock.patch.object(U, "fix_job", return_value=None), \
+                mock.patch.object(U, "check", return_value=after):
+            d = ui.api("update", {})
+            for _ in range(50):  # the fresh check runs in the background
+                if not d.get("pending"):
+                    break
+                time.sleep(0.05)
+                d = ui.api("update", {})
+        self.assertEqual(d["not_installed"], 0)
+
+
 class OwnRunTest(unittest.TestCase):
     def test_a_run_in_the_checkout_is_this_repos_own_with_its_title_and_worktree(self):
         rid, root = "own-44444444", tempfile.mkdtemp()
