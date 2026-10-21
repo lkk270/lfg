@@ -15,6 +15,9 @@ from unittest import mock
 
 _TMP_HOME = tempfile.mkdtemp(prefix="lfg-test-home-")
 os.environ["LFG_HOME"] = _TMP_HOME
+# commits in the throwaway repos never sign: 1Password would wait on you and the test run would time out
+os.environ.update(GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="commit.gpgsign", GIT_CONFIG_VALUE_0="false",
+                  GIT_CONFIG_KEY_1="tag.gpgsign", GIT_CONFIG_VALUE_1="false")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "lib"))
 
 from lfgcore import common as C  # noqa: E402
