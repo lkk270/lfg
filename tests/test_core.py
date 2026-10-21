@@ -2659,6 +2659,25 @@ class ReviewTest(unittest.TestCase):
         self.assertNotIn("review save", cmd[cmd.index("--allowedTools") + 1])
         self.assertEqual(R.load("o/r", 7)["passes"][-1]["chat"][0]["q"], "why is it a blocker?")
 
+    def test_a_prs_linear_ticket_comes_from_its_branch_title_or_description(self):
+        self.assertEqual(R.ticket_of("", "", "lee/ato-4223-queue-terraform-runs"), "ATO-4223")
+        self.assertEqual(R.ticket_of("ATO-12: fix it"), "ATO-12")
+        self.assertEqual(R.ticket_of("Bump UTF-8 handling", "Fixes CVE-2024-1234. Closes ENG-7"), "ENG-7")
+        self.assertEqual(R.ticket_of("Use SHA-256", "", "feat/style-prefs"), "")
+        self.assertEqual(R.ticket_of("(ato-4251) Remove unused code", "Part of ATO-4109"), "ATO-4251")
+        self.assertEqual(R.ticket_of("chore(sync): main to qa", "ATO-1 fix\nATO-2 feature"), "")  # lists many
+        self.assertEqual(R.ticket_of("ATO-9 title", "", "lee/ato-4223-x"), "ATO-4223")  # the branch wins
+
+    def test_a_tickets_prs_are_the_open_ones_that_name_it(self):
+        row = lambda n, title, body="": {"repository": {"nameWithOwner": "o/api"}, "number": n, "title": title,  # noqa: E731
+                                          "author": {"login": "kim"}, "url": "u", "updatedAt": "t", "body": body}
+        found = [row(1, "ATO-7: backend"), row(2, "Frontend", "Linear: ATO-7"), row(3, "ATO-70 something else")]
+        with mock.patch.object(R, "gh_json", return_value=found) as gh:
+            self.assertEqual([x["number"] for x in R.ticket_prs("ato-7")], [1, 2])
+        self.assertEqual(gh.call_args[0][0][2], "ATO-7")
+        with self.assertRaises(R.ReviewError):
+            R.ticket_prs("not a ticket")
+
     def test_links_go_both_ways_and_a_session_can_be_linked_by_hand(self):
         R.link("o/api#7", "https://github.com/o/web/pull/9")
         self.assertEqual(R.linked("o/web#9"), ["o/api#7"])

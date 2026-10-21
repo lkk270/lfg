@@ -1990,6 +1990,8 @@ PAGES.prs = async arg => {
   state.prMethod = d.method;
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
   state.prPick = state.prPick || new Set();
+  state.prTicket = Object.fromEntries([...(d.queue || []), ...(d.mine || []), ...(d.reviews || [])].filter(x => x.ticket).map(x => [prRef(x), x.ticket]));
+  state.ticketTitles = d.ticket_titles || {};
   const qcols = [
     { k: "pick", label: "", html: x => `<input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} title="Pick several PRs, for example a backend and its frontend, and review them together" aria-label="Pick ${esc(prRef(x))}">` },
     { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}${linkTags(x.linked)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
@@ -1999,7 +2001,7 @@ PAGES.prs = async arg => {
   const qopts = { onRow: x => (location.hash = prHash(x)) };
   const rcols = [
     qcols[0],
-    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(x.ticket)}` : ""}</div><div class="sub">${x.gh ? ghTag(x.gh) : ""}${linkTags(x.linked)}</div>` },
+    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(ticketName(x.ticket))}` : ""}</div><div class="sub">${x.gh ? ghTag(x.gh) : ""}${linkTags(x.linked)}</div>` },
     { k: "state", label: "Where it is", html: x => `${tallyLine(x)}${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}`, sort: x => (x.posted ? 2 : (x.tally || {}).pending ? 0 : 1) },
     { k: "score", label: "Score", num: true },
     { k: "passes", label: "Reviews", num: true },
@@ -2009,6 +2011,7 @@ PAGES.prs = async arg => {
     ${d.no_remote && !allRepos("prs") ? `<p class="muted small">${esc(repoName())} has no GitHub remote, so this shows PRs from every repo.</p>` : ""}
     ${lock}
     <div class="callout" id="pr-pickbar" hidden></div>
+    ${ticketSection(d, unlocked)}
     ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { ...qopts, emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
     ${section("Your open PRs", d.mine_why ? unavailable({ why: d.mine_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.mine, qcols, { ...qopts, emptyTitle: "No open PRs", emptyBody: "You have no open pull requests here." })}</div>`, "review your own work before others do; on your own PR you can only comment. Open one to link it to a session or a session group")}
     ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}
@@ -2045,6 +2048,45 @@ function wireMethod(root) {
   if (reset) reset.onclick = () => put([]);
   if (sessionStorage.getItem("lfg.methodOpen")) { box.open = true; sessionStorage.removeItem("lfg.methodOpen"); }
 }
+/* A Linear ticket as Lee's rules want it named: its id and, when LFG has it, its title. */
+const ticketName = t => `${t}${(state.ticketTitles || {})[t] ? ` (${state.ticketTitles[t]})` : ""}`;
+/* Open PRs grouped by the Linear ticket their branch, title or description names, to review a ticket's PRs at once. */
+function ticketSection(d, unlocked) {
+  const seen = new Set(), by = new Map();
+  for (const x of [...(d.mine || []), ...(d.queue || []), ...(d.reviews || []).filter(r => r.open)]) {
+    if (!x.ticket || seen.has(prRef(x))) continue;
+    seen.add(prRef(x));
+    (by.get(x.ticket) || by.set(x.ticket, []).get(x.ticket)).push(x);
+  }
+  const groups = [...by].sort((a, b) => b[1].length - a[1].length || b[0].localeCompare(a[0])).map(([t, prs]) => `<details class="item" ${prs.length > 1 ? "open" : ""}><summary><span class="grow"><b class="mono">${esc(t)}</b> ${esc((state.ticketTitles || {})[t] || "")} <span class="muted small">${plural(prs.length, "open PR")}</span></span></summary>
+    <ul class="items">${prs.map(x => `<li><input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} aria-label="Pick ${esc(prRef(x))}"><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.passes ? ` · ${plural(x.passes, "review")}` : ""}</div></div><a class="small" href="${esc(prHash(x))}">Open</a></li>`).join("")}</ul>
+    <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button><button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div></details>`).join("");
+  return section("By Linear ticket", `${groups ? `<div class="box">${groups}</div>` : ""}
+    <div class="row mt"><input type="text" id="tk-id" class="mono" placeholder="ATO-4223" ${unlocked ? "" : "disabled"}><button class="btn small" id="tk-go" ${unlocked ? "" : "disabled"}>Find the ticket's PRs</button></div>`,
+    "open PRs whose branch, title or description names a Linear ticket, from every repo");
+}
+/* A ticket's open PRs from GitHub, ticked, to review together. */
+async function ticketFind(t) {
+  t = String(t || "").trim().toUpperCase();
+  if (!t) return;
+  openDrawer(`Open PRs on ${t}`, '<div class="skeleton"></div>');
+  const d = await api("ticketprs", { ticket: t });
+  if (d.available === false) return openDrawer(`Open PRs on ${t}`, `<p class="muted">${esc(d.why)}</p>`);
+  const prs = d.prs || [];
+  if (d.title) state.ticketTitles = { ...(state.ticketTitles || {}), [t]: d.title };
+  openDrawer(`Open PRs on ${ticketName(t)}`, `<div class="readable">${prs.length ? `<p>GitHub found ${plural(prs.length, "open PR")} that name ${esc(t)}. Untick any you don't want, then review the rest in one session that reads the ticket.</p>
+    <ul class="items box">${prs.map(x => `<li><input type="checkbox" data-tk-pick="${esc(prRef(x))}" checked><div class="grow">${esc(x.title)}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author)}</div></div></li>`).join("")}</ul>
+    <div class="row mt"><button class="btn primary" id="tk-run">Review the ticked ones</button><span class="save-msg" id="tk-msg"></span></div>` : `<p class="muted">GitHub has no open PR whose title or description names ${esc(t)}. A PR that names it only in its branch shows under By Linear ticket once it's in your lists.</p>`}</div>`);
+  const b = $("#tk-run");
+  if (b) b.onclick = async () => {
+    const refs = $$("[data-tk-pick]").filter(c => c.checked).map(c => c.dataset.tkPick);
+    if (!refs.length) return;
+    b.disabled = true; b.textContent = "Starting…";
+    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t });
+    saidMsg($("#tk-msg"), r, "Started. It shows on each PR when it's done.");
+    if (r.ok) setTimeout(() => { closeDrawer(); softRoute(); }, 900); else { b.disabled = false; b.textContent = "Try again"; }
+  };
+}
 /* Pick several PRs on the list (checkboxes) and review them together in one session. */
 function pickBar() {
   const bar = $("#pr-pickbar");
@@ -2059,7 +2101,8 @@ function pickBar() {
   $("#pr-together").onclick = async e => {
     const b = e.target, [first, ...rest] = picked;
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr: first, with: rest });
+    const ts = [...new Set(picked.map(x => (state.prTicket || {})[x]))];
+    const r = await save("review_run", { pr: first, with: rest, ticket: ts.length === 1 && ts[0] ? ts[0] : undefined });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     state.prPick.clear(); setTimeout(softRoute, 1000);
   };
@@ -2241,7 +2284,17 @@ function wirePrs(root) {
   $$("[data-pr-group]", root).forEach(b => b.onclick = prGroup);
   wireMethod(root);
   /* on the page, not each box: sorting a table redraws its rows */
-  root.onchange = e => { const c = e.target.closest && e.target.closest("[data-pr-pick]"); if (!c) return; c.checked ? state.prPick.add(c.dataset.prPick) : state.prPick.delete(c.dataset.prPick); pickBar(); };
+  root.onchange = e => { const c = e.target.closest && e.target.closest("[data-pr-pick]"); if (!c) return; c.checked ? state.prPick.add(c.dataset.prPick) : state.prPick.delete(c.dataset.prPick); $$(`[data-pr-pick="${CSS.escape(c.dataset.prPick)}"]`).forEach(x => (x.checked = c.checked)); pickBar(); };
+  $$("[data-ticket-run]", root).forEach(b => b.onclick = async () => {
+    const [t, refs] = JSON.parse(b.dataset.ticketRun);
+    b.disabled = true; b.textContent = "Starting…";
+    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t });
+    if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
+    setTimeout(softRoute, 1000);
+  });
+  $$("[data-ticket-find]", root).forEach(b => b.onclick = () => ticketFind(b.dataset.ticketFind));
+  const tk = $("#tk-id", root);
+  if (tk) { $("#tk-go", root).onclick = () => ticketFind(tk.value); tk.onkeydown = e => { if (e.key === "Enter") ticketFind(tk.value); }; }
   pickBar();
   $$("[data-pr-together]", root).forEach(b => b.onclick = async () => {
     const [pr, others] = JSON.parse(b.dataset.prTogether);

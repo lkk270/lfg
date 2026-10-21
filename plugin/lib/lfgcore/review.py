@@ -82,7 +82,8 @@ def gh_status(repo, number, max_age=300):
         return hit[1]
     try:
         j = gh_json(["pr", "view", str(number), "-R", repo, "--json",
-                     "state,isDraft,reviewDecision,mergeable,reviews,reviewRequests,statusCheckRollup,headRefOid"])
+                     "state,isDraft,reviewDecision,mergeable,reviews,reviewRequests,statusCheckRollup,headRefOid,"
+                     "headRefName"])
     except ReviewError as e:
         return {"available": False, "why": str(e)}
     latest = {}
@@ -98,7 +99,7 @@ def gh_status(repo, number, max_age=300):
            "decision": j.get("reviewDecision") or "", "mergeable": j.get("mergeable"),
            "reviewers": sorted(latest.values(), key=lambda r: r["at"] or ""),
            "waiting_on": [(r.get("login") or r.get("name") or "") for r in j.get("reviewRequests") or []],
-           "checks": checks, "head_sha": j.get("headRefOid"), "me": me()}
+           "checks": checks, "head_sha": j.get("headRefOid"), "branch": j.get("headRefName") or "", "me": me()}
     _STATUS[key] = (time.time(), out)
     return out
 
@@ -625,13 +626,48 @@ def queue(max_age=120, which="requested"):
     hit = _QUEUE.get(which)
     if hit and time.time() - hit[0] < max_age:
         return hit[1]
-    rows = gh_json(["search", "prs", SEARCHES[which], "--state=open", "--limit", "50",
-                    "--json", "repository,number,title,author,url,updatedAt,isDraft"])
-    data = [{"repo": r["repository"]["nameWithOwner"], "number": r["number"], "title": r["title"],
-             "author": (r.get("author") or {}).get("login", ""), "url": r["url"], "updated": r["updatedAt"],
-             "draft": r.get("isDraft", False)} for r in rows or []]
+    data = _search([SEARCHES[which]], 50)
     _QUEUE[which] = (time.time(), data)
     return data
+
+
+def _search(terms, limit):
+    rows = gh_json(["search", "prs"] + terms + ["--state=open", "--limit", str(limit),
+                    "--json", "repository,number,title,author,url,updatedAt,isDraft,body"])
+    return [{"repo": r["repository"]["nameWithOwner"], "number": r["number"], "title": r["title"],
+             "author": (r.get("author") or {}).get("login", ""), "url": r["url"], "updated": r["updatedAt"],
+             "draft": r.get("isDraft", False), "ticket": ticket_of(r.get("title"), r.get("body"))}
+            for r in rows or []]
+
+
+# ---------------------------------------------------------------- Linear tickets a PR belongs to
+# Read from the PR's branch (Linear's "lee/ato-4223-..."), title or description. Look-alikes that aren't tickets:
+NOT_TICKETS = {"cve", "cwe", "iso", "utf", "sha", "rfc", "nist", "sp", "cmmc", "http", "tls", "aes", "rsa", "gpt",
+               "fips", "pr", "v", "rc", "release", "hotfix", "bump", "python", "node", "es", "ie", "win", "x"}
+
+
+def ticket_of(title="", body="", branch=""):
+    """The Linear ticket id a PR is for ("ATO-4223"), or "": the branch's, else the title's (any case), else the
+    description's when it names only one (a sync PR's lists many). Only config linear.team's prefix when set."""
+    team = (C.config()["linear"].get("team") or "").upper()
+
+    def ok(ids):
+        return list(dict.fromkeys(t.upper() for t in ids if (t.split("-")[0].upper() == team if team else
+                                                              t.split("-")[0].lower() not in NOT_TICKETS)))
+    for ids in (ok(re.findall(r"(?:^|[/_-])([a-z][a-z0-9]{1,9}-\d{1,6})(?=$|[-_/])", str(branch or "").lower())),
+                ok(re.findall(r"(?<![\w-])([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6})(?![\w-])", str(title or "")))):
+        if ids:
+            return ids[0]
+    ids = ok(re.findall(r"\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b", str(body or "")[:4000]))
+    return ids[0] if len(ids) == 1 else ""
+
+
+def ticket_prs(ticket):
+    """Every open PR on a ticket, in any repo you can see: GitHub's search for its id, kept when the PR names it."""
+    t = str(ticket or "").strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d{1,6}", t):
+        raise ReviewError("a Linear ticket id looks like ATO-4223")
+    return [x for x in _search([t], 30) if x["ticket"] == t]
 
 
 REMOTE = re.compile(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
@@ -1171,6 +1207,7 @@ def dashboard(fresh=False, only=None):
         st = dict(zip(want, pool.map(lambda k: gh_status(*k), want)))
     for x in q + mine:
         x["gh"] = st.get((x["repo"], x["number"]))
+        x["ticket"] = ticket_of(x["title"], "", (x["gh"] or {}).get("branch")) or x.get("ticket") or ""
     out = []
     for r in recs:
         p = r["passes"][-1]
@@ -1178,7 +1215,8 @@ def dashboard(fresh=False, only=None):
         for f in p["findings"]:
             tally[f["status"]] = tally.get(f["status"], 0) + 1
         out.append({"repo": r["repo"], "number": r["number"], "title": r.get("title"), "author": r.get("author"),
-                    "url": r.get("url"), "ticket": r.get("ticket"), "passes": len(r["passes"]),
+                    "url": r.get("url"), "ticket": r.get("ticket") or ticket_of(r.get("title"), "", r.get("branch")),
+                    "open": r.get("state") in (None, "OPEN"), "passes": len(r["passes"]),
                     "score": p.get("score"), "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
                     "job": job(r["repo"], r["number"]), "gh": st.get((r["repo"], r["number"]))})
     links = _links()["prs"]  # linked PRs show on every row, whichever repo they are in
