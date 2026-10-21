@@ -9,9 +9,15 @@ The upstream merge never happens on main: it runs on an `lfg-update/...` branch 
 fast-forwards to that branch once it is merged and tested. A merge that conflicts stays there, half done, for you
 (or Claude) to finish; the next apply picks it up from that branch. So does code whose tests fail: what was tested
 stays on a held branch, and `fix` has Claude fix it there, unattended, then applies again.
+
+You decide upstream's commits one at a time: Keep (the default), Skip or Later, kept in
+~/.lfg/state/upstream-picks.json. Apply merges upstream up to the first commit that isn't Keep, then cherry-picks
+(`-x`) the kept ones after it, so a Skip or Later never lands and a Later can still be kept weeks on: it stays
+listed until it is kept or skipped. A commit counts as in once main has it, merged or cherry-picked.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -75,6 +81,97 @@ def _repo_name(url):
     return "/".join(tail[-2:]) if len(tail) >= 2 and tail[-2] else url
 
 
+VERDICTS = ("keep", "skip", "later")
+PICKED = re.compile(r"cherry picked from commit ([0-9a-f]{40})")
+
+
+def _picks_path():
+    return C.lfg_path("state", "upstream-picks.json")
+
+
+def picks():
+    """{sha: "skip" | "later"}; a commit that isn't listed is Keep."""
+    return C.read_json(_picks_path(), {}) or {}
+
+
+def set_pick(sha, verdict):
+    """Keep, Skip or Later for one upstream commit (the dashboard's buttons; yours, like Update)."""
+    if not re.match(r"^[0-9a-f]{40}$", str(sha or "")):
+        raise ValueError("not a commit: %r" % sha)
+    if verdict not in VERDICTS:
+        raise ValueError("verdict is one of %s" % ", ".join(VERDICTS))
+    d = picks()
+    if verdict == "keep":
+        d.pop(sha, None)
+    else:
+        d[sha] = verdict
+    C.ensure_dir(os.path.dirname(_picks_path()))
+    C.write_json(_picks_path(), d)
+    _CACHE.update(ts=0, data=None)
+    return {"sha": sha, "verdict": verdict}
+
+
+def _picked(root, ref):
+    """Upstream commits cherry-picked into ref (from the `-x` line git adds)."""
+    return set(PICKED.findall(_git(root, "log", "--format=%B", "--grep=cherry picked from commit", ref).stdout or ""))
+
+
+def _has(root, ref, sha):
+    return _git(root, "merge-base", "--is-ancestor", sha, ref).returncode == 0 or sha in _picked(root, ref)
+
+
+def _conflicts(root, sha, base=BRANCH):
+    """Files where this commit on its own conflicts with base ([] if it applies cleanly, None if git can't say)."""
+    cp = _git(root, "merge-tree", "--write-tree", "--name-only", "--no-messages", "--merge-base=%s^" % sha,
+              base, sha)
+    if cp.returncode not in (0, 1):
+        return None
+    return sorted(set(_lines(cp)[1:])) if cp.returncode == 1 else []
+
+
+def pending(root, remotes=None):
+    """Upstream's commits main doesn't have yet, oldest first: {sha, short, subject, verdict, conflicts}."""
+    remotes = remotes if remotes is not None else [r for r in ("origin", "upstream") if _remote_url(root, r)]
+    if "upstream" not in remotes:
+        return []
+    also = ["^origin/" + BRANCH] if "origin" in remotes else []
+    have = _picked(root, BRANCH) | (_picked(root, "origin/" + BRANCH) if also else set())
+    P = picks()
+    out = []
+    for ln in _lines(_git(root, "log", "--reverse", "--format=%H %s", "upstream/" + BRANCH, "^" + BRANCH, *also)):
+        sha, _, subject = ln.partition(" ")
+        if sha not in have:
+            out.append({"sha": sha, "short": sha[:7], "subject": subject, "verdict": P.get(sha, "keep")})
+    return out
+
+
+def _plan(todo):
+    """(commit to merge up to or "", [commits to cherry-pick after it]) for the pending list: merge while every
+    commit so far is Keep, then pick the kept ones one by one."""
+    upto, i = "", 0
+    while i < len(todo) and todo[i]["verdict"] == "keep":
+        upto, i = todo[i]["sha"], i + 1
+    return upto, [c["sha"] for c in todo[i:] if c["verdict"] == "keep"]
+
+
+NOTE_HEAD = re.compile(r"^(kept|not kept)( from upstream)?:\s*$", re.I)
+
+
+def _notes(root, branch):
+    """What a prepared branch keeps and leaves out of upstream's changes, from its commit messages: a "Kept:" and a
+    "Not kept:" heading, each followed by "- " lines."""
+    out, cur = {"kept": [], "not_kept": []}, None
+    for ln in (_git(root, "log", "--format=%B", branch, "^" + BRANCH).stdout or "").splitlines():
+        m = NOTE_HEAD.match(ln.strip())
+        if m:
+            cur = "kept" if m.group(1).lower() == "kept" else "not_kept"
+        elif cur and ln.strip().startswith("- "):
+            out[cur].append(ln.strip()[2:])
+        elif ln.strip():
+            cur = None
+    return out
+
+
 def _held_all(root):
     """Every lfg-update/ branch, newest first: {branch, worktree, state, files, prompt, ahead}. state is "conflict"
     (a merge in progress), "uncommitted" (fixed but not committed), "tests" (the last apply's tests failed on it and
@@ -89,11 +186,13 @@ def _held_all(root):
         unmerged = _lines(_git(wt, "diff", "--name-only", "--diff-filter=U")) if wt else []
         if unmerged:
             h.update(state="conflict", files=unmerged)
-        elif wt and (_git(wt, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
+        elif wt and (any(_git(wt, "rev-parse", "-q", "--verify", x).returncode == 0
+                         for x in ("MERGE_HEAD", "CHERRY_PICK_HEAD"))
                      or _git(wt, "status", "--porcelain", "--untracked-files=no").stdout.strip()):
             h.update(state="uncommitted", files=_lines(_git(wt, "diff", "--name-only", "HEAD")))
         elif tested.get("branch") == b and _git(root, "rev-parse", b).stdout.strip() == tested.get("head"):
             h.update(state="tests", output=last.get("output") or "")
+        h.update(_notes(root, b))
         if h["state"] != "ready":
             h["prompt"] = fix_prompt(h, _repo_name(_remote_url(root, "upstream")) or "the original LFG")
         yield h
@@ -118,7 +217,7 @@ def fix_prompt(h, upstream):
             "already has the other's change, in its own words, keep that one), run" % files
             if h["state"] == "conflict" else "and the conflicts look resolved but aren't committed. Check them, run")
     return ("%s %s `python3 -m unittest discover -s tests` there until it passes, then `git add` the files and "
-            "`git commit --no-edit` to finish the merge. Don't run git merge, rebase or push, and don't touch main; "
+            "`git commit --no-edit` to finish the merge (or the cherry-pick). Don't run git merge, rebase or push, and don't touch main; "
             "I'll finish the update after." % (where, todo))
 
 
@@ -149,6 +248,14 @@ def check(max_age=60, fetch=True):
         url = _remote_url(root, r)
         out["remotes"][r] = {"url": url, "name": _repo_name(url), "new": _count(root, BRANCH, ref, *also),
                              "commits": _log(root, BRANCH, ref, *also)}
+    out["upstream"] = pending(root, remotes)
+    # against what Update builds on: main, moved up to your fork's main first when the fork is ahead
+    base = "origin/" + BRANCH if "origin" in remotes and _count(root, BRANCH, "origin/" + BRANCH) else BRANCH
+    for c in out["upstream"]:
+        c["conflicts"] = _conflicts(root, c["sha"], base)
+    if "upstream" in remotes:  # Skip and Later aren't part of this update; Later stays listed for another day
+        keep = [c for c in out["upstream"] if c["verdict"] == "keep"]
+        out["remotes"]["upstream"].update(new=len(keep), commits=["%s %s" % (c["short"], c["subject"]) for c in keep])
     out["sources"] = [r for r in ("upstream", "origin") if r in remotes and out["remotes"][r]["new"]]
     out["held"] = held(root)
     out["not_installed"] = _count(root, installed, BRANCH) if installed and head else 0
@@ -264,27 +371,44 @@ def apply(log=print):
     if h and h["state"] != "ready":
         return fail("the merge of %s's changes on %s isn't finished yet (%s)" % (up_name, h["branch"], h["state"]), h)
     wt, branch = "", ""
-    if h or (has_up and _count(root, BRANCH, "upstream/" + BRANCH)):
+    todo = pending(root) if has_up else []
+    upto, cherry = _plan(todo)
+    if h:
+        held_too = [c for c in todo if c["verdict"] != "keep" and _has(root, h["branch"], c["sha"])]
+        if held_too:
+            c = held_too[0]
+            return fail("%s (%s) is set to %s but is already on %s; set it back to Keep, or delete that branch to "
+                        "start the update again without it" % (c["short"], c["subject"], c["verdict"].title(),
+                                                                  h["branch"]))
+    if h or upto or cherry:
         if h:
             branch = h["branch"]
             say("Picking up %s" % branch)
             wt = h["worktree"] or W.new(root, branch)["path"]
         else:
-            sha = _git(root, "rev-parse", "--short=7", "upstream/" + BRANCH).stdout.strip()
+            sha = (cherry[-1:] or [upto])[0][:7]
             branch = HELD + "upstream-" + sha
             say("Merging %s's new commits on %s, away from main" % (up_name, branch))
             try:
                 wt = W.new(root, branch, base=BRANCH)["path"]
             except (ValueError, RuntimeError) as e:
                 return fail("couldn't make a worktree for the merge: %s" % e)
-        for ref in [BRANCH] + (["upstream/" + BRANCH] if has_up else []):
-            if _count(root, branch, ref) and _git(wt, "merge", "--no-edit", "-q", ref).returncode:
+        steps_in = [("merge", r) for r in [BRANCH] + ([upto] if upto else [])] + [("cherry-pick", c) for c in cherry]
+        for how, ref in steps_in:
+            if how == "merge" and not _count(root, branch, ref):
+                continue
+            if how == "cherry-pick":
+                if _has(root, branch, ref):
+                    continue
+                say("Keeping %s from %s" % (ref[:7], up_name))
+            if _git(wt, *(["merge", "--no-edit", "-q"] if how == "merge" else ["cherry-pick", "-x"]), ref).returncode:
                 h = held(root)
                 if not h or h["state"] == "ready":  # git refused for another reason (it would overwrite a file)
-                    return fail("merging %s into %s failed; nothing changed on main" % (ref, branch))
+                    return fail("%s %s into %s failed; nothing changed on main" % (
+                        "merging" if how == "merge" else "cherry-picking", ref[:12], branch))
                 return fail("%s's changes conflict with yours in %d file(s). Nothing changed on main or was "
-                            "installed; the half-done merge is on %s in %s" % (up_name, len(h["files"]), branch, wt),
-                            h)
+                            "installed; the half-done %s is on %s in %s" % (up_name, len(h["files"]), how, branch,
+                                                                          wt), h)
     say("Running LFG's tests")
     # no __pycache__ left behind: an untracked file would stop the merge worktree being removed afterwards
     t = C.run(TESTS, cwd=wt or root, timeout=900, env={"PYTHONDONTWRITEBYTECODE": "1"})

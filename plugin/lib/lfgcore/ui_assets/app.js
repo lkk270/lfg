@@ -2283,13 +2283,26 @@ async function checkUpdate(fresh) {
   const ver = $("#lfg-version");
   if (ver && d.available) ver.textContent = d.ready ? "Update ready" : "LFG up to date";
   if (d.pending) { setTimeout(checkUpdate, 3000); return; }
-  if (!d.available || !d.ready) { box.hidden = true; return; }
+  const aside = (d.upstream || []).filter(c => c.verdict !== "keep");
+  if (ver && d.available && !d.ready && aside.length) {
+    ver.innerHTML = `LFG up to date · <a href="" id="show-aside">${plural(aside.length, "change")} set aside</a>`;
+    $("#show-aside").onclick = e => { e.preventDefault(); showAside = !showAside; checkUpdate(); };
+  }
+  if (!d.available || (!d.ready && !(showAside && aside.length))) { box.hidden = true; return; }
+  if (!d.ready) {
+    const unlocked = await isUnlocked();
+    box.hidden = false;
+    box.className = "callout";
+    box.innerHTML = `${dot("off")}<span><b>Set aside from ${esc(named("upstream"))}:</b> nothing is installed until you press Keep on one; Update then brings in only the kept ones.</span>${upstreamPicks(d, named("upstream"), unlocked)}`;
+    wirePicks(box);
+    return;
+  }
   const src = d.sources || [], parts = src.map(r => src.length === 1 ? plural(R[r].new, "change") : `${plural(R[r].new, "change")} from ${named(r)}`);
   if (d.not_installed) parts.push(`${plural(d.not_installed, "change")} in your checkout not installed yet`);
   if (H) parts.push(`the merge on ${H.branch}, fixed and committed`);
   const from = src.length === 2 ? "from both the original LFG and your fork" : src.length ? `from ${named(src[0])}` : "";
   const li = c => `<li class="mono small">${esc(c)}</li>`, group = (title, cs) => cs.length ? `<li><b>${esc(title)}</b><ul>${cs.map(li).join("")}</ul></li>` : "";
-  const list = src.map(r => group(`From ${named(r)}`, R[r].commits || [])).concat(group("In your checkout, not installed yet", d.not_installed_commits || []));
+  const list = src.filter(r => r !== "upstream").map(r => group(`From ${named(r)}`, R[r].commits || [])).concat(group("In your checkout, not installed yet", d.not_installed_commits || []));
   /* Update merges into main in the LFG checkout, so it waits while that checkout is on another branch or has
      uncommitted changes. Say which, and give the one safe command when there is one. */
   const onBranch = d.current_branch && d.current_branch !== "main" ? d.current_branch : "";
@@ -2299,11 +2312,13 @@ async function checkUpdate(fresh) {
   const unlocked = await isUnlocked();
   box.hidden = false;
   box.className = "callout warn";
-  box.innerHTML = `${dot("warn")}<b>LFG update ready${from ? ` ${esc(from)}` : ""}:</b> ${esc(parts.join(", "))}. <details class="more inline"><summary>What's in it</summary><ul>${list.join("")}</ul></details>
+  box.innerHTML = `${dot("warn")}<b>LFG update ready${from ? ` ${esc(from)}` : ""}:</b> ${esc(parts.join(", "))}. ${list.some(Boolean) ? `<details class="more inline"><summary>What's in it</summary><ul>${list.join("")}</ul></details>` : ""}
+    ${upstreamPicks(d, named("upstream"), unlocked)}${heldNotes(H)}
     ${blocked ? `<span>${blocked}</span>` : `<button class="btn small primary" id="update-go" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to update from here\""}>Update</button><span class="muted small"> Tests run first; if they fail nothing changes.</span>`}`;
   $$("[data-copy]", box).forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
   });
+  wirePicks(box);
   const go = $("#update-go");
   if (go) go.onclick = async () => {
     go.disabled = true; go.textContent = "Starting…";
@@ -2311,6 +2326,38 @@ async function checkUpdate(fresh) {
     if (!r.ok) { go.disabled = false; go.textContent = "Try again"; return alertMsg(go, r); }
     watchUpdate();
   };
+}
+/* Upstream's commits one by one. Keep is the default; Later stays listed for another day; Skip stays listed, greyed,
+   and is never brought in unless you press Keep on it. */
+let showAside = false;
+function upstreamPicks(d, from, unlocked) {
+  const U = d.upstream || [];
+  if (!U.length) return "";
+  const label = { keep: "Keep", later: "Later", skip: "Skip" };
+  const row = c => {
+    const clash = c.conflicts == null ? "" : c.conflicts.length
+      ? `<span class="tag warn" title="${esc(c.conflicts.join("\n"))}">Conflicts with your fork in ${plural(c.conflicts.length, "file")}</span>`
+      : `<span class="tag ok">No conflicts with your fork</span>`;
+    const btns = Object.keys(label).map(v => `<label class="${c.verdict === v ? "on" : ""}"><input type="radio" name="pick-${c.short}" data-sha="${c.sha}" value="${v}" ${c.verdict === v ? "checked" : ""} ${unlocked ? "" : "disabled"}>${label[v]}</label>`).join("");
+    return `<li class="pick${c.verdict === "skip" ? " skipped" : ""}"><span><span class="mono small">${esc(c.short)}</span> ${esc(c.subject)} ${clash}</span><span class="seg inline">${btns}</span></li>`;
+  };
+  const n = v => U.filter(c => c.verdict === v).length;
+  const sum = [n("keep") && `${n("keep")} kept`, n("later") && `${n("later")} for later`, n("skip") && `${n("skip")} skipped`].filter(Boolean).join(", ");
+  return `<div class="picks"><div class="small"><b>From ${esc(from)}</b> <span class="muted">(${sum}). Update brings in only what's kept. Later stays here until you decide; Skip leaves it out for good unless you press Keep.</span></div><ul>${U.map(row).join("")}</ul></div>`;
+}
+/* What a prepared update branch keeps and leaves out of upstream's changes, from its commit message. */
+function heldNotes(H) {
+  if (!H || !((H.kept || []).length || (H.not_kept || []).length)) return "";
+  const ul = (t, xs, cls) => xs.length ? `<div class="small"><span class="tag ${cls}">${t}</span><ul>${xs.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
+  return `<div class="picks">${ul("Keeping", H.kept || [], "ok")}${ul("Not keeping", H.not_kept || [], "bad")}<div class="muted small">Prepared on <code>${esc(H.branch)}</code>. Update installs exactly this.</div></div>`;
+}
+function wirePicks(box) {
+  $$(".picks input[data-sha]", box).forEach(i => i.onchange = async () => {
+    $$(`input[name="${i.name}"]`, box).forEach(x => (x.disabled = true));
+    const r = await save("update_pick", { sha: i.dataset.sha, verdict: i.value });
+    if (!r.ok) return alertMsg(i.parentNode, r);
+    checkUpdate(true);
+  });
 }
 const fixingMsg = F => `${dot("on")}Claude is fixing the stopped update${F.branch ? ` on <code>${esc(F.branch)}</code>` : ""}, started ${ago(F.started)}. Once it commits a fix, the update runs again by itself.`;
 let watching = false;  /* one watcher at a time: the banner re-checks every minute and would start another */

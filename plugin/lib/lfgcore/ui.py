@@ -306,6 +306,13 @@ def save(what, body):
         return S.save_personal(body.get("path"), body.get("text"))
     if what == "skill_group":
         return S.set_skill_group(body.get("id"), body.get("group"))
+    if what == "update_pick":
+        from . import updates as U
+        dash.forget("update")
+        try:
+            return U.set_pick(body.get("sha"), body.get("verdict"))
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
     if what in ("update_apply", "update_fix"):
         from . import updates as U
         dash.forget("update")

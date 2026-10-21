@@ -1657,6 +1657,79 @@ class UpdatesTest(unittest.TestCase):
     def test_fix_with_nothing_held_does_nothing(self):
         self.assertEqual(self.run_fix(lambda *a: self.fail("Claude ran"))["status"], "failed")
 
+    def upstream_shas(self):
+        self.U._CACHE.update(ts=0, data=None)
+        return [c["sha"] for c in self.U.check(max_age=0)["upstream"]]
+
+    def pick(self, sha, verdict):
+        self.U.set_pick(sha, verdict)
+        self.addCleanup(lambda: os.path.exists(self.U._picks_path()) and os.remove(self.U._picks_path()))
+
+    def test_skip_and_later_stay_out_and_later_can_be_kept_weeks_on(self):
+        self.upstream_commit("one.txt", "1")
+        self.upstream_commit("two.txt", "2")
+        self.upstream_commit("three.txt", "3")
+        one, two, three = self.upstream_shas()
+        self.pick(one, "later")
+        self.pick(two, "skip")
+        d = self.U.check(max_age=0)
+        self.assertEqual([c["verdict"] for c in d["upstream"]], ["later", "skip", "keep"])
+        self.assertEqual(d["remotes"]["upstream"]["new"], 1)  # only what Update would bring in
+        self.assertEqual(d["upstream"][2]["conflicts"], [])
+        j = self.run_apply()
+        self.assertEqual(j["status"], "done", j.get("why"))
+        files = lambda: {f for f in ("one.txt", "two.txt", "three.txt") if os.path.exists(os.path.join(self.co, f))}
+        self.assertEqual(files(), {"three.txt"})  # cherry-picked on its own
+        self.assertEqual(self.upstream_shas(), [one, two])  # the kept one is in; Later and Skip still listed
+        self.pick(one, "keep")  # two weeks later
+        self.assertEqual(self.run_apply()["status"], "done")
+        self.assertEqual(files(), {"one.txt", "three.txt"})
+        self.assertEqual(self.upstream_shas(), [two])
+
+    def test_all_kept_merges_as_before(self):
+        self.upstream_commit("one.txt", "1")
+        self.assertEqual(self.U._plan([{"sha": "a", "verdict": "keep"}, {"sha": "b", "verdict": "later"},
+                                       {"sha": "c", "verdict": "keep"}]), ("a", ["c"]))
+        self.assertEqual(self.run_apply()["status"], "done")
+        self.assertEqual(self.upstream_shas(), [])
+        self.assertEqual(len(self.git(self.co, "log", "--merges", "--format=%H").split()), 0)  # fast-forward
+
+    def test_a_picked_commit_that_conflicts_waits_on_its_branch_and_says_what_conflicts(self):
+        self.upstream_commit("one.txt", "1")
+        one = self.upstream_shas()[0]
+        self.pick(one, "later")
+        self.fork_commit("a.txt", "fork side\n")
+        self.upstream_commit("a.txt", "upstream side\n")
+        d = self.U.check(max_age=0)
+        self.assertEqual(d["upstream"][1]["conflicts"], ["a.txt"])
+        h = self.run_apply()["conflict"]
+        self.assertEqual((h["state"], h["files"]), ("conflict", ["a.txt"]))
+        self.write(h["worktree"], "a.txt", "both\n")
+        self.git(h["worktree"], "add", "a.txt")
+        self.git(h["worktree"], "commit", "-q", "--no-edit")
+        self.assertEqual(self.run_apply()["status"], "done")
+        self.assertEqual(self.git(self.co, "show", "HEAD:a.txt"), "both\n")
+        self.assertEqual(self.upstream_shas(), [one])
+
+    def test_a_prepared_branch_says_what_it_keeps_and_refuses_a_skip_it_already_has(self):
+        h = self.conflict()["conflict"]
+        self.write(h["worktree"], "a.txt", "fork side\n")
+        self.git(h["worktree"], "add", "a.txt")
+        self.git(h["worktree"], "commit", "-q", "-m", "Merge upstream\n\nKept:\n- the new file\n\nNot kept:\n"
+                                                         "- upstream's a.txt: ours already does it\n")
+        held = self.held()
+        self.assertEqual((held["kept"], held["not_kept"]), (["the new file"], ["upstream's a.txt: ours already does it"]))
+        self.pick(self.upstream_shas()[0], "skip")
+        j = self.run_apply()
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("already on " + h["branch"], j["why"])
+
+    def test_pick_refuses_nonsense(self):
+        with self.assertRaises(ValueError):
+            self.U.set_pick("abc", "keep")
+        with self.assertRaises(ValueError):
+            self.U.set_pick("a" * 40, "maybe")
+
     def test_check_says_when_the_checkout_is_off_main_or_has_changes_and_the_banner_says_what_to_do(self):
         self.upstream_commit("new.txt", "hi")
         d = self.U.check(max_age=0)

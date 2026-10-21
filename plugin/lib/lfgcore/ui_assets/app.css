@@ -489,3 +489,12 @@ input.num { width: 80px; }
 #usage-main.is-loading { pointer-events: none; }
 #usage-main.is-loading > * { opacity: .4; }
 #usage-main.is-loading::after { content: "Loading…"; position: absolute; top: 12px; right: 16px; font-size: 13px; color: var(--text); background: var(--soft); padding: 3px 10px; border-radius: 6px; opacity: 1; }
+
+/* update banner: upstream's commits with Keep / Later / Skip */
+.picks { flex-basis: 100%; margin: 6px 0 2px; }
+.picks ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.picks li.pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0;
+  border-top: 1px solid var(--line); }
+.picks li.pick.skipped > span:first-child { color: var(--faint); text-decoration: line-through; }
+.picks .tag ~ ul { list-style: disc; padding-left: 20px; }
+.picks .seg label { padding: 2px 8px; font-size: 12.5px; }
