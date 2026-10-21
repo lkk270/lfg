@@ -2409,15 +2409,15 @@ async function checkUpdate(fresh) {
     const tried = ask ? `<div class="picks"><span class="tag warn">Needs your decision</span> <span class="pre-wrap">${esc(ask.question || "")}</span>
         <div class="mt"><button class="btn small primary" data-copy="${esc(ask.session || "")}">Copy prompt for a Claude session</button>
         <span class="muted small">Paste it into a new Claude Code session and decide there; it adds your decision to FORK.md so the next update follows it. Then press Update.</span></div></div>`
-      : F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">Claude tried ${ago(F.ended)} and stopped: ${esc(F.why || "")}</span>` : "";
+      : F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">The last try ${ago(F.ended)} stopped: ${esc(F.why || "")}</span>` : "";
     const unlocked = await isUnlocked();
     box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
       ${H.files.length ? `<details class="more inline"><summary>${H.state === "conflict" ? "Conflicting files" : "Changed files"}</summary><ul>${H.files.map(f => `<li class="mono small">${esc(f)}</li>`).join("")}</ul></details>` : ""}
       ${H.output ? `<details class="more inline"><summary>Test output</summary><pre class="raw mono small">${esc(H.output)}</pre></details>` : ""}
       ${tried}
-      <button class="btn small primary" id="update-fix" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to fix from here\""}>${tried ? "Try again with Claude" : "Fix with Claude"}</button>
+      <button class="btn small primary" id="update-fix" ${unlocked ? "" : "disabled title=\"Open the dashboard with lfg ui to fix from here\""}>${tried ? "Try again" : "Fix with Claude"}</button>
       <button class="btn small" data-copy="${esc(H.prompt)}" title="${esc(H.prompt)}">Copy fix for Claude</button>
-      <span class="muted small">Fix with Claude runs Claude Code on that branch by itself, then runs the update again; it never touches main. Or paste the fix into Claude Code yourself and press Update once it's committed.</span>`;
+      <span class="muted small">Fix with Claude runs Claude Code on that branch by itself, LFG commits its fix, then runs the update again; it never touches main. Try again picks up a fix the last try left: if the tests pass on it, it is only committed. Or paste the fix into Claude Code yourself and press Update once it's committed.</span>`;
     $$("[data-copy]", box).forEach(b => b.onclick = async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
     });
@@ -2524,7 +2524,7 @@ function wirePicks(box) {
     checkUpdate(true);
   });
 }
-const fixingMsg = F => `${dot("on")}Claude is fixing the stopped update${F.branch ? ` on <code>${esc(F.branch)}</code>` : ""}, started ${ago(F.started)}. Once it commits a fix, the update runs again by itself.`;
+const fixingMsg = F => `${dot("on")}Claude is fixing the stopped update${F.branch ? ` on <code>${esc(F.branch)}</code>` : ""}, started ${ago(F.started)}. Once it has a fix, LFG commits it and runs the update again by itself.`;
 let watching = false;  /* one watcher at a time: the banner re-checks every minute and would start another */
 async function watchUpdate() {
   if (watching) return;
