@@ -411,6 +411,9 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 .sess-list > li.sess > .grow { flex: 1 1 280px; }
 .sess-list > li.sess:last-child { border-bottom: 0; }
 .sess-list .title { font-weight: 500; }
+.sess-list .star { background: none; border: 0; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
+.sess-list .star.on { color: #e3b341; } .sess-list .star:disabled { cursor: default; opacity: .6; }
+details.sess-old { margin: 0 0 8px 22px; } details.sess-old > summary { font-size: 12.5px; margin-bottom: 4px; }
 .sess-list details.more { margin-top: 4px; } .sess-list details.more > summary { margin-bottom: 0; font-size: 12.5px; }
 .sess-recent { margin-top: 6px; max-width: 760px; }
 .sess-turn { padding: 6px 10px; border-left: 2px solid var(--line); margin: 4px 0; }

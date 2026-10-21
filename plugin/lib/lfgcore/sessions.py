@@ -32,7 +32,9 @@ def _prefs_path():
 def prefs():
     p = C.read_json(_prefs_path(), {}) or {}
     return {"names": dict(p.get("names") or {}), "folders": dict(p.get("folders") or {}),
-            "hidden": list(p.get("hidden") or [])}
+            "hidden": list(p.get("hidden") or []), "starred": list(p.get("starred") or []),
+            # a group can follow PRs ("owner/repo#12"): every session that mentions one joins it, unless taken out
+            "group_prs": dict(p.get("group_prs") or {}), "left_out": dict(p.get("left_out") or {})}
 
 
 def _save_prefs(p):
@@ -184,7 +186,8 @@ def _where(cwd):
 def name_for(s, own=""):
     """Your name for it, else the /rename title, else the ticket and what the session was about, else the branch,
     else Claude Code's own title, else the first thing you asked."""
-    about = s["ai_title"] or s["first"][:70]
+    run = REVIEW_RUN.search(s["first"] or "")
+    about = "Review run from the dashboard · " + run.group(1) if run else s["ai_title"] or s["first"][:70]
     if own or s["title"]:
         return own or s["title"]
     if s["ticket"]:
@@ -198,6 +201,42 @@ def resume_command(s):
     return "cd %s && claude --resume %s" % (shlex.quote(s["cwd"] or C.HOME), s["id"])
 
 
+_MENTIONS = {}  # transcript path -> (size, mtime, {pr: mentions it?})
+
+
+def _following(group_prs):
+    """{session id: group} for sessions that mention a PR a group follows; the first group listed wins."""
+    from . import review as R
+    want = [(g, pr) for g, prs in sorted(group_prs.items()) for pr in prs]
+    out = {}
+    if not want:
+        return out
+    for path in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        size, mtime, seen = _MENTIONS.get(path, (None, None, {}))
+        if (size, mtime) != (st.st_size, st.st_mtime):
+            seen = {}
+        todo = [pr for _, pr in want if pr not in seen]
+        if todo:
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+            except OSError:
+                continue
+            for pr in todo:
+                repo, _, n = pr.partition("#")
+                seen[pr] = R.mentions(raw, repo, int(n))
+            _MENTIONS[path] = (st.st_size, st.st_mtime, seen)
+        sid = os.path.basename(path)[:-6]
+        for g, pr in want:
+            if seen.get(pr) and sid not in out:
+                out[sid] = g
+    return out
+
+
 def listing(days=None, scripted=False, hidden=False, only=None):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
     by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`. `only`: a main
@@ -205,11 +244,16 @@ def listing(days=None, scripted=False, hidden=False, only=None):
     p = prefs()
     want = os.path.realpath(only) if only else ""
     folder_of = {sid: f for f, ids in p["folders"].items() for sid in ids}
+    auto = {sid: g for sid, g in _following(p["group_prs"]).items()
+            if sid not in folder_of and sid not in (p["left_out"].get(g) or [])}
+    starred = set(p["starred"])
     hid = set(p["hidden"])
     cut = time.time() - days * 86400 if days else 0
     rows = []
     for s in scan():
-        if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted) or (s["id"] in hid and not hidden):
+        # a script's session (`claude -p`, e.g. a dashboard review run) shows when it joined a group through its PR
+        if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted and s["id"] not in auto) or \
+                (s["id"] in hid and not hidden):
             continue
         repo, root, wt = _where(s["cwd"])
         if want and (not root or os.path.realpath(root) != want):
@@ -221,7 +265,9 @@ def listing(days=None, scripted=False, hidden=False, only=None):
         r["name"] = name_for(r, p["names"].get(s["id"], ""))
         r["auto_name"] = name_for(r)
         r["named"] = bool(p["names"].get(s["id"]) or s["title"])
-        r["folder"] = folder_of.get(s["id"], "")
+        r["folder"] = folder_of.get(s["id"]) or auto.get(s["id"], "")
+        r["via_pr"] = s["id"] in auto
+        r["starred"] = s["id"] in starred
         r["hidden"] = s["id"] in hid
         r["group"] = r["folder"] or r["ticket"] or (r["branch"] if r["branch"] not in ("", "HEAD") else "") \
             or ("(no branch)" if r["root"] else "Not in a repo")
@@ -231,7 +277,8 @@ def listing(days=None, scripted=False, hidden=False, only=None):
             r.pop(k, None)
         rows.append(r)
     rows.sort(key=lambda r: r["modified"], reverse=True)
-    return {"sessions": rows, "folders": sorted(p["folders"]), "projects_dir": PROJECTS, "hidden_count": len(hid)}
+    return {"sessions": rows, "folders": sorted(set(p["folders"]) | set(p["group_prs"])), "group_prs": p["group_prs"],
+            "projects_dir": PROJECTS, "hidden_count": len(hid)}
 
 
 def _known(sid):
@@ -274,6 +321,41 @@ def recent(sid, n=4):
     return {"id": sid, "turns": turns}
 
 
+def star(sid, on=True):
+    """Star a session you still care about: starred ones come first in their group, and are never folded away."""
+    sid, p = _known(sid), prefs()
+    p["starred"] = sorted(set(p["starred"]) | {sid} if on else set(p["starred"]) - {sid})
+    _save_prefs(p)
+    return {"id": sid, "starred": bool(on)}
+
+
+PR_KEY = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
+
+
+def follow_pr(group, pr, on=True):
+    """Have a group follow a PR: every session that mentions it joins the group (dashboard review runs included).
+    off: stop following it; sessions that joined only through it go back where they were."""
+    group, pr = _group_name(group), str(pr or "").strip()
+    if len(group) < 2:
+        raise ValueError("give the group a name of at least 2 characters")
+    if not PR_KEY.match(pr):
+        raise ValueError("not a PR: %r (owner/repo#12)" % pr)
+    p = prefs()
+    prs = [x for x in p["group_prs"].get(group, []) if x != pr] + ([pr] if on else [])
+    if prs:
+        p["group_prs"][group] = prs
+    else:
+        p["group_prs"].pop(group, None)
+        p["left_out"].pop(group, None)
+    _save_prefs(p)
+    return {"group": group, "prs": prs}
+
+
+def groups_of(pr):
+    """The groups that follow a PR."""
+    return sorted(g for g, prs in prefs()["group_prs"].items() if pr in prs)
+
+
 def rename(sid, name):
     """Your own name for a session, shown in LFG only (Claude Code's /rename title is left alone). Empty clears it."""
     sid, p = _known(sid), prefs()
@@ -286,11 +368,18 @@ def rename(sid, name):
     return {"id": sid, "name": name}
 
 
-def file_into(sid, folder):
+def _group_name(name):
+    return re.sub(r"\s+", " ", str(name or "")).strip()[:80]
+
+
+def file_into(sid, folder, came_from=""):
     """Put a session in one of your groups (stored as "folders"; a label in LFG only, nothing on disk moves). A
-    session is in at most one. Empty takes it out."""
+    session is in at most one. Empty takes it out; `came_from` a group it joined through a PR keeps it out of that
+    group from then on."""
     sid, p = _known(sid), prefs()
-    folder = re.sub(r"\s+", " ", str(folder or "")).strip()[:80]
+    folder, came_from = _group_name(folder), _group_name(came_from)
+    if came_from in p["group_prs"] and folder != came_from:
+        p["left_out"][came_from] = sorted(set(p["left_out"].get(came_from) or []) | {sid})
     for f in list(p["folders"]):
         p["folders"][f] = [x for x in p["folders"][f] if x != sid]
         if not p["folders"][f]:
