@@ -1897,6 +1897,22 @@ class GuardPrefsTest(unittest.TestCase):
         with mock.patch.object(guard, "_own_repo", return_value=False):
             self.assertIsNotNone(self.check(cmd))
 
+    def test_opening_prs(self):
+        cmd = "gh pr create --fill"
+        self.assertEqual(self.P.effective()["open_pr"], "never")
+        self.assertEqual(self.check(cmd)[0], "2")
+        with self.assertRaises(PermissionError):
+            self.P.set_pref("open_pr", "ask", by_agent=True)
+        for value in ("ask", "auto"):
+            self.P.set_pref("open_pr", value)
+            self.assertIsNone(self.check(cmd), value)
+            self.assertIsNone(self.check("cd sub && gh pr create --fill"), value)
+            for other in ("gh pr edit 3 --title x", "gh pr comment 3 -b x", "gh pr close 3", "gh issue create"):
+                self.assertIsNotNone(self.check(other), other)
+        self.P.set_pref("open_pr", "never", session=self.SID, by_agent=True)  # stricter is fine
+        self.assertIsNotNone(self.check(cmd))
+        self.assertIn("Never open a pull request", self.P.session_note(self.SID))
+
     def test_the_hook_reads_your_preferences_for_this_session(self):
         from lfgcore import hooks as H
         data = {"session_id": self.SID, "tool_name": "Bash", "tool_input": {"command": "git reset --hard"}}

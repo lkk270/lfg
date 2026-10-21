@@ -463,6 +463,8 @@ def _gh(argv):
         return
     if (top, sub) == ("pr", "merge") and _prefs_on():
         return
+    if (top, sub) == ("pr", "create") and _CTX["values"].get("open_pr") in ("ask", "auto"):
+        return
     if (top, sub) in GH_ALLOW or (top, None) in GH_ALLOW:
         return
     if (top, sub) == ("repo", "edit") and _pref_on("gh_default_branch"):

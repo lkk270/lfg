@@ -62,6 +62,14 @@ BUILTIN = [
      "text": "You may fast-forward a local branch to its remote with `git merge --ff-only` or `git pull --ff-only`, "
              "for example to update main after a PR merges. Never a merge that makes a merge commit.",
      "off_text": ""},
+    {"id": "open_pr", "group": "GitHub", "title": "Opening PRs", "kind": "choice", "default": "never",
+     "enforce": True, "options": [
+         {"value": "never", "label": "Never: I open them", "text": "Never open a pull request."},
+         {"value": "ask", "label": "When I say so", "text": "Open a pull request (`gh pr create`) only when I ask "
+          "you to in this session."},
+         {"value": "auto", "label": "On its own, after the first push", "text": "Open a pull request (`gh pr "
+          "create`) on your own after the first push of a branch that has none, never from main, master, qa or "
+          "prod."}]},
     {"id": "merge_pr", "group": "GitHub", "title": "Merging PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
          {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
@@ -107,6 +115,13 @@ ABOUT = {
         "Claude pushes only when you say \"push\".",
     ("push", "auto"):
         "Claude pushes right after each of its commits, to the branch it is on.",
+    ("open_pr", "never"):
+        "Claude is blocked from opening pull requests; you open them.",
+    ("open_pr", "ask"):
+        "Claude opens a PR only when you say so. Editing, commenting on or closing one stays blocked.",
+    ("open_pr", "auto"):
+        "Claude opens a PR by itself after it first pushes a branch that has none. Editing, commenting on or "
+        "closing one stays blocked.",
     ("merge_pr", "never"):
         "Claude is blocked from merging pull requests; you merge.",
 }
