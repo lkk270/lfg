@@ -270,7 +270,7 @@ def _run_summary(d):
             if other not in skipped and not stages.get(other) and STEP_CMD[other] == STEP_CMD[k]:
                 skipped[other] = "%s was skipped with %s: %s" % (STEP_CMD[k], STEP_LABEL[k], why)
     ahead = 0 if stages["build"] else _commits_ahead(meta)
-    ready = None if rd is None else ("green" if rd.get("green") else "red")
+    ready = None if rd is None else C.checks_state(rd)
     if ready and _newer_work(d, os.path.join(d, "ready.json")):
         ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
     return {"run": os.path.basename(d), "slug": meta.get("slug"), "created": meta.get("created"),
@@ -282,7 +282,9 @@ def _run_summary(d):
             "stages": stages, "progress": sum(stages.values()) + bool(ahead),
             "skipped": skipped, "outside": {"build": ahead} if ahead else {},
             "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),
-            "review": (rv or {}).get("verdict"), "secure": _verdict((se or {}).get("verdict")),
+            "review": (rv or {}).get("verdict"), "review_on_red": (rv or {}).get("checks") == "red",
+            "cant_run": sorted({t for c in (rd or {}).get("checks") or [] for t in c.get("cant_run") or []}),
+            "secure": _verdict((se or {}).get("verdict")), "secure_on_main": (se or {}).get("on_main") or 0,
             "pentest": (pt or {}).get("status") if isinstance(pt, dict) else None,
             "shipcheck": None if sc is None else ("pass" if sc.get("pass") else "fail"),
             "tasks": {"total": len(tl), "done": sum(1 for t in tl if isinstance(t, dict) and t.get("passes"))}}

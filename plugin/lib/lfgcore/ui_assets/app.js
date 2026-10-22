@@ -409,7 +409,7 @@ function findingCard(f) {
   const more = f.title ? f.detail || f.finding || f.message : f.detail;
   const where = f.file ? f.file + (f.line ? ":" + f.line : "") : f.where || f.package || f.target || "";
   const links = ev.filter(x => /^https?:\/\//.test(x));
-  return `<div class="card"><div class="row">${st(f.severity)}${f.blocking === true ? '<span class="tag">must fix before shipping</span>' : ""}${f.axis ? `<span class="tag">${esc(AXIS[f.axis] || words(f.axis))}</span>` : ""}${f.feedback ? st(f.feedback) : ""}</div>
+  return `<div class="card"><div class="row">${st(f.severity)}${f.on_main ? '<span class="tag" title="In a file this branch doesn\'t change, so it was there before this work; not counted in the verdict">already on main</span>' : f.blocking === true ? '<span class="tag">must fix before shipping</span>' : ""}${f.axis ? `<span class="tag">${esc(AXIS[f.axis] || words(f.axis))}</span>` : ""}${f.feedback ? st(f.feedback) : ""}</div>
     <div class="title">${txt(head)}</div>
     ${more ? `<p>${txt(more)}</p>` : ""}
     ${f.fix ? `<p><b>What to do:</b> ${txt(f.fix)}</p>` : ""}
@@ -419,7 +419,7 @@ function findingCard(f) {
     ${where ? `<div class="muted small mono">${esc(where)}</div>` : ""}</div>`;
 }
 const SEV_RANK = { blocker: 0, critical: 0, high: 1, major: 1, medium: 2, moderate: 2, minor: 3, low: 3, nit: 4 };
-const sevRank = f => (f.blocking === true ? -1 : 0) + (SEV_RANK[String(f.severity).toLowerCase()] ?? 5);
+const sevRank = f => (f.on_main ? 10 : f.blocking === true ? -1 : 0) + (SEV_RANK[String(f.severity).toLowerCase()] ?? 5);
 const findingList = (fs, none) => (fs || []).length ? [...fs].sort((a, b) => sevRank(a) - sevRank(b)).map(findingCard).join("") : `<p class="muted">${esc(none || "Nothing found.")}</p>`;
 /* A task: its description, opening to the steps and how it's checked */
 function taskItem(t) {
@@ -1170,8 +1170,10 @@ function runAttention(r) {
   const out = [];
   if (r.review === "block") out.push(["bad", "The code review found something that must be fixed"]);
   else if (r.review === "changes") out.push(["warn", "The code review asked for changes"]);
+  if (r.review && r.review_on_red) out.push(["warn", "The code review was written while checks were failing: if code changes to fix them, review again before shipping"]);
   if (r.secure === "don't") out.push(["bad", "The security check found problems to fix"]);
   if (r.ready === "red") out.push(["bad", "Tests or checks are failing"]);
+  else if (r.ready === "cant_run") out.push(["warn", `Some checks can't run on this computer: ${(r.cant_run || []).join(", ") || "a tool"} isn't installed. Nothing failed; install it to prove them here, or rely on CI`]);
   else if (r.ready === "stale") out.push(["warn", "The last checks ran before the latest work, so their result is out of date: run /lfg:check"]);
   if (r.shipcheck === "fail") out.push(["bad", "The ship check failed"]);
   if (r.pentest === "refused") out.push(["warn", "The security test didn't run: open the Security test document to see why"]);

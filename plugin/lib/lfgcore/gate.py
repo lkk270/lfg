@@ -186,7 +186,47 @@ def _run_check(root, name, cmd, logdir, timeout=1800):
     tail = "\n".join(out.strip().splitlines()[-25:])
     for _k, rx in SECRET_OUTPUT_RX:
         tail = rx.sub("[REDACTED]", tail)
-    return {"name": name, "cmd": cmd, "exit": cp.returncode, "seconds": round(time.time() - t0, 1), "tail": tail}
+    res = {"name": name, "cmd": cmd, "exit": cp.returncode, "seconds": round(time.time() - t0, 1), "tail": tail}
+    missing = missing_tools(out) if cp.returncode else []
+    if missing:
+        res.update(cant_run=missing, hint="%s isn't installed on this machine, so this check can't run here (CI "
+                   "has it): install it (%s) and run the checks again" % (
+                       ", ".join(missing), "; ".join(install_hint(t) for t in missing)))
+    return res
+
+
+MISSING_TOOL = [re.compile(p, re.M) for p in (
+    r"spawn ([\w.+-]+) ENOENT", r'"code":"ENOENT","syscall":"spawn ([\w.+-]+)"',
+    r"^(?:\S+: )?([\w.+-]+): command not found", r"command not found: ([\w.+-]+)",
+    r"No such file or directory: '([\w.+-]+)'")]
+
+
+def missing_tools(out):
+    """Programs a failed check's output says it couldn't start, that really aren't installed here."""
+    found = []
+    for rx in MISSING_TOOL:
+        for m in rx.finditer(out):
+            t = m.group(1)
+            if t not in found and "/" not in t and not C.which(t):
+                found.append(t)
+    return found
+
+
+def install_hint(tool):
+    return ("brew install %s" % tool) if C.which("brew") or os.uname().sysname == "Darwin" else \
+        ("your package manager, e.g. apt-get install %s" % tool)
+
+
+def gate_state(checks):
+    """green (everything that ran passed), red (a check failed), cant_run (the only failures are tools missing on
+    this machine: not proven here, not failing either) or none (nothing ran)."""
+    ran = [c for c in checks if c.get("exit") is not None and c.get("name") != "lint_fix"]
+    if not ran:
+        return "none"
+    bad = [c for c in ran if c["exit"] != 0]
+    if not bad:
+        return "green"
+    return "cant_run" if all(c.get("cant_run") for c in bad) else "red"
 
 
 def secret_scan(root, diff):
@@ -245,7 +285,8 @@ def gate(root, rid, fix=False, affected=False, only=None):
         checks.append(suppression_scan(diff))
     ran = [c for c in checks if c["exit"] is not None and c["name"] != "lint_fix"]
     green = bool(ran) and all(c["exit"] == 0 for c in ran)
-    result = {"ts": C.now_iso(), "green": green, "commands_file": path, "commands_detected": detected,
+    result = {"ts": C.now_iso(), "green": green, "state": gate_state(checks), "head": C.git_head(root),
+              "commands_file": path, "commands_detected": detected,
               "checks": checks, "logs": logdir, "missing": [c["name"] for c in checks if c["exit"] is None]}
     if run and not only:
         C.write_json(os.path.join(run, "ready.json"), result)

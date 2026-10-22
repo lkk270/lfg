@@ -470,15 +470,25 @@ def secure(root, rid, target="diff", offline=False):
     check_urls(inv["urls"], findings, offline)
     check_images(inv["images"], findings, offline)
     check_actions(inv["actions"], inv["write_all"], findings)
-    blocking = [f for f in findings if f.get("blocking")]
-    warns = [f for f in findings if not f.get("blocking") and f.get("severity") in ("high", "medium", "critical")]
+    on_main = 0
+    if mode == "diff":  # scanners read the whole repo: what sits in files this branch doesn't touch was there before
+        mine = set(GT.branch_files(root))
+        for f in findings:
+            path = str(f.get("where") or "").split(":")[0]
+            if path and path not in mine:
+                f["on_main"] = True
+                on_main += 1
+    counted = [f for f in findings if not f.get("on_main")]
+    blocking = [f for f in counted if f.get("blocking")]
+    warns = [f for f in counted if not f.get("blocking") and f.get("severity") in ("high", "medium", "critical")]
     result = {"ts": C.now_iso(), "mode": mode, "target": target if mode == "thing" else mode,
               "inventory": {"packages": ["%s %s@%s" % k for k in inv["packages"]], "urls": sorted(inv["urls"]),
                             "images": sorted(inv["images"]), "actions": ["%s@%s" % k for k in inv["actions"]],
                             "model_files": sorted(inv["pickles"])},
               "scanners": scanners, "findings": findings,
               "verdict": "don't" if blocking else ("safe with caveats" if warns else "safe"),
-              "blocking": len(blocking), "offline": offline, "licences_checked": licences_checked}
+              "blocking": len(blocking), "on_main": on_main, "offline": offline,
+              "licences_checked": licences_checked}
     run = C.current_run(root)
     if run and mode != "thing":
         C.write_json(os.path.join(run, "05-secure.json"), result)

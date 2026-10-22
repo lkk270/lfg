@@ -45,6 +45,7 @@ preflight: graphs        # build on first use, sync if code changed
 5. **Verdict per new item**, in plain words:
    - **safe**: no findings, or only informational.
    - **safe with caveats**: warnings only (medium CVE, low Scorecard, single maintainer, unreachable high). Name each caveat and what would retire it.
+   - Findings marked `on_main` sit in files this branch doesn't change, so they were there before this work: list them under **Already on main** (count and the worst few), never in the verdict or checkpoint 3.
    - **don't**: any blocking finding. Give the safer alternative: fixed version, pinned SHA, maintained replacement package, verified model source, or removal.
 6. **Blocking findings → checkpoint 3.** Stop and ask the user to choose for each one: **fix** (you apply it), **replace** (you swap in the alternative and re-scan), or **accept** (record a dev-graph `Issue` of type `risk` with the reason; a Linear issue only after an explicit yes on the exact text). A blocking finding raises the lane to Full; say so.
 7. **Record.** Confirmed findings → dev-graph `Issue` (type `risk`). Waiting on upstream → `ExternalBlocker`. "We assume X is safe" → `Assumption` with the scan as `guardRef`.

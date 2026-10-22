@@ -446,6 +446,55 @@ def current_run(root):
     return path if name and os.path.isdir(path) else None
 
 
+def git_head(root):
+    """The checked-out commit's full sha, or "" (no commits yet, or not git)."""
+    cp = run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=root, timeout=10)
+    return cp.stdout.strip() if cp.returncode == 0 else ""
+
+
+def checks_state(ready):
+    """What a ready.json says: green, red, cant_run (failed only for tools missing on this machine) or none."""
+    if not isinstance(ready, dict):
+        return "none"
+    return ready.get("state") or ("green" if ready.get("green") else "red")
+
+
+def stamp_review(root):
+    """Record in the current run's 06-review.json the checks it was written against and the commit it read
+    (`lfg run review-stamp`, run by /lfg:expert after writing it). Returns {checks, head, note}: note is the line
+    to open the review's reply with, "" when the checks were green."""
+    r = current_run(root)
+    p = os.path.join(r, "06-review.json") if r else ""
+    rv = read_json(p, None) if p else None
+    if not isinstance(rv, dict):
+        raise ValueError("no 06-review.json in the current run to stamp")
+    ready = read_json(os.path.join(r, "ready.json"), None)
+    state = checks_state(ready)
+    rv.update(checks=state, checks_at=(ready or {}).get("ts"), head=git_head(root), stamped=now_iso())
+    write_json(p, rv)
+    note = {"red": "Checks were red when this review was written (%s); it may change once they are fixed."
+                   % ((ready or {}).get("ts") or "time not recorded"),
+            "cant_run": "Some checks couldn't run on this machine (a tool isn't installed); the rest passed.",
+            "none": "No checks had run when this review was written."}.get(state, "")
+    return {"checks": state, "head": rv["head"], "note": note}
+
+
+def review_status(root):
+    """Does the current run's review still stand? Not when it was written while checks were red and commits landed
+    after it. A review on red checks with the code unchanged stands, and so does one on green checks."""
+    r = current_run(root)
+    rv = read_json(os.path.join(r, "06-review.json"), None) if r else None
+    if not isinstance(rv, dict):
+        return {"stands": False, "why": "no review in the current run", "commits_since": 0}
+    head, since = rv.get("head") or "", 0
+    if head and head != git_head(root):
+        cp = run(["git", "rev-list", "--count", "%s..HEAD" % head], cwd=root, timeout=10)
+        since = int(cp.stdout.strip() or 0) if cp.returncode == 0 else 0
+    stale = rv.get("checks") == "red" and since > 0
+    return {"stands": not stale, "checks": rv.get("checks"), "commits_since": since,
+            "why": "written while checks were red, and %d commit(s) landed since" % since if stale else ""}
+
+
 def run_file(root, name):
     """Path of a file in the current run folder, or None when there is no current run."""
     r = current_run(root)

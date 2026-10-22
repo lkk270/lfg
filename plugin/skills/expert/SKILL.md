@@ -54,6 +54,8 @@ adapted-from: mattpocock/skills/code-review (MIT, © 2026 Matt Pocock)
     "message": "…", "fix": "…" } ] }
 ```
 
+Then run `lfg run review-stamp`: it records in `06-review.json` the checks it was written against (`checks`: green, red, cant_run when a tool is missing on this machine, or none) and the commit it read (`head`). When it prints a note, open your reply with that line: a review written while checks fail still runs, but it may change once they are fixed, and `/lfg:ship` asks for a fresh one if commits land after it.
+
 Reply with three sections (`## Standards`, `## Spec`, `## Blast radius`), the verdict, and one line per axis: count and worst finding. For `changes`: each item must be fixed (via `/fix`) or deferred with a linked `Issue` before gate 5 passes.
 
 ## Rules

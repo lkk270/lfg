@@ -367,6 +367,18 @@ def cmd_run(a):
         return 0
     if a.action == "merge":
         return _run_merge(root, rid, a)
+    if a.action == "review-stamp":
+        try:
+            res = C.stamp_review(root)
+        except ValueError as e:
+            C.die(str(e), 2)
+        print("06-review.json: checks %s at commit %s%s" % (res["checks"], res["head"][:12] or "(none)",
+                                                         "\n" + res["note"] if res["note"] else ""))
+        return 0
+    if a.action == "review-status":
+        st = C.review_status(root)
+        print("review %s%s" % ("stands" if st["stands"] else "needs redoing", ": " + st["why"] if st["why"] else ""))
+        return 0 if st["stands"] else 1
     if a.action == "path":
         r = C.current_run(root)
         if not r:
@@ -684,13 +696,16 @@ def _lean(items, ok, keys=("tail", "detail")):
 
 def _checks_human(r):
     for c in r["checks"]:
-        mark = "skip" if c["exit"] is None else ("PASS" if c["exit"] == 0 else "FAIL")
+        mark = "skip" if c["exit"] is None else "PASS" if c["exit"] == 0 else "N/A" if c.get("cant_run") else "FAIL"
         print("%-5s %-13s %s" % (mark, c["name"], c.get("cmd") or ""))
-        if c["exit"] not in (0, None) and c.get("tail"):
+        if c.get("cant_run"):
+            print("      can't run here: " + c["hint"])
+        elif c["exit"] not in (0, None) and c.get("tail"):
             print("      " + c["tail"].replace("\n", "\n      "))
         elif c["exit"] is None:
             print("      " + c.get("tail", ""))
-    print("\ngate: %s" % ("GREEN" if r["green"] else "RED"))
+    print("\ngate: %s" % ("GREEN" if r["green"] else "NOT PROVEN HERE (a tool is missing; nothing failed)"
+                         if r.get("state") == "cant_run" else "RED"))
     if r.get("logs"):
         print("full logs: %s" % r["logs"])
 
@@ -747,16 +762,20 @@ def cmd_secure(a):
     res = S.secure(root, rid, a.target or "diff", offline=a.offline)
 
     def human(r):
-        print("secure %s: verdict %s (%d blocking)" % (r["target"], r["verdict"].upper(), r["blocking"]))
+        print("secure %s: verdict %s (%d blocking)%s" % (
+            r["target"], r["verdict"].upper(), r["blocking"],
+            "; %d more already on main, in files this branch doesn't touch (not counted)" % r["on_main"]
+            if r.get("on_main") else ""))
         for k, v in r["inventory"].items():
             if v:
                 print("  new %s: %s" % (k, ", ".join(v[:10])))
         for s in r["scanners"]:
             print("  scanner %-22s %s" % (s["tool"], "not run: " + s.get("note", "") if s["exit"] is None
                                           else "exit %s" % s["exit"]))
-        for f in r["findings"]:
-            print("  [%s%s] %s %s @ %s -> %s" % (f["severity"], ", BLOCKING" if f.get("blocking") else "", f["id"],
-                                                f["item"], f["where"], f["fix"]))
+        for f in sorted(r["findings"], key=lambda f: bool(f.get("on_main"))):  # the branch's own first
+            print("  [%s%s] %s %s @ %s -> %s" % (
+                f["severity"], ", already on main" if f.get("on_main") else ", BLOCKING" if f.get("blocking") else "",
+                f["id"], f["item"], f["where"], f["fix"]))
     C.emit(res, a.json, human)
     return 1 if res["blocking"] else 0
 
@@ -1239,10 +1258,13 @@ def main(argv=None):
     for f in ("--background", "--allow-stale", "--json", "--quiet", "--rebuild"):
         g.add_argument(f, action="store_true")
     r = sp.add_parser("run")
-    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip", "merge"],
+    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip", "merge",
+                                      "review-stamp", "review-status"],
                    help="scratch: this machine's folder for the current run (/build's ticket worktrees); "
                         "use: make a run current (taking over a teammate's); "
-                        "merge <from-run> [<into-run>]: move a duplicate run's files into another (default: current)")
+                        "merge <from-run> [<into-run>]: move a duplicate run's files into another (default: current); "
+                        "review-stamp: record in 06-review.json the checks and commit it was written against; "
+                        "review-status: exit 1 when the review was written on red checks and commits landed since")
     r.add_argument("arg", nargs="?")
     r.add_argument("more", nargs="*", help="set: more key=value pairs; skip: why the step is left out")
     r.add_argument("--force", action="store_true", help="set: allow lowering the lane (only on the user's word)")

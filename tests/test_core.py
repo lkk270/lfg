@@ -3384,3 +3384,92 @@ class UpdatePickTest(unittest.TestCase):
         body = js[js.index("function wirePicks"):js.index("const fixingMsg")]
         self.assertIn("Saving…", body)
         self.assertNotIn("checkUpdate(true)", body)
+
+
+class CantRunHereTest(unittest.TestCase):
+    """A check that fails only because a tool isn't installed on this machine can't run here: not red, not green."""
+
+    def setUp(self):
+        self.root, self.rid = git_repo()
+        self.run = C.new_run(self.root, "x")
+
+    def gate_with(self, out, code):
+        cp = subprocess.CompletedProcess([], code, out, "")
+        with mock.patch.object(G, "commands", return_value=({"test": "npm test"}, "cmds.json", True)), \
+                mock.patch.object(G.C, "run", return_value=cp), mock.patch.object(G.C, "which", return_value=None):
+            return G.gate(self.root, self.rid, only=["test"])
+
+    def test_a_missing_tool_is_cant_run_here_with_how_to_get_it(self):
+        out = ('WrappedError: qpdf failed {"errno":-2,"code":"ENOENT","syscall":"spawn qpdf","path":"qpdf"}\n'
+               "Tests: 6 failed, 4612 passed\n")
+        res = self.gate_with(out, 1)
+        c = res["checks"][0]
+        self.assertEqual((c["cant_run"], res["state"]), (["qpdf"], "cant_run"))
+        self.assertIn("qpdf", c["hint"])
+        self.assertFalse(res["green"])  # not proven here either
+
+    def test_a_real_failure_stays_red(self):
+        self.assertEqual(self.gate_with("expect(1).toBe(2)\nTests: 1 failed\n", 1)["state"], "red")
+
+    def test_the_runs_page_says_cant_run_here_not_failing(self):
+        C.write_json(os.path.join(self.run, "ready.json"), {"green": False, "state": "cant_run", "checks": []})
+        self.assertEqual(dash._run_summary(self.run)["ready"], "cant_run")
+
+
+class SecureBaselineTest(unittest.TestCase):
+    def test_findings_in_files_the_branch_doesnt_touch_are_already_on_main(self):
+        from lfgcore import secure as SEC
+        root, rid = git_repo()
+        found = [{"id": "a", "type": "vuln", "where": "package-lock.json", "severity": "high", "blocking": True},
+                 {"id": "b", "type": "code", "where": "src/new.ts:3", "severity": "high", "blocking": True}]
+        with mock.patch.object(SEC, "local_scanners", return_value=([], [dict(f) for f in found])), \
+                mock.patch.object(SEC.GT, "branch_files", return_value=["src/new.ts"]):
+            res = SEC.secure(root, rid, "diff", offline=True)
+        on_main = {f["id"]: f.get("on_main", False) for f in res["findings"]}
+        self.assertEqual(on_main, {"a": True, "b": False})
+        self.assertEqual((res["blocking"], res["on_main"]), (1, 1))
+        with mock.patch.object(SEC, "local_scanners", return_value=([], [dict(found[0])])), \
+                mock.patch.object(SEC.GT, "branch_files", return_value=["src/new.ts"]):
+            self.assertEqual(SEC.secure(root, rid, "diff", offline=True)["verdict"], "safe")
+
+
+class ReviewOnRedTest(unittest.TestCase):
+    """A review records the checks it was written against and the commit it read; ship asks for a fresh one only
+    when it was written on red checks and commits landed since."""
+
+    def setUp(self):
+        self.root, self.rid = git_repo()
+        self.who = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        C.run(self.who + ["commit", "-q", "--allow-empty", "-m", "a"], cwd=self.root)
+        self.run = C.new_run(self.root, "x")
+        C.write_json(os.path.join(self.run, "06-review.json"), {"verdict": "approve"})
+
+    def stamp(self, ready):
+        if ready is not None:
+            C.write_json(os.path.join(self.run, "ready.json"), ready)
+        return C.stamp_review(self.root)
+
+    def test_red_checks_are_recorded_and_said(self):
+        out = self.stamp({"green": False, "state": "red", "ts": "2026-10-22T12:19:00-07:00"})
+        rv = C.read_json(os.path.join(self.run, "06-review.json"))
+        self.assertEqual(rv["checks"], "red")
+        self.assertEqual(len(rv["head"]), 40)
+        self.assertIn("red", out["note"])
+        self.assertTrue(dash._run_summary(self.run)["review_on_red"])
+
+    def test_cant_run_here_is_not_red(self):
+        self.stamp({"green": False, "state": "cant_run"})
+        self.assertEqual(C.read_json(os.path.join(self.run, "06-review.json"))["checks"], "cant_run")
+        self.assertFalse(dash._run_summary(self.run)["review_on_red"])
+
+    def test_ship_asks_again_only_when_commits_landed_after_a_red_review(self):
+        self.stamp({"green": False, "state": "red"})
+        self.assertTrue(C.review_status(self.root)["stands"])  # code unchanged: it stands
+        C.run(self.who + ["commit", "-q", "--allow-empty", "-m", "fix"], cwd=self.root)
+        st = C.review_status(self.root)
+        self.assertEqual((st["stands"], st["commits_since"]), (False, 1))
+
+    def test_a_green_review_stands_after_commits(self):
+        self.stamp({"green": True, "state": "green"})
+        C.run(self.who + ["commit", "-q", "--allow-empty", "-m", "more"], cwd=self.root)
+        self.assertTrue(C.review_status(self.root)["stands"])

@@ -28,6 +28,7 @@ Read only the run-folder files you are given: `01-brief.md`, `02-design.md` (if 
     "file": "path", "line": 0, "principle": "<id or null>", "finding": "...", "fix": "..." } ],
   "summary": "<3 lines>" }
 ```
+After writing it, run `lfg run review-stamp` and put the note it prints (if any) first in your summary.
 `block` only for: a broken Invariant, a high/critical security or pentest finding, data loss, or a spec miss on a core criterion. `changes` items must be fixable or deferred with a linked `Issue`.
 
 ## Rules
