@@ -2693,6 +2693,8 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((api["run"]["session_id"], api["run"]["with"], web["run"]["with"]),
                          (sid, ["o/web#9"], ["o/api#7"]))
         self.assertIn("claude --resume " + sid, R.resume(api["run"]))
+        both = R.together(api)  # the frontend's review, on the backend's page
+        self.assertEqual((both[0]["pr"], both[0]["pass"]["summary"], both[0]["live"]), ("o/web#9", "frontend", True))
         self.assertEqual((R.linked("o/api#7"), R.linked("o/web#9")), (["o/web#9"], ["o/api#7"]))
         steps = R.activity(api["run"]["log"])
         self.assertEqual([x["kind"] for x in steps], ["said", "tool"])

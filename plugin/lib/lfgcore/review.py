@@ -727,6 +727,23 @@ RUN_DENY = ["Bash(gh api * -X *)", "Bash(gh api * --method *)", "Bash(gh api * -
             "Bash(gh api -X *)", "Bash(gh api --method *)", "Bash(lfg review post *)", "Edit", "Write", "NotebookEdit"]
 
 
+def together(p):
+    """The other PRs' reviews from the same session as pass p (reviewed together): what each PR's page shows so the
+    whole review reads in one place."""
+    run_ = p.get("run") or {}
+    out = []
+    for other in run_.get("with") or []:
+        try:
+            rec = load(*parse_pr(other))
+        except ReviewError:
+            rec = None
+        q = next((x for x in reversed((rec or {}).get("passes") or [])
+                  if run_.get("session_id") and (x.get("run") or {}).get("session_id") == run_["session_id"]), None)
+        out.append({"pr": other, "title": (rec or {}).get("title") or "", "url": (rec or {}).get("url") or "",
+                    "pass": q, "live": bool(q) and q is rec["passes"][-1] and not q.get("posted")})
+    return out
+
+
 def job_path(repo, number):
     return os.path.join(reviews_dir(), "jobs", "%s__%d.json" % (repo.replace("/", "__"), number))
 
@@ -1191,7 +1208,7 @@ def dashboard(fresh=False, only=None):
     (q, qwhy), (mine, mwhy) = lists["requested"], lists["mine"]
     yours = {(x["repo"], x["number"]) for x in mine}
     q = [x for x in q if (x["repo"], x["number"]) not in yours]
-    recs = all_records()
+    every = recs = all_records()
     names = github_names(only) if only else set()
     others = [dict(x) for x in q + mine if names and x["repo"].lower() not in names]
     if names:
@@ -1228,6 +1245,18 @@ def dashboard(fresh=False, only=None):
     links = _links()["prs"]  # linked PRs show on every row, whichever repo they are in
     for x in q + mine + out:
         x["linked"] = links.get(ref(x["repo"], x["number"])) or []
+    if names:
+        near = {y for x in out for y in x["linked"]}
+        for r in every:
+            if ref(r["repo"], r["number"]) in near and r["repo"].lower() not in names:
+                p, n = r["passes"][-1], ref(r["repo"], r["number"])
+                tally = {s: sum(f["status"] == s for f in p["findings"]) for s in ("pending", "keep", "drop")}
+                out.append({"repo": r["repo"], "number": r["number"], "title": r.get("title"),
+                            "author": r.get("author"), "url": r.get("url"), "ticket": r.get("ticket") or "",
+                            "open": r.get("state") in (None, "OPEN"), "passes": len(r["passes"]),
+                            "score": p.get("score"), "posted": p.get("posted"), "tally": tally,
+                            "updated": r.get("updated"), "job": job(r["repo"], r["number"]), "gh": None,
+                            "linked": links.get(n) or [], "other_repo": True})
     # a ticket's PRs in the repos not picked top left: its group shows all of them
     shown = {x.get("ticket") for x in q + mine + out} - {"", None}
     more = [dict(x, passes=0, job=job(x["repo"], x["number"])) for x in others if x["ticket"] in shown]

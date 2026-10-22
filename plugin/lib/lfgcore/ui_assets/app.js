@@ -2022,7 +2022,7 @@ PAGES.prs = async arg => {
   const qopts = { onRow: x => (location.hash = prHash(x)) };
   const rcols = [
     qcols[0],
-    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(ticketName(x.ticket))}` : ""}</div><div class="sub">${x.gh ? ghTag(x.gh) : ""}${linkTags(x.linked)}</div>` },
+    { k: "title", label: "Review", html: x => `${esc(x.title || prRef(x))}${x.other_repo ? ' <span class="tag" title="In another repo than the one picked top left; reviewed with or linked to one here">other repo</span>' : ""}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.ticket ? ` · ${esc(ticketName(x.ticket))}` : ""}</div><div class="sub">${x.gh ? ghTag(x.gh) : ""}${linkTags(x.linked)}</div>` },
     { k: "state", label: "Where it is", html: x => `${tallyLine(x)}${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}`, sort: x => (x.posted ? 2 : (x.tally || {}).pending ? 0 : 1) },
     { k: "score", label: "Score", num: true },
     { k: "passes", label: "Reviews", num: true },
@@ -2080,7 +2080,7 @@ function ticketSection(d, unlocked) {
     (by.get(x.ticket) || by.set(x.ticket, []).get(x.ticket)).push(x);
   }
   const groups = [...by].sort((a, b) => b[1].length - a[1].length || b[0].localeCompare(a[0])).map(([t, prs]) => `<details class="item" ${prs.length > 1 ? "open" : ""}><summary><span class="grow"><b class="mono">${esc(t)}</b> ${esc((state.ticketTitles || {})[t] || "")} <span class="muted small">${plural(prs.length, "open PR")}</span></span></summary>
-    <ul class="items">${prs.map(x => `<li><input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} aria-label="Pick ${esc(prRef(x))}"><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.passes ? ` · ${plural(x.passes, "review")}` : ""}</div>${x.job ? `<div class="meta">${jobLine(x.job)}</div>` : ""}</div><a class="small" href="${esc(prHash(x))}">Open</a></li>`).join("")}</ul>
+    <ul class="list">${prs.map(x => `<li><input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} aria-label="Pick ${esc(prRef(x))}"><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.passes ? ` · ${plural(x.passes, "review")}` : ""}</div>${x.job ? `<div class="meta">${jobLine(x.job)}</div>` : ""}</div><a class="small" href="${esc(prHash(x))}">Open</a></li>`).join("")}</ul>
     <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button><button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div></details>`).join("");
   return section("By Linear ticket", `${groups ? `<div class="box">${groups}</div>` : ""}
     <div class="row mt"><input type="text" id="tk-id" class="mono" placeholder="ATO-4223" ${unlocked ? "" : "disabled"}><button class="btn small" id="tk-go" ${unlocked ? "" : "disabled"}>Find the ticket's PRs</button></div>`,
@@ -2133,6 +2133,16 @@ function pickBar() {
     for (let i = 1; i < rest.length; i++) for (const y of rest.slice(i)) await save("review_link", { pr: rest[i - 1], other: y });
     state.prPick.clear(); softRoute();
   };
+}
+/* Another PR's review from the same session, on this PR's page: its summary and findings, decided here like this PR's. */
+function togetherSection(t, unlocked) {
+  const q = t.pass, link = `<a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`;
+  if (!q) return section(`Findings on ${t.pr}`, `<p class="muted small">No review saved for ${link} from this session.</p>`);
+  const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
+  const fs = [...q.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
+  return section(`Findings on ${t.pr}`, `${t.title ? `<p class="muted small">${esc(t.title)}</p>` : ""}${q.summary ? `<p>${txt(q.summary)}</p>` : ""}
+    ${fs.length ? fs.map(f => prFinding(f, t.pr, unlocked, t.live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
+    <p class="muted small">${q.posted ? `Posted ${ago(q.posted.ts)}.` : `Post it from ${link}.`}</p>`, `${plural(q.findings.length, "finding")}`);
 }
 function prFinding(f, pr, unlocked, live) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
@@ -2214,8 +2224,10 @@ async function prDetail(arg) {
           <div class="row"><input type="text" class="grow" data-pr-chat placeholder="e.g. why is 1.2 a blocker? did you check the caller in billing.py?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Ask</button></div></div>` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
       ${prior}
-      ${section("Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `<span id="pr-tally">${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide</span>`)}
+      ${(p.together || []).length ? `<div class="callout">This review covered ${plural(p.together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${p.together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Their findings are below this PR's; post each PR from its own page.</div>` : ""}
+      ${section((p.together || []).length ? `Findings on ${pr}` : "Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `<span id="pr-tally">${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide</span>`)}
       ${postBar}
+      ${(p.together || []).map(t => togetherSection(t, unlocked)).join("")}
     </div>
     ${sess}`;
 }
