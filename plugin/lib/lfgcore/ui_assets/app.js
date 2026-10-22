@@ -2058,7 +2058,7 @@ const ticketName = t => `${t}${(state.ticketTitles || {})[t] ? ` (${state.ticket
 /* Open PRs grouped by the Linear ticket their branch, title or description names, to review a ticket's PRs at once. */
 function ticketSection(d, unlocked) {
   const seen = new Set(), by = new Map();
-  for (const x of [...(d.mine || []), ...(d.queue || []), ...(d.reviews || []).filter(r => r.open)]) {
+  for (const x of [...(d.mine || []), ...(d.queue || []), ...(d.reviews || []).filter(r => r.open), ...(d.ticket_more || [])]) {
     if (!x.ticket || seen.has(prRef(x))) continue;
     seen.add(prRef(x));
     (by.get(x.ticket) || by.set(x.ticket, []).get(x.ticket)).push(x);

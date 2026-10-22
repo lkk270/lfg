@@ -2724,6 +2724,20 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(R.ticket_of("(ato-4251) Remove unused code", "Part of ATO-4109"), "ATO-4251")
         self.assertEqual(R.ticket_of("chore(sync): main to qa", "ATO-1 fix\nATO-2 feature"), "")  # lists many
         self.assertEqual(R.ticket_of("ATO-9 title", "", "lee/ato-4223-x"), "ATO-4223")  # the branch wins
+        self.assertEqual(R.ticket_of("nivid/ato-4287-record-the-source-ticket…"), "ATO-4287")  # titled by its branch
+
+    def test_a_tickets_prs_in_other_repos_come_along_when_one_repo_is_picked(self):
+        pr = lambda repo, n, title: {"repo": repo, "number": n, "title": title, "author": "nivid", "url": "u",  # noqa: E731
+                                     "updated": "t", "draft": False, "ticket": R.ticket_of(title)}
+        rows = [pr("o/api", 1, "nivid/ato-4287-record"), pr("o/portal", 2, "nivid/ato-4287-record"),
+                pr("o/portal", 3, "ATO-9 unrelated")]
+        with mock.patch.object(R, "queue", side_effect=lambda age, w: rows if w == "requested" else []), \
+                mock.patch.object(R, "github_names", return_value={"o/api"}), \
+                mock.patch.object(R, "gh_status", return_value={"branch": ""}), \
+                mock.patch.object(R, "all_records", return_value=[]):
+            d = R.dashboard(only="/src/api")
+        self.assertEqual([x["number"] for x in d["queue"]], [1])
+        self.assertEqual([(x["repo"], x["number"]) for x in d["ticket_more"]], [("o/portal", 2)])
 
     def test_a_tickets_prs_are_the_open_ones_that_name_it(self):
         row = lambda n, title, body="": {"repository": {"nameWithOwner": "o/api"}, "number": n, "title": title,  # noqa: E731
