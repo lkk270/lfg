@@ -367,11 +367,13 @@ def save(what, body):
         return S.set_skill_group(body.get("id"), body.get("group"))
     if what == "update_pick":
         from . import updates as U
-        dash.forget("update")
         try:
-            return U.set_pick(body.get("sha"), body.get("verdict"))
+            res = U.set_pick(body.get("sha"), body.get("verdict"))
         except ValueError as e:
             raise S.Invalid(str(e)) from None
+        # a pick changes nothing on GitHub: re-check without fetching (well under a second) so the banner shows it now
+        dash.remember("update", U.check(max_age=0, fetch=False))
+        return res
     if what in ("update_apply", "update_fix"):
         from . import updates as U
         dash.forget("update")

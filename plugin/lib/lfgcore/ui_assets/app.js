@@ -2764,7 +2764,7 @@ function upstreamPicks(d, from, unlocked) {
     const clash = c.conflicts == null ? "" : c.conflicts.length
       ? `<span class="tag warn" title="${esc(c.conflicts.join("\n"))}">Conflicts with your fork in ${plural(c.conflicts.length, "file")}</span>`
       : `<span class="tag ok">No conflicts with your fork</span>`;
-    const btns = Object.keys(label).map(v => `<label class="${c.verdict === v ? "on" : ""}"><input type="radio" name="pick-${c.short}" data-sha="${c.sha}" value="${v}" ${c.verdict === v ? "checked" : ""} ${unlocked ? "" : "disabled"}>${label[v]}</label>`).join("");
+    const btns = Object.keys(label).map(v => `<label class="${c.verdict === v ? "on" : ""}" ${unlocked ? "" : `title="Read-only in this tab: run lfg ui --unlock --port ${esc(location.port || "80")}"`}><input type="radio" name="pick-${c.short}" data-sha="${c.sha}" value="${v}" ${c.verdict === v ? "checked" : ""} ${unlocked ? "" : "disabled"}>${label[v]}</label>`).join("");
     return `<li class="pick${c.verdict === "skip" ? " skipped" : ""}"><span><span class="mono small">${esc(c.short)}</span> ${esc(c.subject)} ${clash}</span><span class="seg inline">${btns}</span></li>`;
   };
   const n = v => U.filter(c => c.verdict === v).length;
@@ -2779,10 +2779,14 @@ function heldNotes(H) {
 }
 function wirePicks(box) {
   $$(".picks input[data-sha]", box).forEach(i => i.onchange = async () => {
-    $$(`input[name="${i.name}"]`, box).forEach(x => (x.disabled = true));
+    const group = $$(`input[name="${i.name}"]`, box), seg = i.closest(".seg");
+    group.forEach(x => { x.disabled = true; x.parentNode.classList.toggle("on", x === i); });
+    const note = document.createElement("span");
+    note.className = "muted small saving"; note.textContent = "Saving…";
+    seg.after(note);
     const r = await save("update_pick", { sha: i.dataset.sha, verdict: i.value });
-    if (!r.ok) return alertMsg(i.parentNode, r);
-    checkUpdate(true);
+    if (!r.ok) { note.remove(); group.forEach(x => (x.disabled = false)); return alertMsg(i.parentNode, r); }
+    checkUpdate();  /* the server re-checked without asking GitHub, so this answers at once */
   });
 }
 const fixingMsg = F => `${dot("on")}Claude is fixing the stopped update${F.branch ? ` on <code>${esc(F.branch)}</code>` : ""}, started ${ago(F.started)}. Once it has a fix, LFG commits it and runs the update again by itself.`;

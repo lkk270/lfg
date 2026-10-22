@@ -1068,6 +1068,12 @@ def forget(key):
         _CACHE.pop(key, None)
 
 
+def remember(key, val):
+    """Put a value just worked out into the in_background cache, so the next read shows it at once."""
+    with _CLOCK:
+        _CACHE[key] = (time.time(), val)
+
+
 def in_background(key, ttl, fn, doing):
     """Cached value of fn(), refreshed in a background thread with at most one run per key in flight, so a slow or
     stuck external tool never holds up a page. Until the first run finishes, says it is pending."""

@@ -525,6 +525,7 @@ input.num { width: 80px; }
 .picks li.pick.skipped > span:first-child { color: var(--faint); text-decoration: line-through; }
 .picks .tag ~ ul { list-style: disc; padding-left: 20px; }
 .picks .seg label { padding: 2px 8px; font-size: 12.5px; }
+.picks .seg label:has(input:disabled):not(.on) { opacity: .55; cursor: not-allowed; }
 label.row { flex-wrap: nowrap; align-items: flex-start; } label.row > input[type=checkbox] { margin-top: 3px; } label.row > span { flex: 1; min-width: 0; }
 .dictate-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-top: 10px; font-size: 13px; color: var(--text-2); }
 .dictate-opts > label:not(.row) { display: inline-flex; align-items: center; gap: 8px; }

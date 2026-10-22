@@ -3200,3 +3200,26 @@ class LockedNoteTest(unittest.TestCase):
         js = C.read_text(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js"))
         self.assertNotIn("it opens this page unlocked", js)
         self.assertIn("lfg ui --unlock --port", js)
+
+
+class UpdatePickTest(unittest.TestCase):
+    def test_a_pick_shows_at_once_without_asking_github(self):
+        from lfgcore import updates as U
+        sha, fetched = "a" * 40, []
+
+        def fake(max_age=60, fetch=True):
+            fetched.append(fetch)
+            return {"upstream": [{"sha": sha, "verdict": U.picks().get(sha, "keep")}], "checked_at": C.now_iso()}
+        with mock.patch.object(U, "check", fake):
+            dash.forget("update")
+            ui.save("update_pick", {"sha": sha, "verdict": "later"})
+            d = ui.api("update", {})
+        self.assertFalse(d.get("pending"))
+        self.assertEqual(d["upstream"][0]["verdict"], "later")
+        self.assertEqual(fetched, [False])  # a pick changes nothing on GitHub: no fetch
+
+    def test_the_banner_marks_the_pick_while_it_saves(self):
+        js = C.read_text(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js"))
+        body = js[js.index("function wirePicks"):js.index("const fixingMsg")]
+        self.assertIn("Saving…", body)
+        self.assertNotIn("checkUpdate(true)", body)
