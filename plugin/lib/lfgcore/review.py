@@ -793,7 +793,7 @@ def run(repo, number, ticket=None, fresh=False, together=()):
         C.write_json(job_path(*x), {
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
-            "with": [r for r in refs if r != ref(*x)]})
+            "with": [r for r in refs if r != ref(*x)], "ticket": ticket or ""})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     if len(prs) == 1:
         what = "to review %s" % refs[0]
@@ -1230,6 +1230,6 @@ def dashboard(fresh=False, only=None):
         x["linked"] = links.get(ref(x["repo"], x["number"])) or []
     # a ticket's PRs in the repos not picked top left: its group shows all of them
     shown = {x.get("ticket") for x in q + mine + out} - {"", None}
-    more = [dict(x, passes=0) for x in others if x["ticket"] in shown]
+    more = [dict(x, passes=0, job=job(x["repo"], x["number"])) for x in others if x["ticket"] in shown]
     return {"ticket_more": more, "queue": q, "queue_why": qwhy, "mine": mine, "mine_why": mwhy, "reviews": out,
             "no_remote": bool(only) and not names}
