@@ -180,6 +180,17 @@ def _about(d, review=None):
 
 def _run_summary(d):
     meta = C.read_json(os.path.join(d, "run.json"), {}) or {}
+    fix = None
+    if meta.get("kind") == "pr-fix":  # a fix run started from a PR's fix list on the Reviews page
+        from . import prreview as PR
+        PR.settle_fix(d)
+        res = C.read_json(os.path.join(d, "fix-result.json"), None) or {}
+        fix = {"working": PR.fix_running(d), "total": len(meta.get("items") or []), "ok": res.get("ok"),
+               "done": {s: sum(1 for x in (res.get("items") or {}).values() if x.get("status") == s)
+                        for s in PR.FIX_STATUS}, "items": res.get("items") or {},
+               "titles": {t.get("id"): {"title": PR._title(t.get("body"))[:160], "path": t.get("path"),
+                                        "line": t.get("line")}
+                          for t in (C.read_json(os.path.join(d, "fixlist.json"), {}) or {}).get("items") or []}}
     rd = C.read_json(os.path.join(d, "ready.json"), None)
     sc = C.read_json(os.path.join(d, "07-shipcheck.json"), None)
     rv = C.read_json(os.path.join(d, "06-review.json"), None)
@@ -194,7 +205,8 @@ def _run_summary(d):
         ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
     return {"run": os.path.basename(d), "slug": meta.get("slug"), "created": meta.get("created"),
             "title": title, "about": about,
-            "branch": meta.get("branch") or "",
+            "branch": meta.get("branch") or "", "kind": meta.get("kind"), "pr": meta.get("pr"),
+            "pr_url": meta.get("pr_url"), "worktree": meta.get("worktree"), "fix": fix,
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()),
             "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),

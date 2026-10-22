@@ -1439,6 +1439,66 @@ class PrReviewTest(unittest.TestCase):
             PR.triage(rid, root, 1)
         self.assertTrue(PR._read(rid, 1, "triage.json", {})["threads"]["t-1"]["posted"])
 
+    def test_fix_list_hands_comments_to_a_fix_run_linked_to_the_branch_and_pr(self):
+        from lfgcore import dash
+        PR, rid, root = self.PR, self.rid, self.root
+        ths = [{"id": "t-1", "kind": "inline", "reply_to": 11, "author": "devin", "bot": True, "path": "a.py",
+                "line": 4, "body": "Null check?", "resolved": False, "replies": []},
+               {"id": "t-2", "kind": "inline", "reply_to": 12, "author": "lee", "path": "a.py", "line": 1,
+                "body": "Rename it.", "resolved": False, "replies": []}]
+        with mock.patch.object(PR, "threads", lambda *a: ths):
+            PR.triage(rid, root, 1)
+        PR.apply(rid, 1, {"threads": [{"id": "t-1", "worth": 90, "why": "real", "fix": "add the check"}]})
+        with self.assertRaises(PR.Invalid):  # nothing on the list yet
+            PR.fix_all(rid, root, 1)
+        PR.decide(rid, 1, {"t-1": {"decision": "fix"}, "t-2": {"decision": "fix"}})
+        PR.fixlist(rid, 1, remove="t-2")  # off the list; the reply decision stays
+        tri = PR._read(rid, 1, "triage.json", {})["threads"]
+        self.assertEqual((tri["t-1"]["fix_queued"], tri["t-2"]["fix_queued"], tri["t-2"]["decision"]),
+                         (True, False, "fix"))
+        seen, real = {}, subprocess.Popen
+
+        def popen(argv, *a, **kw):  # git runs for real; the claude run is faked and finishes at once
+            if "--disallowedTools" not in argv:
+                return real(argv, *a, **kw)
+            seen.update(argv=argv, cwd=kw["cwd"], prompt=kw["stdin"].read().decode())
+            kw["stdout"].write(json.dumps({"result": "Fixed it.\n```json\n" + json.dumps({"items": [
+                {"id": "t-1", "status": "fixed", "note": "added the check", "files": ["a.py"]},
+                {"id": "zzz", "status": "fixed"}]}) + "\n```", "total_cost_usd": 0.5}).encode())
+            return types.SimpleNamespace(pid=999999999)  # never alive
+        with mock.patch.object(PR.subprocess, "Popen", popen):
+            out = PR.fix_all(rid, root, 1)
+        wt = out["worktree"]
+        self.assertEqual(os.path.realpath(wt), os.path.realpath(os.path.join(root + ".worktrees", "feature")))
+        self.assertEqual((out["branch"], out["items"], out["made_worktree"]), ("feature", 1, True))
+        self.assertEqual(subprocess.run(["git", "branch", "--show-current"], cwd=wt, capture_output=True,
+                                        text=True).stdout.strip(), "feature")
+        self.assertEqual(seen["cwd"], wt)
+        self.assertIn("acceptEdits", seen["argv"])
+        self.assertIn("Bash(git push:*)", seen["argv"][seen["argv"].index("--disallowedTools") + 1])
+        self.assertIn("lfg:fix", seen["prompt"])
+        self.assertIn('"t-1"', seen["prompt"])
+        self.assertNotIn('"t-2"', seen["prompt"])
+        self.assertFalse(C.current_run(rid))  # the user's current run is left alone
+        run = C.read_json(os.path.join(C.runs_dir(rid), out["run"], "run.json"), {})
+        self.assertEqual((run["kind"], run["pr"], run["branch"], run["items"]), ("pr-fix", 1, "feature", ["t-1"]))
+        r = dash.runs(rid)["runs"][0]  # the Runs page settles the finished run and shows it with its PR
+        self.assertEqual((r["pr"], r["branch"], r["fix"]["done"]["fixed"], r["fix"]["working"]),
+                         (1, "feature", 1, None))
+        self.assertEqual(r["title"], "Fix review comments on PR #1: Add four")
+        self.assertEqual(r["fix"]["titles"]["t-1"], {"title": "Null check?", "path": "a.py", "line": 4})
+        t1 = PR._read(rid, 1, "triage.json", {})["threads"]["t-1"]
+        self.assertEqual((t1["fix_run"], t1["fix_status"], t1["fix_note"]), (out["run"], "fixed", "added the check"))
+        d = PR.triage_detail(rid, root, 1)
+        self.assertEqual(d["fixes"][0]["items"]["t-1"]["status"], "fixed")
+        self.assertEqual((d["fix_where"]["branch"], os.path.realpath(d["fix_where"]["path"]), d["fix_where"]["exists"]),
+                         ("feature", os.path.realpath(wt), True))
+        with self.assertRaises(PR.Invalid):  # sent once: the list is empty again
+            PR.fix_all(rid, root, 1)
+        with mock.patch.object(PR, "threads", lambda *a: ths):  # a refresh keeps the fix state
+            PR.triage(rid, root, 1)
+        self.assertEqual(PR._read(rid, 1, "triage.json", {})["threads"]["t-1"]["fix_status"], "fixed")
+
     def test_review_worktrees_survive_the_idle_clean_up(self):
         from lfgcore import worktree as W2
         self.PR.start(self.rid, self.root, 1)

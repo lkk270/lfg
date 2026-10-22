@@ -267,17 +267,20 @@ def git_branch(root):
     return b
 
 
-def new_run(rid, slug, branch=""):
+def new_run(rid, slug, branch="", current=True, **extra):
+    """A new run folder. `current=False` leaves the repo's current run alone (a run started from the dashboard
+    next to whatever the user is doing); `extra` goes into run.json (a PR fix run's pr, pr_url, worktree...)."""
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     base = "%s-%s" % (stamp, _slug(slug))
     path, n = os.path.join(runs_dir(rid), base), 2
     while os.path.exists(path):
         path, n = os.path.join(runs_dir(rid), "%s-%d" % (base, n)), n + 1
     ensure_dir(path)
-    write_text(os.path.join(runs_dir(rid), "CURRENT"), os.path.basename(path) + "\n")
-    write_json(os.path.join(path, "run.json"), {"run_id": os.path.basename(path), "slug": slug,
-                                                "repo_id": rid, "branch": branch, "created": now_iso(),
-                                                "lane": None})
+    if current:
+        write_text(os.path.join(runs_dir(rid), "CURRENT"), os.path.basename(path) + "\n")
+    write_json(os.path.join(path, "run.json"), dict({"run_id": os.path.basename(path), "slug": slug,
+                                                     "repo_id": rid, "branch": branch, "created": now_iso(),
+                                                     "lane": None}, **extra))
     return path
 
 

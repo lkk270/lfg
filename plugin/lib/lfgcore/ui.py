@@ -281,6 +281,10 @@ def pr_action(what, body):
             return PR.decide(rid, n, body.get("decisions"))
         if what == "pr_replies":
             return PR.post_replies(rid, root, n)
+        if what == "pr_fixlist":
+            return PR.fixlist(rid, n, remove=body.get("remove"), add=body.get("add"))
+        if what == "pr_fixall":
+            return PR.fix_all(rid, root, n)
     except PR.Invalid as e:
         raise S.Invalid(str(e)) from None
     raise S.Invalid("unknown action")

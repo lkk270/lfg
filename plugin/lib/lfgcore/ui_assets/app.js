@@ -486,6 +486,7 @@ function wire(root) {
     state.cache = {}; route();
   });
   if ($("[data-checks-running]", root)) setTimeout(() => { if (document.body.contains(root) && $("[data-checks-running]", root)) { state.cache = {}; route(); } }, 10000);
+  if ($("[data-run-working]", root)) setTimeout(() => { if (document.body.contains(root) && $("[data-run-working]", root)) { state.cache = {}; route(); } }, 8000);
   if ($("[data-spend-pending]", root)) setTimeout(() => { if (document.body.contains(root) && $("[data-spend-pending]", root)) route(); }, 4000);
 }
 
@@ -1118,6 +1119,8 @@ async function cachedRuns() {
 
 /* What a run is doing, in one line: "Step 5 of 10 · next: run the checks" */
 function runLine(r, stages) {
+  if (r.fix) return r.fix.working ? `AI fixing ${plural(r.fix.total, "review comment")}` : r.fix.ok === undefined || r.fix.ok === null ? "Fix run" : r.fix.ok
+    ? `Fixed ${r.fix.done.fixed} of ${r.fix.total}${r.fix.done.skipped ? ` · ${r.fix.done.skipped} skipped` : ""}${r.fix.done.failed ? ` · ${r.fix.done.failed} failed` : ""} · next: review and commit` : "The AI fix run didn't finish";
   const p = runPlace(stages, r.stages, r);
   return p.finished ? "All steps done" : `${p.done} of ${p.total} steps · next: ${NEXT[p.next]}`;
 }
@@ -1181,17 +1184,17 @@ PAGES.runs = async arg => {
   if (d.available === false) return unavailable(d);
   return `${head("Runs", "Each run is one piece of work LFG took from idea to a commit you can review. Click one to see where it is.")}
     <div class="box">${table(d.runs, [
-      { k: "slug", label: "Work", html: r => `${esc(runName(r))}${r.current ? ' <span class="tag">current</span>' : ""}${r.about ? `<div class="about clamp">${txt(r.about)}</div>` : ""}<div class="sub">${r.owner ? `filed under ${esc(r.owner_name)} · ${plural(r.tasks_here, "task")} for this repo, ${n(r.tasks_here_done)} done` : r.branch ? `branch ${esc(r.branch)}` : ""}</div>`, sort: r => runName(r) },
+      { k: "slug", label: "Work", html: r => `${esc(runName(r))}${r.current ? ' <span class="tag">current</span>' : ""}${r.about ? `<div class="about clamp">${txt(r.about)}</div>` : ""}<div class="sub">${r.owner ? `filed under ${esc(r.owner_name)} · ${plural(r.tasks_here, "task")} for this repo, ${n(r.tasks_here_done)} done` : r.branch ? `branch ${esc(r.branch)}${r.pr ? ` · PR #${esc(r.pr)}` : ""}` : ""}</div>`, sort: r => runName(r) },
       { k: "progress", label: "Where it is", html: r => esc(runLine(r, d.stages)), sort: r => r.progress },
-      { k: "attn", label: "Status", html: r => { const a = runAttention(r); return a.length ? `<span class="st">${dot(a[0][0])}${esc(a[0][1])}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
+      { k: "attn", label: "Status", html: r => { if (r.fix && r.fix.working) return `<span class="st">${dot("on")}AI working</span>`; const a = runAttention(r); return a.length ? `<span class="st">${dot(a[0][0])}${esc(a[0][1])}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
       { k: "created", label: "Started", html: r => `<span class="nowrap">${ago(r.created)}</span>` },
     ], { onRow: r => (location.hash = "#runs/" + encodeURIComponent(r.run)), emptyTitle: "No runs yet", emptyBody: "Start one in Claude Code with <code>/lfg:lfg</code> and what you want built." })}</div>`;
 };
 
 const FILE_NAMES = { "01-brief.md": "The idea, written up", "02-design.md": "The plan", "tasks.json": "Task list", "04-qa.md": "Test report",
   "ready.json": "Check results", "05-secure.json": "Security check", "05-pentest.json": "Security test", "06-review.json": "Code review",
-  "07-shipcheck.json": "Ship check", "COMMIT_MSG.md": "Commit message", "PR_BODY.md": "Pull request text", "progress.md": "Progress notes" };
-const fileName = f => FILE_NAMES[f] || (/^03-build-(.+)\.md$/.test(f) ? `Build notes · ${f.slice(9, -3)}` : null);
+  "07-shipcheck.json": "Ship check", "COMMIT_MSG.md": "Commit message", "PR_BODY.md": "Pull request text", "progress.md": "Progress notes", "fix-report.md": "What the AI fix run did" };
+const fileName = f => FILE_NAMES[f] || (/^03-build-(.+)\.md$/.test(f) ? `Build notes · ${f.slice(9, -3)}` : /^03-fix-(.+)\.md$/.test(f) ? `Fix notes · ${f.slice(7, -3)}` : null);
 /* documents in pipeline order: brief, plan, tasks, build notes, tests, checks, security, review, ship, packet, notes */
 const FILE_ORDER = ["01-brief.md", "02-design.md", "tasks.json", "03-build-", "04-qa.md", "ready.json", "05-secure.json", "05-pentest.json",
   "06-review.json", "07-shipcheck.json", "COMMIT_MSG.md", "PR_BODY.md", "progress.md"];
@@ -1211,6 +1214,12 @@ async function runDetail(run) {
     : `<p><button class="btn small" data-run-checks="${esc(run)}">Run checks again</button> <span class="muted small">lint, types, tests and build, in the background</span></p>`;
   const checks = d.checks.length ? `${recheck}<div class="box items">${readyChecks(d.checks)}</div>` : recheck;
   crumbs("runs", runName(d));
+  const docs = files.length ? section("Documents", `<div class="box"><ul class="list">${files.map(f => `<li><a href="#" class="grow" data-run-file='${esc(JSON.stringify([f.run, f.name]))}'>${esc(f.label)}</a><span class="muted small nowrap" title="${esc(f.mtime)}">${ago(f.mtime.replace(" ", "T"))}</span></li>`).join("")}</ul></div>`) : "";
+  if (d.fix) return `${head(runName(d), `On branch <span class="brtag">${esc(d.branch)}</span>${d.pr ? ` · <a href="#review/yours/${esc(d.pr)}">PR #${esc(d.pr)} in Reviews</a>${d.pr_url ? ` · <a href="${esc(d.pr_url)}" target="_blank" rel="noopener noreferrer">GitHub ↗</a>` : ""}` : ""} · started ${ago(d.created)}`, '<a class="back" href="#runs">← All runs</a>')}
+    <div class="panel"${d.fix.working ? " data-run-working" : ""}><div class="row"><b>${d.fix.working ? '<span class="spin"></span> ' : ""}${esc(runLine(d))}</b></div>
+      ${d.worktree ? `<p class="muted small">Working in <code>${esc(d.worktree)}</code>. Nothing is committed or pushed; review the changes there with <code>git diff</code>.</p>` : ""}
+      ${Object.keys(d.fix.titles || {}).length ? `<div class="box items">${Object.entries(d.fix.titles).map(([i, c]) => [i, c, d.fix.items[i] || (d.fix.working ? { status: "working" } : {})]).map(([i, c, x]) => `<div class="fx-i"><span class="grow fx-t"><span>${esc(c.title || i)}${c.path ? ` <span class="muted small">${esc(c.path.split("/").pop())}${c.line ? ":" + c.line : ""}</span>` : ""}</span>${x.note ? `<span class="fx-note">${esc(x.note)}</span>` : ""}${(x.files || []).length ? `<span class="muted small">${x.files.map(esc).join(", ")}</span>` : ""}</span>${FIX_SAY[x.status] ? tagHtml(...FIX_SAY[x.status]) : ""}</div>`).join("")}</div>` : ""}</div>
+    ${docs}`;
   return `${head(runName(d), `${d.owner_name ? `Filed under ${esc(d.owner_name)} · ` : ""}${d.branch ? `On branch ${esc(d.branch)} · ` : ""}started ${ago(d.created)}`, '<a class="back" href="#runs">← All runs</a>')}
     ${d.about ? `<p class="about lead">${txt(d.about)}</p>` : ""}
     <div class="panel"><div class="row"><b>${p.finished ? "All steps done" : `${p.done} of ${p.total} steps done`}</b><span class="muted${p.blocked ? " stuck-text" : ""}">${p.finished ? "· the commit message is ready for you to review" : `· next: ${esc(NEXT[p.next])}`}</span></div>
@@ -1218,7 +1227,7 @@ async function runDetail(run) {
     ${attn.length ? section("Needs your attention", `<div class="callout ${attn.some(a => a[0] === "bad") ? "bad" : "warn"}"><ul class="attn">${attn.map(([tn, text]) => `<li>${dot(tn)}<span class="grow">${esc(text)}</span></li>`).join("")}</ul></div>`) : ""}
     ${tasks ? section("Tasks", tasks, `${d.tasks.done} of ${d.tasks.total} done · click one for its steps`) : ""}
     ${checks ? section("Checks", d.ready === "stale" && d.checks.length ? `<p class="muted small">These ran ${ago(d.checked_at)}, before the latest work on this run, so they may no longer hold. Run <code>/lfg:check</code> for a fresh result.</p>${checks}` : checks, d.ready === "stale" ? "out of date" : "click a failed one to see why") : d.owner_name ? section("Checks", `<p class="muted small">This run's checks run in ${esc(d.owner_name)}, on its code, so they aren't shown here.</p>`) : ""}
-    ${files.length ? section("Documents", `<div class="box"><ul class="list">${files.map(f => `<li><a href="#" class="grow" data-run-file='${esc(JSON.stringify([f.run, f.name]))}'>${esc(f.label)}</a><span class="muted small nowrap" title="${esc(f.mtime)}">${ago(f.mtime.replace(" ", "T"))}</span></li>`).join("")}</ul></div>`) : ""}`;
+    ${docs}`;
 }
 
 PAGES.issues = async () => {
@@ -1524,7 +1533,7 @@ function rvChat(d, working, dis) {
    parts in HTML: the label becomes tags, the AI-agent prompt goes, <summary> becomes a bold line. */
 function botComment(body) {
   let b = String(body || "").replace(/<details>\s*<summary>[^<]*Prompt for AI[^<]*<\/summary>[\s\S]*?<\/details>/gi, "")
-    .replace(/<summary>\s*([\s\S]*?)\s*<\/summary>/gi, "\n**$1**\n").replace(/<\/?details>/gi, "").replace(/<\/?(br|p|div|span|b|i|em|strong)\b[^>]*>/gi, "");
+    .replace(/<summary>\s*([\s\S]*?)\s*<\/summary>/gi, "\n**$1**\n").replace(/<\/?details>/gi, "").replace(/<picture>[\s\S]*?<\/picture>/gi, "").replace(/<\/?(br|p|div|span|b|i|em|strong|a|img|source|sup|sub)\b[^>]*>/gi, "");
   const lines = b.split("\n"), i0 = lines.findIndex(l => l.trim());
   let tags = [];
   if (i0 >= 0 && lines[i0].includes("|") && lines[i0].length < 160) {
@@ -1534,6 +1543,33 @@ function botComment(body) {
   return { tags, body: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() };
 }
 const TAG_TONE = { critical: "bad", major: "warn" };
+
+const firstSentence = x => { const s = String(x || "").replace(/\s+/g, " ").trim(), m = s.match(/^.{20,}?[.!?](?=\s|$)/); const f = m ? m[0] : s; return f.length > 150 ? f.slice(0, 148) + "…" : f; };
+const FIX_SAY = { working: ["AI fixing", "on"], fixed: ["Fixed", "ok"], skipped: ["AI skipped it", ""], failed: ["Fix failed", "bad"] };
+const fixTag = t => t.fix_run && FIX_SAY[t.fix_status] ? ` ${tagHtml(...FIX_SAY[t.fix_status])}` : t.fix_queued ? ` ${tagHtml("on the fix list", "on")}` : "";
+
+/* The fix list: comments you pressed Fix on, until Fix all hands them to an AI /lfg:fix run on the PR's branch */
+function fixCard(all, d, title, score, unlocked) {
+  const waiting = all.filter(t => t.fix_queued && !t.resolved && (!t.fix_run || t.fix_status === "failed")).sort((a, b) => (b.worth ?? -1) - (a.worth ?? -1));
+  const runs = d.fixes || [], w = d.fix_where, busy = runs.some(r => r.working);
+  if (!waiting.length && !runs.length) return "";
+  const where = t => t.path ? `<span class="muted small" title="${esc(t.path)}">${esc(t.path.split("/").pop())}${t.line ? ":" + t.line : ""}</span>` : "";
+  const item = (t, extra) => `<div class="fx-i">${score(t)}<span class="grow fx-t">${esc(title(Object.assign({}, t, { body: botComment(t.body).body })))} ${where(t)}${extra || ""}</span>`;
+  const byId = Object.fromEntries(all.map(t => [t.id, t]));
+  const runHtml = r => {
+    const ids = Object.keys(r.items).length ? Object.keys(r.items) : all.filter(t => t.fix_run === r.run).map(t => t.id);
+    const head = r.working ? `<span class="spin"></span>AI fixing ${plural(ids.length, "comment")} · started ${ago(r.working === true ? "" : r.working)}`
+      : r.ok ? `Fix run finished ${ago(r.at)}${r.cost ? ` · ${usd(r.cost)}` : ""}` : `The fix run didn't finish ${ago(r.at)}`;
+    return `<div class="fx-run"${r.working ? " data-fx-working" : ""}><div class="fx-run-h"><span class="grow">${head}</span><a class="small" href="#runs/${encodeURIComponent(r.run)}">Open the run →</a></div>
+      ${ids.map(i => { const t = byId[i], x = r.items[i]; if (!t) return ""; const st = x ? FIX_SAY[x.status] : r.working ? FIX_SAY.working : null;
+        return `${item(t, x && x.note ? `<span class="fx-note">${esc(x.note)}</span>` : "")}${st ? tagHtml(...st) : ""}</div>`; }).join("")}</div>`;
+  };
+  return `<div class="rv-card fx-card"><div class="fx-h"><b>Fix list</b><span class="muted small">${waiting.length ? `${plural(waiting.length, "comment")} to fix` : "nothing waiting"}${w ? ` · on <span class="brtag">${esc(w.branch)}</span>` : ""}</span><span class="grow"></span>
+      <button class="btn primary small" data-fx-all${waiting.length && !busy && unlocked && w ? "" : " disabled"}${busy ? ' title="A fix run is still going"' : ""}>Fix all${waiting.length ? ` (${waiting.length})` : ""}</button></div>
+    ${waiting.map(t => `${item(t)}<button class="x" data-fx-rm="${esc(t.id)}" title="Take it off the fix list" aria-label="Remove from the fix list"${unlocked ? "" : " disabled"}>×</button></div>`).join("")}
+    ${waiting.length && w ? `<p class="muted small fx-foot">Fix all runs <code>/lfg:fix</code> in ${w.exists ? "the checkout that has this branch" : "a new worktree"}, <code title="${esc(w.path)}">${esc(w.path.split("/").slice(-2).join("/"))}</code>, as a run you can follow on the Runs page. Changes stay unstaged; you commit.</p>` : ""}
+    ${runs.map(runHtml).join("")}</div>`;
+}
 
 /* Your own PR: every comment thread, the AI's read on it, and the reply you'll send */
 async function triagePage(n, unlocked) {
@@ -1561,9 +1597,9 @@ async function triagePage(n, unlocked) {
     const reasons = [t.reply_wont].concat(t.wont_reasons || []).filter(Boolean);
     const reply = t.reply != null && t.reply !== "" ? t.reply : t.decision === "fix" ? t.reply_fix || "" : t.decision === "wont" ? t.reply_wont || "" : "";
     const bc = botComment(t.body);
-    return `<div class="rv-t" data-t="${esc(t.id)}"><div class="rv-t-row">${score(t)}<details class="grow rv-t-d"><summary><span class="rv-t-title">${esc(title({ body: bc.body }))}</span><span class="rv-t-m">${bc.tags.map(x => tagHtml(x, TAG_TONE[x.toLowerCase()] || "")).join("")}${esc(t.author || "?")}${t.bot ? " (bot)" : ""}${t.path ? ` · <span title="${esc(t.path)}">${esc(t.path.split("/").pop())}${t.line ? ":" + t.line : ""}</span>` : ""}${t.outdated ? " · outdated" : ""}${t.from_summary ? ` ${tagHtml("in the review summary", "")}` : ""}</span></summary>
-        <div class="rv-t-x">${t.why ? `<p><b>AI:</b> ${txt(t.why)}</p>` : ""}${t.fix ? `<p class="muted">Fix: ${txt(t.fix)}</p>` : ""}<div class="md">${md(bc.body)}</div>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" class="small">Open on GitHub ↗</a>` : ""}</div></details>
-      <span class="seg">${[["fix", "Fix"], ["wont", "Won't fix"]].map(([k, l]) => `<button class="pill wide${t.decision === k ? " on" : ""}" data-dec="${k}"${dis}>${l}</button>`).join("")}</span></div>
+    return `<div class="rv-t" data-t="${esc(t.id)}"><div class="rv-t-row">${score(t)}<details class="grow rv-t-d"><summary><span class="rv-t-title">${esc(title({ body: bc.body }))}</span><span class="rv-t-m">${bc.tags.map(x => tagHtml(x, TAG_TONE[x.toLowerCase()] || "")).join("")}${esc(t.author || "?")}${t.bot ? " (bot)" : ""}${t.path ? ` · <span title="${esc(t.path)}">${esc(t.path.split("/").pop())}${t.line ? ":" + t.line : ""}</span>` : ""}${t.outdated ? " · outdated" : ""}${t.from_summary ? ` ${tagHtml("in the review summary", "")}` : ""}${fixTag(t)}</span>${t.why ? `<span class="ai-line"><b>AI</b>${esc(firstSentence(t.why))}</span>` : ""}</summary>
+        <div class="rv-t-x">${t.why || t.fix ? `<div class="ai-take"><div class="ai-h"><span class="ai-badge">AI</span>${t.worth != null ? `${t.worth}% worth fixing` : "The AI's read"}</div>${t.why ? `<p>${txt(t.why)}</p>` : ""}${t.fix ? `<p class="ai-fix"><b>Suggested fix</b>${txt(t.fix)}</p>` : ""}</div>` : ""}<div class="rv-src">${esc(t.author || "?")}${t.bot ? " (bot)" : ""} wrote</div><div class="md">${md(bc.body)}</div>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" class="small">Open on GitHub ↗</a>` : ""}</div></details>
+      <span class="seg">${[["fix", "Fix"], ["wont", "Won't fix"]].map(([k, l]) => `<button class="pill wide${t.decision === k ? " on" : ""}" data-dec="${k}"${k === "fix" ? ' title="Fix it, and put it on the fix list"' : ""}${dis}>${l}</button>`).join("")}</span></div>
       ${t.decision === "fix" || t.decision === "wont" ? `<div class="rv-reply"><span class="muted">↳</span><textarea class="inline-edit" rows="1"${dis}>${esc(reply)}</textarea></div>` : ""}
       ${t.decision === "wont" && reasons.length > 1 ? `<div class="reasons">${reasons.map((r, i) => `<button class="chip${reply === r ? " on" : ""}" data-reason="${i}" title="${esc(r)}"${dis}>${esc(r.length > 48 ? r.slice(0, 46) + "…" : r)}</button>`).join("")}</div>` : ""}</div>`;
   };
@@ -1573,6 +1609,7 @@ async function triagePage(n, unlocked) {
   const main = `<div class="rv-main">
     ${working ? `<p class="rv-note" data-rv-working><span class="spin"></span>The AI is ${rv.job === "triage" ? "reading the comments" : "answering"} · started ${ago(d.working_since)}</p>` : ""}
     ${!working && ((d.chat || []).slice(-1)[0] || {}).error ? `<p class="rv-note bad">The last AI run failed (details on the right).<button class="btn small" data-tr-start${unlocked ? "" : " disabled"}>Try again</button></p>` : ""}
+    ${fixCard(all, d, title, score, unlocked)}
     <div class="rv-card rv-list-card">${top.map(row).join("") || (low.length ? "" : '<p class="muted small">No unresolved comments.</p>')}${low.length ? `<div class="rv-divider">${low.length} under 30% · probably not worth fixing</div>${low.map(row).join("")}` : ""}</div>
     ${closed.length ? `<details class="rv-card"><summary class="rv-card-h">${closed.length} resolved or answered</summary>${closed.map(t => `<div class="meta">${esc(t.author || "?")}${t.path ? ` · ${esc(t.path.split("/").pop())}` : ""} · ${t.posted ? `replied (${t.posted.decision === "fix" ? "fixing" : "won't fix"})` : "resolved"}</div>`).join("")}</details>` : ""}
     <div class="rv-bar"><span class="muted small">${open.length} unresolved · ${ready} ${ready === 1 ? "reply" : "replies"} ready</span><span class="grow"></span><span class="muted small" id="rv-saved"></span><button class="btn primary" data-tr-preview${ready && !working && unlocked ? "" : " disabled"}>Send replies</button></div></div>`;
@@ -1635,17 +1672,26 @@ function wireReview(root) {
     $("#rv-post-go").onclick = async e => { if (!confirm("Post this review to GitHub now?")) return; const r = await act("pr_post", {}, e.target, "Posting…"); if (r.ok) closeDrawer(); };
   });
   wireTriage(root, n, act);
-  if ($("[data-rv-working]", root)) rvPoll = setTimeout(() => { if (/^#review\/(yours\/)?\d+/.test(location.hash) && !document.activeElement.closest(".rv-send")) route({ soft: true }); }, 4000);
+  if ($("[data-rv-working], [data-fx-working]", root)) rvPoll = setTimeout(() => { if (/^#review\/(yours\/)?\d+/.test(location.hash) && !document.activeElement.closest(".rv-send, .rv-t, .rv-card textarea")) route({ soft: true }); }, $("[data-rv-working]", root) ? 4000 : 8000);
 }
 
 function wireTriage(root, n, act) {
   $$("[data-tr-start]", root).forEach(b => b.onclick = () => act("pr_triage", {}, b, "Reading…"));
+  $$("[data-fx-rm]", root).forEach(b => b.onclick = () => act("pr_fixlist", { remove: b.dataset.fxRm }, b, "…"));
+  const fixAll = b => async () => {
+    const w = state.pr.fix_where || {}, k = $$("[data-fx-rm]", root).length;
+    if (!confirm(`Start an AI fix run for ${k} ${k === 1 ? "comment" : "comments"} on ${w.branch}?\n\nIt runs /lfg:fix in ${w.path}${w.exists ? "" : " (a new worktree)"} and leaves the changes unstaged for you to review and commit.`)) return;
+    clearTimeout(rvTimer);
+    await save("pr_decide", { repo: state.repo, n, decisions: decisions() });
+    act("pr_fixall", {}, b, "Starting…");
+  };
   const saved = $("#rv-saved", root);
   const decisions = () => Object.fromEntries($$(".rv-t", root).map(c => [c.dataset.t, { decision: ($(".seg .pill.on", c) || { dataset: {} }).dataset.dec || null, reply: $("textarea", c) ? $("textarea", c).value : undefined }]));
   const persist = (rerender) => { clearTimeout(rvTimer); if (saved) saved.textContent = "…"; rvTimer = setTimeout(async () => { const r = await save("pr_decide", { repo: state.repo, n, decisions: decisions() }); if (saved) saved.textContent = r.ok ? "saved" : (r.why || "not saved"); if (rerender) route({ soft: true }); }, rerender ? 0 : 700); };
   $$(".rv-t .seg .pill", root).forEach(b => b.onclick = () => { const c = b.closest(".rv-t"), on = b.classList.contains("on"); $$(".seg .pill", c).forEach(x => x.classList.remove("on")); if (!on) b.classList.add("on"); const ta = $("textarea", c); if (ta) ta.value = ""; persist(true); });
   $$(".rv-t [data-reason]", root).forEach(b => b.onclick = () => { const c = b.closest(".rv-t"); $("textarea", c).value = state.trReasons[c.dataset.t][+b.dataset.reason]; $$("[data-reason]", c).forEach(x => x.classList.toggle("on", x === b)); persist(); });
   $$(".rv-t textarea", root).forEach(t => t.addEventListener("input", () => persist()));
+  $$("[data-fx-all]", root).forEach(b => b.onclick = fixAll(b));
   $$("[data-tr-preview]", root).forEach(b => b.onclick = async () => {
     clearTimeout(rvTimer);
     await save("pr_decide", { repo: state.repo, n, decisions: decisions() });
