@@ -2668,6 +2668,7 @@ class ReviewTest(unittest.TestCase):
         prompt = next(c[0][0][2] for c in run.call_args_list if c[0][0][0] == "claude")
         self.assertIn("o/api#7, o/web#9", prompt)
         self.assertIn('"reviews"', prompt)
+        self.assertEqual(R.job("o/web", 9)["with"], ["o/api#7"])  # each PR's job says what it's reviewed with
         api, web = R.load("o/api", 7)["passes"][-1], R.load("o/web", 9)["passes"][-1]
         self.assertEqual((api["summary"], web["summary"]), ("backend", "frontend"))
         self.assertEqual((api["run"]["session_id"], api["run"]["with"], web["run"]["with"]),
