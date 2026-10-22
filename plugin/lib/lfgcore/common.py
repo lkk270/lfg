@@ -55,6 +55,8 @@ DEFAULT_CONFIG = {
     "headroom": {"port": 8787, "mode": "token", "scope": "off"},
     "guard": {"hardened": False, "allow_commit": False},
     "review": {"sources": []},
+    "replies": {"lfg_tag": False},
+    "sonarqube": {"telemetry": False},
     "dictate": {"shortcut": "option+space", "insert": "paste", "cleanup": True},
     "omnigraph": {
         "cookbooks_repo": "https://github.com/ModernRelay/omnigraph-cookbooks.git",

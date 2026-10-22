@@ -566,10 +566,12 @@ class HeadroomTest(unittest.TestCase):
                 self.assertIn("Headroom proxy: up.", self.session_start_text())
 
     def prompt_out(self, live, revived=None):
+        """The prompt hook's Headroom part only: the LFG reminder is switched off (LfgTagTest covers it)."""
         from contextlib import redirect_stdout
         from lfgcore import hooks
         buf = io.StringIO()
         with mock.patch.object(hooks, "_repo", return_value=(None, None)), \
+                mock.patch.object(hooks, "_tag_on", return_value=False), \
                 mock.patch.object(HR, "live", return_value=live), \
                 mock.patch.object(HR, "revive", return_value=revived) as rv, \
                 mock.patch.object(C, "audit"), redirect_stdout(buf):
@@ -1433,6 +1435,165 @@ class OwnRunTest(unittest.TestCase):
         self.assertFalse(dash._for_repo(summary, [])["stages"]["tasks"])
         planned = dict(summary, stages=dict(summary["stages"], tasks=True))
         self.assertTrue(dash._for_repo(planned, [])["stages"]["tasks"])
+class SonarTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import sonar as SQ
+        self.SQ = SQ
+
+    def test_repo_settings_pass_through_but_nothing_else(self):
+        d = tempfile.mkdtemp()
+        C.write_text(os.path.join(d, ".sonarcloud.properties"),
+                     "# comment\nsonar.sources=src\nsonar.exclusions=**/gen/**\nsonar.host.url=http://evil\n"
+                     "sonar.login=abc\n")
+        self.assertEqual(self.SQ._props(d), {"sonar.sources": "src", "sonar.exclusions": "**/gen/**"})
+
+    def test_setup_replaces_the_stock_login_and_keeps_it_private(self):
+        SQ, calls = self.SQ, []
+
+        def api(path, method="GET", data=None, auth=None, timeout=30):
+            calls.append((path, auth if isinstance(auth, tuple) else "token"))
+            return {"token": "squ_t"} if "user_tokens" in path else {}
+        try:
+            os.remove(SQ.creds_path())
+        except OSError:
+            pass
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(SQ, "_docker", lambda *a, **k: ok), mock.patch.object(SQ, "_api", api), \
+                mock.patch.object(SQ, "server_state", lambda: "up"), mock.patch.object(C, "which", lambda n: "/x"):
+            SQ.setup(log=lambda m: None)
+        c = SQ.creds()
+        self.assertEqual(calls[0], ("/api/users/change_password", ("admin", "admin")))
+        self.assertEqual(calls[1], ("/api/user_tokens/generate", ("admin", c["password"])))
+        self.assertTrue(len(c["password"]) >= 12 and c["password"] != "admin" and c["token"] == "squ_t")
+        self.assertEqual(os.stat(SQ.creds_path()).st_mode & 0o777, 0o600)
+
+    def test_issues_on_changed_lines_come_first_and_decide_the_exit(self):
+        from lfgcore import cli
+        SQ = self.SQ
+        answers = {"/api/qualitygates": {"projectStatus": {"status": "ERROR", "conditions": [
+                       {"metricKey": "new_bugs", "status": "ERROR", "actualValue": "1", "errorThreshold": "0",
+                        "comparator": "GT"}]}},
+                   "/api/issues": {"issues": [
+                       {"key": "a", "type": "CODE_SMELL", "severity": "MINOR", "component": "k:src/x.ts", "line": 9},
+                       {"key": "b", "type": "BUG", "severity": "MAJOR", "component": "k:src/x.ts", "line": 3}],
+                       "paging": {"total": 2}},
+                   "/api/hotspots": {"hotspots": [], "paging": {"total": 0}},
+                   "/api/measures": {"component": {"measures": [{"metric": "bugs", "value": "1"}]}}}
+
+        def api(path, *a, **k):
+            return next(v for p, v in answers.items() if path.startswith(p))
+        with mock.patch.object(SQ, "_api", api), mock.patch.object(SQ, "_base", lambda root, base: "abc"), \
+                mock.patch.object(SQ, "_changed_lines", lambda root, base: {"src/x.ts": {3, 4}}):
+            res = SQ._collect("sq-55555555", "/r", "k", None, "t", 1)
+        self.assertEqual([(i["key"], i["mine"]) for i in res["issues"]], [("b", True), ("a", False)])
+        self.assertEqual((res["gate"], res["mine"]), ("ERROR", 1))
+        self.assertEqual([i["key"] for i in cli._sonar_blocking(res)], ["b"])
+        self.assertEqual(SQ.last("sq-55555555")["mine"], 1)
+
+    def test_scan_copy_has_what_sonarcloud_sees_and_never_secrets(self):
+        d = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", d], check=True)
+        for rel, text in (("src/a.ts", "x"), (".gitignore", "*.log\n.env\nout/\n"), (".env", "KEY=1"),
+                          ("out/big.js", "y"), ("debug.log", "z"), ("src/new.ts", "n"), ("config/.env.prod", "S=1")):
+            C.write_text(os.path.join(d, rel), text)
+        subprocess.run(["git", "-C", d, "add", "src/a.ts", ".gitignore"], check=True)
+        subprocess.run(["git", "-C", d, "add", "-f", "config/.env.prod"], check=True)  # even a tracked one stays out
+        snap, copied, skipped = self.SQ.stage("sq-66666666", d)
+        got = sorted(os.path.relpath(os.path.join(r, f), snap) for r, _, fs in os.walk(snap) for f in fs)
+        self.assertEqual(got, [".gitignore", "src/a.ts", "src/new.ts"])
+        self.assertEqual((copied, skipped), (3, 1))
+
+    def test_remove_only_touches_lfg_labelled_containers(self):
+        SQ, ran = self.SQ, []
+
+        def docker(*a, **k):
+            ran.append(a)
+            return subprocess.CompletedProcess(a, 0, "someone-else\n", "")
+        with mock.patch.object(SQ, "_docker", docker):
+            SQ.remove(volumes=True)
+        self.assertFalse([a for a in ran if a[0] in ("rm", "volume") and "inspect" not in a])
+
+
+class LfgTagTest(unittest.TestCase):
+    def test_reply_tags_are_read_from_the_first_lines(self):
+        from lfgcore import hooks as H
+        self.assertEqual(H.reply_tag("**LFG:** /lfg:fix\n\nFixed it."), ("skill", "/lfg:fix"))
+        self.assertEqual(H.reply_tag("**LFG:** tools only (code graph)"), ("tools", "code graph"))
+        self.assertEqual(H.reply_tag("**LFG:** not used - a question about Docker"),
+                         ("not-used", "a question about Docker"))
+        self.assertEqual(H.reply_tag("Done.\n\nLFG wasn't needed"), ("missing", ""))
+
+    def test_last_reply_is_the_first_text_after_the_latest_prompt(self):
+        from lfgcore import hooks as H
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "t.jsonl")
+        evs = [{"type": "user", "uuid": "p1", "message": {"content": "first"}},
+               {"type": "assistant", "message": {"content": [{"type": "text", "text": "**LFG:** /lfg:fix"}]}},
+               {"type": "user", "uuid": "p2", "message": {"content": [{"type": "text", "text": "second"}]}},
+               {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t"}]}},
+               {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t"}]}},
+               {"type": "assistant", "isSidechain": True, "message": {"content": [{"type": "text", "text": "sub"}]}},
+               {"type": "assistant", "message": {"content": [{"type": "text", "text": "**LFG:** not used - x"}]}},
+               {"type": "assistant", "message": {"content": [{"type": "text", "text": "later text"}]}}]
+        C.write_text(path, "\n".join(json.dumps(e) for e in evs) + "\n")
+        self.assertEqual(H._last_reply(path), ("p2", "**LFG:** not used - x"))
+
+    def test_prompt_reminder_follows_the_setting(self):
+        from lfgcore import hooks as H
+        from lfgcore import headroom as HR2
+        import io
+        with mock.patch.object(HR2, "routed", lambda *a: False):
+            for on, want in ((True, H.TAG_REMINDER), (False, None)):
+                with mock.patch.object(H, "_tag_on", return_value=on), \
+                        mock.patch("sys.stdout", new=io.StringIO()) as o:
+                    H.prompt({"cwd": tempfile.mkdtemp()})
+                got = json.loads(o.getvalue())["hookSpecificOutput"]["additionalContext"] if o.getvalue() else None
+                self.assertEqual(got, want)
+
+
+
+
+class IntegrationsTest(unittest.TestCase):
+    def test_each_pack_is_a_card_with_its_own_settings(self):
+        from lfgcore import control as K
+        from lfgcore import hooks as H
+        from lfgcore import setup as SU2
+        packs = [dict(name=n, title=n, about="", on=n in ("core", "sonarqube"), missing=[], requires=[],
+                      experimental=False) for n in ("core", "sonarqube", "dictate", "linear")]
+        boom = mock.Mock(side_effect=RuntimeError("down"))
+        with mock.patch.object(SU2, "packs_view", lambda: packs), mock.patch.object(H, "_gh_signed_in", lambda: True), \
+                mock.patch.dict(K.STATUS, {"core": lambda su: ("ok", "fine"), "sonarqube": boom}):
+            v = K.integrations_view()["integrations"]
+        by = {i["name"]: i for i in v}
+        self.assertEqual(list(by), ["core", "sonarqube", "dictate", "linear", "github"])
+        self.assertEqual((by["core"]["tone"], by["core"]["status"]), ("ok", "fine"))
+        self.assertEqual(by["sonarqube"]["status"], "")  # a broken status check doesn't take the page down
+        self.assertEqual([f["key"] for f in by["sonarqube"]["fields"]], ["sonarqube.telemetry"])
+        self.assertEqual([f["key"] for f in by["linear"]["fields"]], ["linear.team", "linear.workspace"])
+        self.assertEqual(by["dictate"]["status"], "")  # off: no status check runs
+        general = [f for f in ST.config_view()["fields"] if not f["owner"]]
+        self.assertFalse([f for f in general if f["key"].startswith(("sonarqube.", "dictate.", "headroom."))])
+
+    def test_sonarqube_is_fully_local_by_default(self):
+        from lfgcore import sonar as SQ
+        self.assertEqual(SQ.privacy_env(), {"SONAR_TELEMETRY_ENABLE": "false", "SONAR_UPDATECENTER_ACTIVATE": "false"})
+        stock = subprocess.CompletedProcess([], 0, json.dumps(["SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true"]), "")
+        local = subprocess.CompletedProcess([], 0, json.dumps(["SONAR_TELEMETRY_ENABLE=false",
+                                                               "SONAR_UPDATECENTER_ACTIVATE=false"]), "")
+        with mock.patch.object(SQ, "_docker", lambda *a, **k: stock):
+            self.assertFalse(SQ.privacy_applied())  # stock container phones home: needs the restart
+        with mock.patch.object(SQ, "_docker", lambda *a, **k: local):
+            self.assertTrue(SQ.privacy_applied())
+
+
+class HeadroomUpstreamTest(unittest.TestCase):
+    def test_the_desktop_apps_gateway_is_never_taken_as_the_upstream(self):
+        with mock.patch.object(HR, "_settings_path", lambda: os.path.join(tempfile.mkdtemp(), "none.json")), \
+                mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://gw.example", "CLAUDE_CODE_ENTRYPOINT":
+                                             "claude-desktop"}):
+            self.assertTrue(HR.in_desktop_app())
+            self.assertEqual(HR.base_url(use_env=not HR.in_desktop_app()), "")
+            self.assertEqual(HR.base_url(), "https://gw.example")  # still what this process itself uses
 
 
 class KnowledgeDetailTest(unittest.TestCase):

@@ -221,6 +221,9 @@ def api(view, q):
     if view == "claude":
         from . import control as K
         return K.claude_view()
+    if view == "integrations":
+        from . import control as K
+        return K.integrations_view()
     if view == "tours":
         from . import control as K
         return K.tours_view()
@@ -270,6 +273,10 @@ def api(view, q):
         return dash.overview(rid, _arg(q, "branch"))
     if view == "issues":
         return dash.issues(rid, _arg(q, "branch"))
+    if view == "sonar_cloud":
+        from . import sonar as SQ
+        root = dash.repo_root(rid)
+        return (SQ.cloud(root) or {"found": False}) if root and os.path.isdir(root) else {"found": False}
     if view == "runs":
         return dash.runs(rid, _arg(q, "branch"))
     if view == "run":
@@ -320,6 +327,8 @@ def save(what, body):
         return S.save_rule(body.get("name"), body.get("text"))
     if what == "rule_reset":
         return S.reset_rule(body.get("name"))
+    if what == "sonar_scan":
+        return sonar_scan(str(body.get("repo") or ""))
     if what == "run_checks":
         return run_checks(_rid({"repo": [str(body.get("repo") or "")]}), body.get("run"))
     if what == "graphs_build":
@@ -422,6 +431,7 @@ def save(what, body):
         "legacy_fix": lambda: K.legacy_fix(body.get("id")),
         "skill_auto": lambda: K.skill_auto(body.get("id"), bool(body.get("auto"))),
         "tour_done": lambda: K.tour_done(body.get("name"), body.get("how")),
+        "omnigraph_restart": K.omnigraph_restart, "sonar_apply": K.sonar_apply,
     }
     if what in actions:
         res = actions[what]()
@@ -489,6 +499,25 @@ def build_graphs(rid, what):
     else:
         raise S.Invalid("unknown action")
     return {"started": what}
+
+
+def sonar_scan(rid):
+    """Start `lfg sonar scan` for the repo's checkout in the background (the Checks page's Scan now button)."""
+    import subprocess
+    import sys
+    root = dash.repo_root(rid) if rid in dash.repo_ids() else None
+    if not root or not os.path.isdir(root):
+        raise S.Invalid("LFG doesn't know where this project is on disk")
+    if (dash.sonar_view(rid) or {}).get("scanning"):
+        return {"started": False, "running": True}
+    lfg = C.lfg_bin() if os.path.exists(C.lfg_bin()) else os.path.abspath(sys.argv[0])
+    log = os.path.join(C.ensure_dir(C.lfg_path("repos", rid)), "sonar-scan.log")
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        p = subprocess.Popen([sys.executable, lfg, "sonar", "scan"], cwd=root, stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    C.write_json(C.lfg_path("repos", rid, "sonar-running.json"), {"pid": p.pid, "started": C.now_iso()})
+    return {"started": True}
 
 
 def run_checks(rid, run):
