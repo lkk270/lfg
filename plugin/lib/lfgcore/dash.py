@@ -29,6 +29,14 @@ STAGES = [  # (key, label, file glob) in pipeline order
 ]
 
 
+STEP_CMD = {"brief": "/lfg:grill", "design": "/lfg:plan", "tasks": "/lfg:plan", "build": "/lfg:build",
+            "qa": "/lfg:check", "gate": "/lfg:check", "secure": "/lfg:secure", "review": "/lfg:expert", "ship": "/lfg:ship",
+            "packet": "/lfg:ship"}  # the command that does each step: the run page names these too
+STEP_LABEL = {"brief": "Idea written up", "design": "Plan", "tasks": "Task list", "build": "Built", "qa": "Tested",
+              "gate": "Checks run", "secure": "Security check", "review": "Code review", "ship": "Ship check",
+              "packet": "Ready to commit"}
+
+
 # ---------------------------------------------------------------- small cache
 
 _CACHE, _CLOCK = {}, threading.Lock()
@@ -255,6 +263,10 @@ def _run_summary(d):
     title, about = _about(d, rv)
     keys = [k for k, _, _ in STAGES]
     skipped = {k: str(v)[:300] for k, v in (meta.get("skipped") or {}).items() if k in keys and not stages.get(k)}
+    for k, why in list(skipped.items()):  # a step its skipped command would have done is skipped with it
+        for other in keys:
+            if other not in skipped and not stages.get(other) and STEP_CMD[other] == STEP_CMD[k]:
+                skipped[other] = "%s was skipped with %s: %s" % (STEP_CMD[k], STEP_LABEL[k], why)
     ahead = 0 if stages["build"] else _commits_ahead(meta)
     ready = None if rd is None else ("green" if rd.get("green") else "red")
     if ready and _newer_work(d, os.path.join(d, "ready.json")):

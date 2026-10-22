@@ -1362,7 +1362,9 @@ class RunStepsTest(unittest.TestCase):
                                                    "worktrees": [{"path": wt, "branch": "lee/x"}]})
         C.write_text(os.path.join(run, "01-brief.md"), "# Brief: X\n")
         r = dash._run_summary(run)
-        self.assertEqual(r["skipped"], {"design": "settled in Linear"})  # only real steps
+        # the task list comes from /lfg:plan too: skipping the plan skips it
+        self.assertEqual(r["skipped"], {"design": "settled in Linear",
+                                        "tasks": "/lfg:plan was skipped with Plan: settled in Linear"})
         self.assertEqual(r["outside"], {"build": 3})
         self.assertFalse(r["stages"]["build"])  # no build notes: LFG didn't build it
         C.write_text(os.path.join(run, "03-build-t1.md"), "built")
