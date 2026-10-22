@@ -654,8 +654,10 @@ def ticket_of(title="", body="", branch=""):
     def ok(ids):
         return list(dict.fromkeys(t.upper() for t in ids if (t.split("-")[0].upper() == team if team else
                                                               t.split("-")[0].lower() not in NOT_TICKETS)))
-    for ids in (ok(re.findall(r"(?:^|[/_-])([a-z][a-z0-9]{1,9}-\d{1,6})(?=$|[-_/])", str(branch or "").lower())),
-                ok(re.findall(r"(?<![\w-])([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6})(?![\w-])", str(title or "")))):
+    in_branch = r"(?:^|[/_-])([a-z][a-z0-9]{1,9}-\d{1,6})(?=$|[-_/])"
+    for ids in (ok(re.findall(in_branch, str(branch or "").lower())),
+                ok(re.findall(r"(?<![\w-])([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6})(?![\w-])", str(title or ""))),
+                ok(re.findall(in_branch, str(title or "").lower().split(" ")[0]))):  # titled by its branch name
         if ids:
             return ids[0]
     ids = ok(re.findall(r"\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b", str(body or "")[:4000]))
@@ -1191,6 +1193,7 @@ def dashboard(fresh=False, only=None):
     q = [x for x in q if (x["repo"], x["number"]) not in yours]
     recs = all_records()
     names = github_names(only) if only else set()
+    others = [dict(x) for x in q + mine if names and x["repo"].lower() not in names]
     if names:
         q = [x for x in q if x["repo"].lower() in names]
         mine = [x for x in mine if x["repo"].lower() in names]
@@ -1201,13 +1204,16 @@ def dashboard(fresh=False, only=None):
         r = have.get((x["repo"], x["number"]))
         x["passes"] = len(r["passes"]) if r else 0
         x["job"] = job(x["repo"], x["number"])
-    want = {(x["repo"], x["number"]) for x in q + mine}
+    want = {(x["repo"], x["number"]) for x in q + mine + others}
     want |= {(r["repo"], r["number"]) for r in recs if r.get("state") == "OPEN"}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         st = dict(zip(want, pool.map(lambda k: gh_status(*k), want)))
     for x in q + mine:
         x["gh"] = st.get((x["repo"], x["number"]))
         x["ticket"] = ticket_of(x["title"], "", (x["gh"] or {}).get("branch")) or x.get("ticket") or ""
+    for x in others:
+        x["ticket"] = ticket_of(x["title"], "", (st.get((x["repo"], x["number"])) or {}).get("branch")) \
+            or x.get("ticket") or ""
     out = []
     for r in recs:
         p = r["passes"][-1]
@@ -1222,5 +1228,8 @@ def dashboard(fresh=False, only=None):
     links = _links()["prs"]  # linked PRs show on every row, whichever repo they are in
     for x in q + mine + out:
         x["linked"] = links.get(ref(x["repo"], x["number"])) or []
-    return {"queue": q, "queue_why": qwhy, "mine": mine, "mine_why": mwhy, "reviews": out,
+    # a ticket's PRs in the repos not picked top left: its group shows all of them
+    shown = {x.get("ticket") for x in q + mine + out} - {"", None}
+    more = [dict(x, passes=0) for x in others if x["ticket"] in shown]
+    return {"ticket_more": more, "queue": q, "queue_why": qwhy, "mine": mine, "mine_why": mwhy, "reviews": out,
             "no_remote": bool(only) and not names}
