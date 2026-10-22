@@ -1186,15 +1186,44 @@ def _http_ok(u, timeout=1.5):
 
 
 def _mcp_servers():
+    return {m["name"]: m["raw"] for m in mcp_list()}
+
+
+LFG_MCP = {"linear": "/lfg:inbox and reviews read tickets", "dev-graph": "work, decisions and issues",
+           "second-brain": "your personal notes", "code-review-graph": "the code graph",
+           "headroom": "context compression"}
+
+
+def mcp_list():
+    """Every MCP server Claude Code has, from `claude mcp list` (read-only): name, where it runs, its state, and where
+    it's set up: a claude.ai connector, you (every project, ~/.claude.json), a project's .mcp.json, or a plugin."""
     exe = C.which("claude")
     if not exe:
-        return {}
+        return []
     cp = C.run([exe, "mcp", "list"], timeout=90)
-    out = {}
-    for line in (cp.stdout or "").splitlines():
-        m = re.match(r"^([\w.@/-]+): .* - (.+)$", line.strip())
-        if m:
-            out[m.group(1)] = m.group(2).strip()
+    return parse_mcp_list(cp.stdout or "")
+
+
+def parse_mcp_list(text):
+    mine = C.read_json(os.path.join(C.HOME, ".claude.json"), {}) or {}
+    user = set(mine.get("mcpServers") or {}) if isinstance(mine.get("mcpServers"), dict) else set()
+    out = []
+    for line in text.splitlines():
+        m = re.match(r"^(.+?): (.*) - (.+)$", line.strip())
+        if not m:
+            continue
+        name, target, raw = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        state = re.sub(r"^[^\w]+", "", raw).strip()
+        st = "ok" if state.lower().startswith("connected") else "auth" if "auth" in state.lower() else "bad"
+        if name.startswith("claude.ai "):
+            name, source = name[len("claude.ai "):], "claude.ai"
+        elif name.startswith("plugin:"):
+            source = "plugin %s" % name.split(":")[1]
+            name = name.split(":")[-1]
+        else:
+            source = "you" if name in user else "project"
+        out.append({"name": name, "target": re.sub(r"\s*\((HTTP|SSE|stdio)\)$", "", target), "state": state,
+                    "status": st, "source": source, "raw": raw, "lfg": LFG_MCP.get(name, "")})
     return out
 
 
@@ -1232,7 +1261,8 @@ def tools():
         versions["omnigraph"] = _version("omnigraph", ("version",))
         for r in rows:
             r["version"] = versions.get(r["tool"])
-        mcp = _mcp_servers()
+        servers = mcp_list()
+        mcp = {m["name"]: m["raw"] for m in servers if m["source"] != "claude.ai"}
         gh = C.run(["gh", "auth", "status"], timeout=15).returncode == 0 if C.which("gh") else False
         pg = C.run(["pgrep", "-qi", "LuLu|Little Snitch"]).returncode == 0
         docker_up = C.run(["docker", "info", "--format", "{{.ServerVersion}}"], timeout=15).returncode == 0 \
@@ -1268,7 +1298,8 @@ def tools():
         ]
         for i in integrations:
             i.setdefault("problem", "%s: %s" % (i["name"], re.sub(r"^MCP:\s*", "", i["detail"])))
-        return {"tools": rows, "integrations": integrations, "mcp": mcp, "checked_at": C.now_iso()}
+        return {"tools": rows, "integrations": integrations, "mcp": mcp, "mcp_servers": servers,
+                "checked_at": C.now_iso()}
     return cached("tools", 300, get)
 
 
