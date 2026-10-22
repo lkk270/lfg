@@ -3076,3 +3076,127 @@ class OwnPrsTest(unittest.TestCase):
             self.assertEqual(R.post("o/r", 7, "comment", dry_run=True)["event"], "COMMENT")
         with mock.patch.object(R, "me", return_value="someone-else"):
             self.assertEqual(R.post("o/r", 7, "approve", dry_run=True)["event"], "APPROVE")
+
+
+class WorktreeRunTest(unittest.TestCase):
+    """A worktree made for a run's work belongs to that run, in the main checkout's .lfg; it never starts its own."""
+
+    def setUp(self):
+        import shutil
+        self.root, self.rid = git_repo()
+        who = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        C.run(who + ["commit", "-q", "--allow-empty", "-m", "start"], cwd=self.root)
+        self.wt = os.path.join(os.path.realpath(tempfile.mkdtemp()), "wt")
+        self.addCleanup(shutil.rmtree, os.path.dirname(self.wt), True)
+        C.run(["git", "worktree", "add", "-q", "-b", "lee/x", self.wt], cwd=self.root)
+        self.run_dir = C.new_run(self.root, "ato-1-queue")
+        meta = C.read_json(os.path.join(self.run_dir, "run.json"))
+        meta["worktrees"] = [{"path": self.wt, "branch": "lee/x"}]
+        C.write_json(os.path.join(self.run_dir, "run.json"), meta)
+
+    def test_the_worktree_resolves_to_the_run_that_lists_it(self):
+        self.assertEqual(C.current_run(self.wt), self.run_dir)
+
+    def test_a_new_run_from_that_worktree_is_the_existing_one(self):
+        self.assertEqual(C.new_run(self.wt, "check-ato-1"), self.run_dir)
+        self.assertFalse(os.path.isdir(os.path.join(self.wt, ".lfg", "runs")))
+
+    def test_a_worktree_no_run_lists_starts_its_run_in_the_main_checkout(self):
+        C.write_json(os.path.join(self.run_dir, "run.json"), {"run_id": os.path.basename(self.run_dir)})
+        r = C.new_run(self.wt, "other-work")
+        self.assertEqual(os.path.dirname(r), C.runs_dir(self.root, create=False))
+        self.assertEqual(C.current_run(self.wt), r)
+        self.assertEqual(C.current_run(self.root), self.run_dir)  # the main checkout's own run is untouched
+
+    def test_only_one_run_is_current_on_the_runs_page(self):
+        old = os.path.join(self.wt, ".lfg", "runs", "20261022-1215-check-ato-1")
+        C.write_json(os.path.join(old, "run.json"), {"run_id": os.path.basename(old), "branch": "lee/x"})
+        C.write_text(os.path.join(self.wt, ".lfg", "runs", "CURRENT"), os.path.basename(old) + "\n")
+        dash._CACHE.clear() if hasattr(dash, "_CACHE") else None
+        cur = {r["run"] for r in dash.runs(self.rid)["runs"] if r["current"]}
+        self.assertEqual(cur, {os.path.basename(self.run_dir)})
+
+    def test_merge_moves_a_duplicate_runs_files_into_the_real_one(self):
+        old = os.path.join(self.wt, ".lfg", "runs", "20261022-1215-check-ato-1")
+        C.write_json(os.path.join(old, "run.json"), {"run_id": os.path.basename(old), "branch": "lee/x",
+                                                     "skipped": {"plan": "in the ticket"}})
+        C.write_text(os.path.join(old, "05-secure.md"), "secure\n")
+        C.write_text(os.path.join(old, "gate-logs", "test.log"), "ok\n")
+        C.write_text(os.path.join(old, "01-brief.md"), "their brief\n")
+        C.write_text(os.path.join(self.run_dir, "01-brief.md"), "my brief\n")
+        C.write_text(os.path.join(self.wt, ".lfg", "runs", "CURRENT"), os.path.basename(old) + "\n")
+        res = C.merge_runs(old, self.run_dir)
+        self.assertFalse(os.path.exists(old))
+        self.assertEqual(C.read_text(os.path.join(self.run_dir, "05-secure.md")), "secure\n")
+        self.assertEqual(C.read_text(os.path.join(self.run_dir, "gate-logs", "test.log")), "ok\n")
+        self.assertEqual(C.read_text(os.path.join(self.run_dir, "01-brief.md")), "my brief\n")
+        kept = os.path.join(self.run_dir, "01-brief.from-20261022-1215-check-ato-1.md")
+        self.assertEqual(C.read_text(kept), "their brief\n")
+        self.assertEqual(res["kept_both"], ["01-brief.md"])
+        meta = C.read_json(os.path.join(self.run_dir, "run.json"))
+        self.assertEqual(meta["merged_from"], ["20261022-1215-check-ato-1"])
+        self.assertEqual(meta["skipped"], {"plan": "in the ticket"})
+        self.assertEqual(C.read_text(os.path.join(self.wt, ".lfg", "runs", "CURRENT")), "")
+        self.assertEqual(C.current_run(self.wt), self.run_dir)
+
+
+class SessionPastesTest(SessionsTest):
+    def test_a_session_whose_messages_are_all_pastes_still_shows(self):
+        a = "%08d-0000-0000-0000-000000000000" % 77
+        self.write(a, "/nowhere/app", "main", '\n\n<pasted_content id="0621">\n/lfg:grill ATO-4223\nRead the '
+                                              'ticket</pasted_content id="0621">', title="grill-ato-4223")
+        rows = {r["id"]: r for r in self.SS.listing()["sessions"]}
+        self.assertIn(a, rows)
+        self.assertEqual(rows[a]["name"], "grill-ato-4223")
+        self.assertTrue(rows[a]["first"].startswith("/lfg:grill ATO-4223"))
+
+    def test_a_session_in_a_worktree_belongs_to_its_repo(self):
+        root, _rid = git_repo()
+        C.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "s"],
+              cwd=root)
+        wt = os.path.join(os.path.realpath(tempfile.mkdtemp()), "app.worktrees", "lee-x")
+        C.run(["git", "worktree", "add", "-q", "-b", "lee/x", wt], cwd=root)
+        a = "%08d-0000-0000-0000-000000000000" % 78
+        self.write(a, wt, "lee/x", "work in the worktree")
+        rows = {r["id"]: r for r in self.SS.listing(only=root)["sessions"]}
+        self.assertEqual((rows[a]["root"], rows[a]["worktree"]), (root, "lee-x"))
+
+
+class CiLocalTest(unittest.TestCase):
+    def setUp(self):
+        self.root, _ = git_repo()
+        wf = os.path.join(self.root, ".github", "workflows")
+        C.write_text(os.path.join(wf, "tf.yaml"), "on:\n  pull_request:\n    branches: [main]\n    paths:\n"
+                     "      - \"terraform/**\"\n      - .github/workflows/tf.yaml\njobs:\n  a:\n    steps:\n"
+                     "      - name: Test terraform\n        run: echo tf-test\n")
+        C.write_text(os.path.join(wf, "jest.yaml"), "on:\n  pull_request:\n    branches: [main]\njobs:\n  a:\n"
+                     "    steps:\n      - name: Run tests\n        run: echo jest-test\n")
+        C.write_text(os.path.join(wf, "ch.yaml"), "on:\n  push:\n    paths: [clickhouse/migrations/**]\njobs:\n"
+                     "  a:\n    steps:\n      - name: Build schema\n        run: echo ch-build\n")
+
+    def test_affected_runs_only_workflows_whose_paths_the_diff_touches(self):
+        res = G.ci_local(self.root, affected=True, files=["terraform/aegis/main.tf"])
+        ran = {s["workflow"] for s in res["steps"] if "exit" in s}
+        self.assertEqual(ran, {"tf.yaml", "jest.yaml"})  # jest has no path filter: every change runs it
+        ch = [s for s in res["steps"] if s["workflow"] == "ch.yaml"][0]
+        self.assertIn("no changed file", ch["skipped"])
+
+    def test_progress_is_reported_for_each_step(self):
+        seen = []
+        G.ci_local(self.root, progress=lambda ev, n, total, st, res=None: seen.append((ev, n, total)))
+        self.assertEqual([e for e in seen if e[0] == "start"], [("start", 1, 3), ("start", 2, 3), ("start", 3, 3)])
+        self.assertEqual(len([e for e in seen if e[0] == "done"]), 3)
+
+
+class MallocEnvTest(unittest.TestCase):
+    def test_children_never_inherit_malloc_stack_logging(self):
+        with mock.patch.dict(os.environ, {"MallocStackLogging": "0", "MallocStackLoggingNoCompact": "1"}):
+            out = C.run([sys.executable, "-c", "import os;print(sorted(k for k in os.environ if 'Malloc' in k))"])
+        self.assertEqual(out.stdout.strip(), "[]")
+
+
+class LockedNoteTest(unittest.TestCase):
+    def test_locked_pages_say_how_to_unlock_this_tab(self):
+        js = C.read_text(os.path.join(os.path.dirname(ui.__file__), "ui_assets", "app.js"))
+        self.assertNotIn("it opens this page unlocked", js)
+        self.assertIn("lfg ui --unlock --port", js)

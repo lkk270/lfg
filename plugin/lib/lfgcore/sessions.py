@@ -65,12 +65,14 @@ CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
 CMD_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 BASH_IN = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
 QUIET_CMDS = ("/rename", "/color", "/clear", "/compact", "/model", "/config", "/status", "/cost", "/help", "/exit")
+PASTED = re.compile(r"<pasted_content[^>]*>(.*?)(?:</pasted_content[^>]*>|$)", re.S)
 
 
 def _prompt_of(text):
     """What you typed, as you'd recognize it: a message, a slash command with its arguments ("/review-pr 1759"), or a
-    `!` shell command. None for what Claude Code adds itself (command output, caveats, interrupts)."""
-    t = (text or "").strip()
+    `!` shell command. None for what Claude Code adds itself (command output, caveats, interrupts). Pasted text
+    counts as typed, without its wrapper: a session can be nothing but pastes."""
+    t = PASTED.sub(lambda m: m.group(1).strip(), (text or "")).strip()
     if not t or t.startswith(("[Request interrupted", "Caveat:", "<local-command", "<bash-stdout", "<bash-stderr",
                               "<task-notification", "<system-reminder")):
         return None
@@ -130,7 +132,7 @@ def parse(path):
 
 def _load_index():
     d = C.read_json(_index_path(), {}) or {}
-    return d if d.get("v") == 3 else {"v": 3, "sessions": {}}
+    return d if d.get("v") == 4 else {"v": 4, "sessions": {}}
 
 
 def scan():
@@ -153,7 +155,7 @@ def scan():
             continue
     if changed or len(new) != len(old):
         C.ensure_dir(os.path.dirname(_index_path()))
-        C.write_json(_index_path(), {"v": 3, "sessions": new})
+        C.write_json(_index_path(), {"v": 4, "sessions": new})
     return [s for s in new.values() if not s["sidechain_only"] and s["prompts"]]
 
 

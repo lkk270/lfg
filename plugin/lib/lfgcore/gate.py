@@ -291,8 +291,122 @@ def workflow_steps(root):
     return steps
 
 
-def ci_local(root, list_only=False):
+PR_TRIGGERS = ("push", "pull_request", "pull_request_target")
+
+
+def workflow_filters(text):
+    """What a workflow's `on:` says about changed files: None when a push or pull request runs it whatever changed,
+    [] when neither does (manual or scheduled only), else [(paths, paths_ignore)] for each trigger that filters."""
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if re.match(r"^['\"]?on['\"]?\s*:", ln)), None)
+    if start is None:
+        return []
+    inline = lines[start].split(":", 1)[1].split("#")[0].strip()
+    if inline:  # `on: push` or `on: [push, pull_request]`
+        return None if any(t in re.findall(r"[\w-]+", inline) for t in PR_TRIGGERS) else []
+    triggers, cur, key, ind = {}, None, None, None
+    for ln in lines[start + 1:]:
+        if ln.strip() and not ln.startswith((" ", "\t", "#")):
+            break  # the next top-level key
+        body = ln.split(" #")[0].rstrip()
+        if not body.strip() or body.strip().startswith("#"):
+            continue
+        depth = len(body) - len(body.lstrip())
+        ind = depth if ind is None else ind
+        if depth == ind:
+            cur, key = body.strip().rstrip(":").strip(), None
+            triggers[cur] = {"paths": [], "paths-ignore": []}
+            continue
+        m = re.match(r"^\s*(paths|paths-ignore)\s*:\s*(.*)$", body)
+        if m and cur:
+            key = m.group(1)
+            if m.group(2).startswith("["):
+                triggers[cur][key] += [x.strip().strip("'\"") for x in m.group(2).strip("[]").split(",") if x.strip()]
+            continue
+        item = re.match(r"^\s*-\s*(.+)$", body)
+        if item and cur and key:
+            triggers[cur][key].append(item.group(1).strip().strip("'\""))
+        elif re.match(r"^\s*[\w-]+\s*:", body):
+            key = None
+    filters = []
+    for t in PR_TRIGGERS:
+        if t in triggers:
+            f = triggers[t]
+            if not f["paths"] and not f["paths-ignore"]:
+                return None
+            filters.append((f["paths"], f["paths-ignore"]))
+    return filters
+
+
+def _glob_rx(pattern):
+    """A GitHub Actions path filter as a regex: `**` any depth, `*` and `?` within one folder."""
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif pattern[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif pattern[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    return re.compile("^" + out + "$")
+
+
+def workflow_touched(filters, files):
+    """Would a change to `files` start a workflow with these filters (see workflow_filters)?"""
+    if filters is None:
+        return True
+    for paths, ignore in filters:
+        for f in files:
+            neg = [p[1:] for p in paths if p.startswith("!")]
+            pos = [p for p in paths if not p.startswith("!")]
+            if pos and not any(_glob_rx(p).match(f) for p in pos) or any(_glob_rx(p).match(f) for p in neg):
+                continue
+            if not any(_glob_rx(p).match(f) for p in ignore):
+                return True
+    return False
+
+
+def branch_files(root):
+    """Files this branch changes: committed since it left the default branch, plus uncommitted ones."""
+    base = ""
+    for ref in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
+        cp = _git(root, "merge-base", "HEAD", ref)
+        if cp.returncode == 0 and cp.stdout.strip():
+            base = cp.stdout.strip()
+            break
+    committed = _git(root, "diff", "--name-only", base, "HEAD").stdout.split("\n") if base else []
+    return sorted({f for f in committed if f} | set(changed_files(root)))
+
+
+def _timed(cmd, root, on_tick, every=60):
+    """C.run, calling on_tick(seconds so far) every `every` seconds while it runs."""
+    import threading
+    done = threading.Event()
+    t0 = time.time()
+
+    def tick():
+        while not done.wait(every):
+            on_tick(round(time.time() - t0))
+    if on_tick:
+        threading.Thread(target=tick, daemon=True).start()
+    try:
+        return C.run(cmd, cwd=root, timeout=1800, env={"CI": "1"})
+    finally:
+        done.set()
+
+
+def ci_local(root, list_only=False, affected=False, files=None, progress=None):
+    """Replay the workflows' lint/type/test/build steps. affected: only workflows whose path filters match the
+    branch's changed files (`files`, default branch_files). progress(event, n, total, step, extra): "start" and "done"
+    for each step that runs (extra: its result), "tick" each minute it is still running (extra: seconds so far)."""
     out = {"workflows_lint": [], "steps": []}
+    if affected:
+        files = branch_files(root) if files is None else files
+        out["changed_files"] = len(files)
     wdir = os.path.join(root, ".github", "workflows")
     if os.path.isdir(wdir):
         for tool, argv in (("actionlint", ["actionlint"]), ("zizmor", ["zizmor", "--offline", wdir])):
@@ -303,10 +417,17 @@ def ci_local(root, list_only=False):
                                                                 .splitlines()[-25:])})
             else:
                 out["workflows_lint"].append({"tool": tool, "exit": None, "tail": "not installed"})
+    touched = {}
+    todo = []
     for st in workflow_steps(root):
         run = st["run"]
         why = None
-        if "${{" in run:
+        if affected and st["workflow"] not in touched:
+            touched[st["workflow"]] = workflow_touched(
+                workflow_filters(C.read_text(os.path.join(wdir, st["workflow"]))), files)
+        if affected and not touched[st["workflow"]]:
+            why = "no changed file matches its paths (--affected)"
+        elif "${{" in run:
             why = "uses GitHub expressions/secrets"
         elif not CI_KEYWORDS.search((st["name"] or "") + " " + run):
             why = "not a lint/type/test/build step"
@@ -316,11 +437,18 @@ def ci_local(root, list_only=False):
                 why = "blocked by LFG rule %s" % blocked[0]
         entry = dict(st, skipped=why)
         if not why and not list_only:
-            t0 = time.time()
-            cp = C.run(["bash", "-eo", "pipefail", "-c", run], cwd=root, timeout=1800, env={"CI": "1"})
-            entry.update(exit=cp.returncode, seconds=round(time.time() - t0, 1),
-                         tail="\n".join(((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()[-20:]))
+            todo.append(entry)
         out["steps"].append(entry)
+    for n, entry in enumerate(todo, 1):
+        if progress:
+            progress("start", n, len(todo), entry)
+        t0 = time.time()
+        cp = _timed(["bash", "-eo", "pipefail", "-c", entry["run"]], root,
+                    progress and (lambda s, n=n, e=entry: progress("tick", n, len(todo), e, s)))
+        entry.update(exit=cp.returncode, seconds=round(time.time() - t0, 1),
+                     tail="\n".join(((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()[-20:]))
+        if progress:
+            progress("done", n, len(todo), entry, entry)
     ran = [s for s in out["steps"] if "exit" in s] + [w for w in out["workflows_lint"] if w["exit"] is not None]
     out["green"] = all(x["exit"] == 0 for x in ran)
     return out

@@ -359,8 +359,14 @@ def cmd_run(a):
     if a.action == "new":
         if not a.arg:
             C.die("usage: lfg run new <slug>", 2)
+        had = C.worktree_run(root)
+        if had:
+            sys.stderr.write("this worktree is already part of run %s; carrying on in it, not starting another\n"
+                             % os.path.basename(had))
         print(C.new_run(root, a.arg))
         return 0
+    if a.action == "merge":
+        return _run_merge(root, rid, a)
     if a.action == "path":
         r = C.current_run(root)
         if not r:
@@ -385,19 +391,57 @@ def cmd_run(a):
         return _run_set(root, rid, a)
     if a.action in ("skip", "unskip"):
         return _run_skip(root, rid, a)
+    main = C.linked_worktree(root)
     if a.action == "use":
-        runs = C.runs_dir(root, create=False)
+        runs = C.runs_dir(main or root, create=False)
         name = os.path.basename(a.arg or "")
         if not name or not os.path.isfile(os.path.join(runs, name, "run.json")):
             C.die("usage: lfg run use <run-id> (one of `lfg run list`)", 2)
-        C.write_text(os.path.join(runs, "CURRENT"), name + "\n")
+        if main:  # a worktree's run is the one that lists it: move it onto this one
+            for d in os.listdir(runs):
+                p = os.path.join(runs, d, "run.json")
+                meta = C.read_json(p, None) if os.path.isfile(p) else None
+                if not isinstance(meta, dict):
+                    continue
+                wts = [w for w in meta.get("worktrees") or [] if not (isinstance(w, dict) and os.path.realpath(
+                    w.get("path") or "") == os.path.realpath(root))]
+                if d == name:
+                    wts.append({"path": root, "branch": C.git_branch(root), "created": C.now_iso()})
+                if wts != (meta.get("worktrees") or []):
+                    meta["worktrees"] = wts
+                    C.write_json(p, meta)
+        else:
+            C.write_text(os.path.join(runs, "CURRENT"), name + "\n")
         print("current run: %s" % os.path.join(runs, name))
         return 0
     cur = os.path.basename(C.current_run(root) or "")
-    runs = C.runs_dir(root, create=False)
+    runs = C.runs_dir(main or root, create=False)
     for d in sorted(os.listdir(runs) if os.path.isdir(runs) else [], reverse=True)[:20]:
         if os.path.isdir(os.path.join(runs, d)):
             print(("* " if d == cur else "  ") + d)
+    return 0
+
+
+def _run_merge(root, rid, a):
+    """`lfg run merge <from-run> [<into-run>]`: two runs started for one piece of work (e.g. one in a worktree that
+    couldn't see the main checkout's). Moves from-run's files into into-run (default: the current run) and removes
+    from-run; see common.merge_runs for files both have."""
+    from . import dash
+    found = dash._run_dirs(rid)
+    src = found.get(os.path.basename(a.arg or ""))
+    dst = found.get(os.path.basename(a.more[0])) if a.more else C.current_run(root)
+    if not src or not dst:
+        C.die("usage: lfg run merge <from-run> [<into-run>] (run ids from the dashboard's Runs page or `lfg run "
+              "list`; into-run defaults to the current run)", 2)
+    try:
+        res = C.merge_runs(src, dst)
+    except ValueError as e:
+        C.die(str(e), 2)
+    dash._CACHE.clear()
+    print("merged %s into %s: %d file(s) moved, %d already there%s" % (
+        os.path.basename(res["from"]), res["into"], len(res["copied"]), len(res["same"]),
+        "".join("\n  both had %s: kept this run's, saved the other beside it as .from-%s" % (f, os.path.basename(
+            res["from"])) for f in res["kept_both"])))
     return 0
 
 
@@ -663,7 +707,21 @@ def cmd_gate(a):
 def cmd_ci_local(a):
     from . import gate as GT
     root, _rid = C.need_repo()
-    res = GT.ci_local(root, list_only=a.list)
+
+    def progress(ev, n, total, st, extra=None):  # stderr, so --json output stays one object
+        what = "[%d/%d] %s: %s" % (n, total, st["workflow"], (st["name"] or "")[:60])
+        if ev == "start":
+            line = "%s ..." % what
+        elif ev == "tick":
+            line = "%s still running (%dm%02ds)" % (what, extra // 60, extra % 60)
+        else:
+            line = "%s %s in %ss" % (what, "PASS" if extra["exit"] == 0 else "FAIL", extra["seconds"])
+        sys.stderr.write(line + "\n")
+        sys.stderr.flush()
+    if not a.list and not a.affected:
+        sys.stderr.write("ci-local: running every workflow's steps; `lfg ci-local --affected` runs only the "
+                         "workflows this branch's changes would start\n")
+    res = GT.ci_local(root, list_only=a.list, affected=a.affected, progress=None if a.list else progress)
 
     def human(r):
         for w in r["workflows_lint"]:
@@ -1107,9 +1165,10 @@ def main(argv=None):
     for f in ("--background", "--allow-stale", "--json", "--quiet", "--rebuild"):
         g.add_argument(f, action="store_true")
     r = sp.add_parser("run")
-    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip"],
+    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip", "merge"],
                    help="scratch: this machine's folder for the current run (/build's ticket worktrees); "
-                        "use: make a run current (taking over a teammate's)")
+                        "use: make a run current (taking over a teammate's); "
+                        "merge <from-run> [<into-run>]: move a duplicate run's files into another (default: current)")
     r.add_argument("arg", nargs="?")
     r.add_argument("more", nargs="*", help="set: more key=value pairs; skip: why the step is left out")
     r.add_argument("--force", action="store_true", help="set: allow lowering the lane (only on the user's word)")
@@ -1158,6 +1217,8 @@ def main(argv=None):
     ga.add_argument("--only", help="comma list of lint,types,test,build")
     ci = sp.add_parser("ci-local")
     ci.add_argument("--list", action="store_true")
+    ci.add_argument("--affected", action="store_true",
+                    help="only workflows whose path filters match this branch's changed files")
     ci.add_argument("--json", action="store_true")
     se = sp.add_parser("secure")
     se.add_argument("target", nargs="?")

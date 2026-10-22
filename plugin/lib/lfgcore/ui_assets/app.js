@@ -581,6 +581,9 @@ async function isUnlocked() {
     return r.ok && (await r.json()).ok;
   } catch (e) { return false; }
 }
+// The edit key is kept per address (host and port): a tab on another port, or on localhost instead of 127.0.0.1, or a
+// dashboard started with --no-open, has none. --unlock opens this port's dashboard with it.
+const lockedNote = what => `<div class="callout">Read-only in this tab. To ${what}, run <code>lfg ui --unlock --port ${esc(location.port || "80")}</code> in your terminal; it opens this dashboard again, unlocked.</div>`;
 async function save(what, body) {
   try {
     const r = await fetch(`/api/save/${what}`, { method: "POST", body: JSON.stringify(body),
@@ -1471,7 +1474,7 @@ PAGES.prefs = async () => {
   return `${head("Preferences", "Your rules for Claude. These are the defaults every new session starts with; Sessions → Rules changes them for one session. Enforced rules are checked before every command, so Claude keeps them even by mistake; the rest are instructions.")}
     ${banner}
     ${on ? `<div class="callout ok">${dot("ok")}<span><b>Changes apply to sessions already open, no restart needed.</b> Enforced rules are checked on the very next command; open sessions are told about any change with your next message to them.</span></div>` : ""}
-    ${unlocked ? "" : `<div class="callout">Read-only. Run <code>lfg ui</code> in your terminal to change your rules here.</div>`}
+    ${unlocked ? "" : lockedNote("change your rules here")}
     ${prefControls(P, P.defaults, P.defaults, null, unlocked)}
     <div class="box pad mt"><div class="k" style="margin-top:0">When a change takes effect</div>
       <ul class="small"><li><b>Enforced rules</b> apply at once, in every session, open or new: the next command is checked against them.</li>
@@ -1850,7 +1853,7 @@ PAGES.settings = async () => {
   const [cfg, sk, cm, unlocked] = await Promise.all([api("settings"), api("skills"), api("claudemd"), isUnlocked()]);
   state.settings = { cfg, sk, cm, unlocked };
   return `${head("Settings", unlocked ? "Changes are checked, refused if they look like a password or key, and backed up." : "")}
-    ${unlocked ? "" : `<div class="callout">Read-only. To make changes, run <code>lfg ui</code> in your own terminal; it opens this page unlocked.</div>`}
+    ${unlocked ? "" : lockedNote("make changes")}
     <div class="section">${tabs("settings", [["claudecode", "Claude Code", null, settingsClaudeCode], ["general", "General", null, settingsGeneral], ["tools", "Connections", null, settingsTools], ["ollama", "Local AI models", null, settingsOllama], ["storage", "Disk space", null, settingsStorage], ["rules", "Rules", null, settingsRules], ["claudemd", "Your instructions", null, settingsClaude]])}</div>`;
 };
 
@@ -1860,7 +1863,7 @@ PAGES.skills = async () => {
   const [sk, cm, unlocked] = await Promise.all([api("skills"), api("claudemd"), isUnlocked()]);
   state.settings = Object.assign(state.settings || {}, { sk, cm, unlocked, cfg: (state.settings || {}).cfg });
   return `${head("Skills", "Everything Claude Code can load as a skill on this computer: yours, this project's and every plugin's, LFG's included.")}
-    ${unlocked ? "" : `<div class="callout">Read-only. To change skills, run <code>lfg ui</code> in your own terminal; it opens this page unlocked.</div>`}
+    ${unlocked ? "" : lockedNote("change skills")}
     <div class="section">${tabs("skillspage", [["all", "All skills", null, () => '<div id="skills-box"><div class="loading">Reading skills…</div></div>'], ["mine", "Your skills & references", null, () => '<div id="mylib-box"><div class="loading">Reading ~/.claude…</div></div>'], ["lfgedit", "Edit LFG skills", null, settingsSkills]])}</div>`;
 };
 async function loadSkills() {

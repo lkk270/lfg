@@ -29,7 +29,7 @@ preflight: graphs
 3. **Types.** Run the repo's type-check command. Fix every error at its cause.
 4. **Affected tests first.** For each changed node: `query_graph_tool` with `tests_for`. Run just those tests for fast feedback. Changed nodes with no test → record as **untested** (gate 2) and tell the user; write the missing test if the seam is agreed in `tasks.json`.
 5. **The gate.** `lfg gate` (one line per check, output only for failures; full logs in `RUN/gate-logs/<check>.log`, read one only if the shown lines aren't enough): lint, types, full suite, build, gitleaks, new-suppression check, from exit codes. It writes `ready.json`. Read the per-check results from its output, never from memory.
-6. **Local CI replay.** `lfg ci-local` (use `--list` first if unsure what it will run). It also runs `actionlint` on the workflows.
+6. **Local CI replay.** Run `lfg ci-local --list --affected` and `lfg ci-local --list`, then ask the user (AskUserQuestion) whether to replay only the workflows this branch's changes would start (`lfg ci-local --affected`, recommended) or all of them (`lfg ci-local`), giving the step count of each. A full replay can take most of an hour. Run it in the background and relay its progress lines. It also runs `actionlint` on the workflows.
 7. **Remote CI, read-only.** `gh auth status` (not logged in → ask the user to run `gh auth login` themselves; skip this step and say so). Then for the current branch:
    - `gh pr checks` (if a PR exists),
    - `gh run list --branch <branch> --limit 5`,

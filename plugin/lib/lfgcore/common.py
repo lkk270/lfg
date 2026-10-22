@@ -170,9 +170,21 @@ def is_enabled(cwd):
 
 # ---------------------------------------------------------------- processes
 
+def clean_env(env):
+    """env without macOS's MallocStackLogging* switches: a child that inherits one prints MallocStackLogging lines
+    to stderr as it starts, so every python3 LFG runs would add a few. LFG never sets them; the terminal or app it
+    was started from did."""
+    for k in [k for k in env if k.startswith("MallocStackLogging")]:
+        del env[k]
+    return env
+
+
+clean_env(os.environ)  # children started with subprocess directly, or os.execv, inherit the cleaned copy
+
+
 def run(cmd, cwd=None, timeout=None, env=None, check=False, capture=True):
     """Run a command (list). Returns CompletedProcess with text output. Never uses a shell."""
-    full_env = dict(os.environ)
+    full_env = clean_env(dict(os.environ))
     if env:
         full_env.update(env)
     try:
@@ -327,26 +339,105 @@ def git_branch(root):
     return b
 
 
+def linked_worktree(root):
+    """The main checkout when root is a linked worktree of it, else None. Pure filesystem."""
+    main = git_main_root_fast(root) if root else None
+    return main if main and os.path.realpath(main) != os.path.realpath(root) else None
+
+
+def worktree_run(root):
+    """The run in the main checkout's .lfg whose run.json lists this worktree (`lfg worktree new` adds it), the
+    newest if several, or None. A worktree made for a run's work belongs to that run."""
+    main = linked_worktree(root)
+    if not main:
+        return None
+    me, runs = os.path.realpath(root), runs_dir(main, create=False)
+    hits = []
+    for name in os.listdir(runs) if os.path.isdir(runs) else []:
+        meta = read_json(os.path.join(runs, name, "run.json"), None)
+        if isinstance(meta, dict) and any(isinstance(w, dict) and w.get("path") and os.path.realpath(w["path"]) == me
+                                          for w in meta.get("worktrees") or []):
+            hits.append(name)
+    return os.path.join(runs, max(hits)) if hits else None
+
+
 def new_run(root, slug, branch=None):
+    """A new run folder, made current. From a linked worktree: the run that already lists it when there is one (never
+    a second run for the same work), else a new one in the main checkout's .lfg that lists the worktree, leaving the
+    main checkout's CURRENT alone."""
+    main = linked_worktree(root)
+    if main and worktree_run(root):
+        return worktree_run(root)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     base = "%s-%s" % (stamp, _slug(slug))
-    runs = runs_dir(root)
+    runs = runs_dir(main or root)
     path, n = os.path.join(runs, base), 2
     while os.path.exists(path):
         path, n = os.path.join(runs, "%s-%d" % (base, n)), n + 1
     ensure_dir(path)
-    write_text(os.path.join(runs, "CURRENT"), os.path.basename(path) + "\n")
-    write_json(os.path.join(path, "run.json"), {"run_id": os.path.basename(path), "slug": slug,
-                                                "repo_id": repo_id(root),
-                                                "branch": git_branch(root) if branch is None else branch,
-                                                "created": now_iso(), "lane": None})
+    br = git_branch(root) if branch is None else branch
+    meta = {"run_id": os.path.basename(path), "slug": slug, "repo_id": repo_id(root), "branch": br,
+            "created": now_iso(), "lane": None}
+    if main:
+        meta["worktrees"] = [{"path": root, "branch": br, "created": now_iso()}]
+    else:
+        write_text(os.path.join(runs, "CURRENT"), os.path.basename(path) + "\n")
+    write_json(os.path.join(path, "run.json"), meta)
     return path
 
 
+def merge_runs(src, dst):
+    """Move run folder src's files into run dst (two runs started for one piece of work). A file both have with
+    different contents keeps dst's and saves src's beside it as <name>.from-<src run>.<ext>; run.json gains src's
+    worktrees and skipped steps (dst's win) and `merged_from`. src is removed, and a CURRENT naming it is cleared."""
+    import shutil
+    src, dst = os.path.realpath(src), os.path.realpath(dst)
+    if src == dst or not all(os.path.isfile(os.path.join(d, "run.json")) for d in (src, dst)):
+        raise ValueError("need two different run folders, each with a run.json")
+    sid = os.path.basename(src)
+    out = {"from": src, "into": dst, "copied": [], "same": [], "kept_both": []}
+    for d, _dirs, files in os.walk(src):
+        for f in sorted(files):
+            p = os.path.join(d, f)
+            rel = os.path.relpath(p, src)
+            if rel == "run.json":
+                continue
+            to = os.path.join(dst, rel)
+            if os.path.exists(to):
+                with open(p, "rb") as a, open(to, "rb") as b:
+                    if a.read() == b.read():
+                        out["same"].append(rel)
+                        continue
+                stem, ext = os.path.splitext(to)
+                to = "%s.from-%s%s" % (stem, sid, ext)
+                out["kept_both"].append(rel)
+            else:
+                out["copied"].append(rel)
+            ensure_dir(os.path.dirname(to))
+            shutil.copy2(p, to)
+    a, b = read_json(os.path.join(src, "run.json"), {}) or {}, read_json(os.path.join(dst, "run.json"), {}) or {}
+    have = {os.path.realpath(w.get("path") or "") for w in b.get("worktrees") or [] if isinstance(w, dict)}
+    b["worktrees"] = (b.get("worktrees") or []) + [w for w in a.get("worktrees") or [] if isinstance(w, dict)
+                                                    and os.path.realpath(w.get("path") or "") not in have]
+    b["skipped"] = dict(a.get("skipped") or {}, **(b.get("skipped") or {}))
+    b["merged_from"] = (b.get("merged_from") or []) + [sid]
+    b["updated"] = now_iso()
+    write_json(os.path.join(dst, "run.json"), b)
+    shutil.rmtree(src)
+    cur = os.path.join(os.path.dirname(src), "CURRENT")
+    if read_text(cur).strip() == sid:
+        write_text(cur, "")
+    return out
+
+
 def current_run(root):
-    """This checkout's current run (CURRENT is per checkout and never committed), or None."""
+    """This checkout's current run: for a linked worktree the run that lists it, else CURRENT (per checkout, never
+    committed). None when there is neither."""
     if not root:
         return None
+    listed = worktree_run(root)
+    if listed:
+        return listed
     runs = runs_dir(root, create=False)
     name = read_text(os.path.join(runs, "CURRENT")).strip()
     path = os.path.join(runs, name)

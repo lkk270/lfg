@@ -136,7 +136,8 @@ def _run_dirs(rid):
 
 
 def _current_runs(rid):
-    return {C.read_text(os.path.join(C.runs_dir(r, create=False), "CURRENT")).strip() for r in checkouts(rid)} | \
+    """Each checkout's current run (a worktree's is the run that lists it), plus one still named under ~/.lfg."""
+    return {os.path.basename(C.current_run(r) or "") for r in checkouts(rid)} | \
         {C.read_text(C.lfg_path("runs", rid, "CURRENT")).strip()}
 
 
