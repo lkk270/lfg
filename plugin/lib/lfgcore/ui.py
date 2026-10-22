@@ -254,6 +254,7 @@ def api(view, q):
             for p in (rec or {}).get("passes") or []:
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
+                    p["together"] = R.together(p)
             return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
                     "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
