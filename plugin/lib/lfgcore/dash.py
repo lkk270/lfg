@@ -30,8 +30,9 @@ STAGES = [  # (key, label, file glob) in pipeline order
 
 
 STEP_CMD = {"brief": "/lfg:grill", "design": "/lfg:plan", "tasks": "/lfg:plan", "build": "/lfg:build",
-            "qa": "/lfg:check", "gate": "/lfg:check", "secure": "/lfg:secure", "review": "/lfg:expert", "ship": "/lfg:ship",
-            "packet": "/lfg:ship"}  # the command that does each step: the run page names these too
+            "qa": "/lfg:check", "gate": "/lfg:check", "secure": "/lfg:secure", "review": "/lfg:expert",
+            "ship": "/lfg:ship",
+            "packet": "/lfg:ship"}  # the command that does each step, as the run page names them
 STEP_LABEL = {"brief": "Idea written up", "design": "Plan", "tasks": "Task list", "build": "Built", "qa": "Tested",
               "gate": "Checks run", "secure": "Security check", "review": "Code review", "ship": "Ship check",
               "packet": "Ready to commit"}
