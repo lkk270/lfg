@@ -786,9 +786,23 @@ async function loadTools() {
   const missing = d.tools.filter(t => !t.installed);
   box.innerHTML = `<p class="muted">Everything LFG connects to, checked ${ago(d.checked_at)}.</p>
     <div class="box"><ul class="list">${d.integrations.map(i => `<li>${dot(i.ok ? "ok" : i.optional ? "" : "bad")}<div class="grow"><div class="title">${esc(i.name)}</div><div class="meta">${esc(plainDetail(i.detail))}</div></div></li>`).join("")}</ul></div>
+    ${mcpSection(d.mcp_servers || [])}
     <div class="set-section"><h4>Command-line tools</h4>${missing.length
       ? `<div class="box"><ul class="list">${missing.map(t => `<li>${dot(t.required ? "bad" : "")}<div class="grow"><div class="title">${esc(t.tool)} is not installed</div><div class="meta">${esc(t.purpose)}${t.required ? (t.pack === "core" ? " · needed: run lfg setup" : ` · needed by the ${esc(t.pack)} pack: lfg add ${esc(t.pack)}`) : ` · ${esc(t.pack)} pack, not added`}</div></div></li>`).join("")}</ul></div>`
       : `<div class="box calm">${dot("ok")}All ${n(d.tools.length)} tools are installed.</div>`}</div>`;
+}
+/* Every MCP server Claude Code has (claude mcp list): connected first, then the ones waiting for a sign-in. LFG only
+   reads this list; signing in and removing happen in Claude Code or on claude.ai. */
+const MCP_FROM = { "claude.ai": ["claude.ai connector", "Added on claude.ai; manage it under Settings → Connectors there"],
+  you: ["yours, every project", "In ~/.claude.json: every Claude Code session has it"],
+  project: ["this project", "From this project's .mcp.json or local settings"] };
+function mcpSection(list) {
+  if (!list.length) return "";
+  const row = m => { const [tag, why] = MCP_FROM[m.source] || [m.source, "Provided by a Claude Code plugin"]; return `<li>${dot(m.status === "ok" ? "ok" : m.status === "auth" ? "" : "bad")}<div class="grow"><div class="title">${esc(m.name)} <span class="tag" title="${esc(why)}">${esc(tag)}</span>${m.lfg ? ` <span class="tag ok" title="${esc(m.lfg)}">LFG uses it</span>` : ""}</div><div class="meta mono small">${esc(m.target)}</div></div><span class="muted small nowrap">${esc(m.state)}</span></li>`; };
+  const group = (title, xs, open, help) => xs.length ? `<details class="item" ${open ? "open" : ""}><summary><b>${esc(title)}</b> <span class="muted small">${n(xs.length)}</span></summary>${help ? `<p class="muted small">${help}</p>` : ""}<ul class="list">${xs.map(row).join("")}</ul></details>` : "";
+  const by = s => list.filter(m => m.status === s).sort((a, b) => (b.lfg ? 1 : 0) - (a.lfg ? 1 : 0) || a.name.localeCompare(b.name));
+  return `<div class="set-section"><h4>MCP servers</h4><p class="muted small">Every MCP server Claude Code can use, as <code>claude mcp list</code> reports them. Sign in to one with <code>/mcp</code> in Claude Code; claude.ai connectors are added and removed at <a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener noreferrer">claude.ai → Settings → Connectors ↗</a>.</p>
+    <div class="box">${group("Connected", by("ok"), true)}${group("Failed to connect", by("bad"), true, "Run <code>/mcp</code> in Claude Code to see why.")}${group("Need you to sign in", by("auth"), false, "Not usable until you sign in: run <code>/mcp</code> in Claude Code and pick it.")}</div></div>`;
 }
 function settingsOllama() {
   return '<div id="ollama-box"><div class="loading">Asking the local Ollama…</div></div>';

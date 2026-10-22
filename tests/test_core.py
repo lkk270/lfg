@@ -1371,6 +1371,25 @@ class RunStepsTest(unittest.TestCase):
         self.assertEqual(dash._run_summary(run)["outside"], {})  # /lfg:build did: nothing outside to show
 
 
+class McpListTest(unittest.TestCase):
+    def test_every_mcp_server_with_where_it_comes_from_and_its_state(self):
+        out = """Checking MCP server health…
+
+claude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ✔ Connected
+claude.ai Supabase: https://mcp.supabase.com/mcp - ! Needs authentication
+linear: https://mcp.linear.app/mcp (HTTP) - ✔ Connected
+serena: uvx --from serena-agent serena start-mcp-server - ✘ Failed to connect
+plugin:lfg:dev-graph: lfg omnigraph mcp dev-graph - ✔ Connected
+"""
+        with mock.patch.object(dash.C, "read_json", return_value={"mcpServers": {"linear": {}}}):
+            got = {m["name"]: m for m in dash.parse_mcp_list(out)}
+        self.assertEqual({k: (m["source"], m["status"]) for k, m in got.items()},
+                         {"Google Drive": ("claude.ai", "ok"), "Supabase": ("claude.ai", "auth"),
+                          "linear": ("you", "ok"), "serena": ("project", "bad"), "dev-graph": ("plugin lfg", "ok")})
+        self.assertEqual((got["linear"]["target"], got["linear"]["state"]), ("https://mcp.linear.app/mcp", "Connected"))
+        self.assertTrue(got["dev-graph"]["lfg"] and not got["serena"]["lfg"])
+
+
 class UpdateBannerTest(unittest.TestCase):
     def test_a_check_from_before_the_last_install_is_not_shown(self):
         from lfgcore import dash, updates as U
