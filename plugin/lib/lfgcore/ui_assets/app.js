@@ -109,14 +109,17 @@ const NEXT = { brief: "write up the idea", design: "make a plan", tasks: "split 
   "fix-review": "address the review's requested changes", "fix-security": "fix the security problems (/lfg:fix)",
   "fix-ship": "fix what the ship check found" };
 function runPlace(stages, done, r) {
-  /* done = steps that really happened; next = what blocks first (a failing check, a review asking for changes),
-     else the step after the furthest one done (review-only runs skip the early steps, so those don't count as next) */
-  const keys = stages.map(s => s[0]), last = keys.reduce((a, x, i) => (done[x] ? i : a), -1);
-  const count = keys.filter(k => done[k]).length;
+  /* done = steps that really happened, or were done outside LFG (commits on the run's branch); skipped ones (`lfg run
+     skip`) count neither way. next = what blocks first (a failing check, a review asking for changes), else the step
+     after the furthest one done or skipped: steps run out of order never send you back to an earlier one */
+  const out = (r && r.outside) || {}, skip = (r && r.skipped) || {};
+  const did = k => done[k] || !!out[k];
+  const keys = stages.map(s => s[0]), last = keys.reduce((a, x, i) => (did(x) || skip[x] ? i : a), -1);
+  const count = keys.filter(did).length, total = keys.filter(k => !skip[k]).length;
   const block = r && (r.ready === "red" ? "fix-checks" : r.review === "block" ? "fix-block" : r.secure === "don't" ? "fix-security"
     : r.review === "changes" ? "fix-review" : r.shipcheck === "fail" ? "fix-ship" : null);  // most serious first
   const next = block || keys.slice(last + 1)[0];
-  return { done: count, total: keys.length, next, blocked: !!block, finished: !next };
+  return { done: count, total, next, blocked: !!block, finished: !next, last };
 }
 const runName = r => r.title || (w => w.charAt(0).toUpperCase() + w.slice(1))(words(r.slug || "untitled run"));
 
@@ -1155,13 +1158,15 @@ async function runDetail(run) {
   if (d.available === false) return unavailable(d);
   const p = runPlace(all.stages, d.stages, d), attn = runAttention(d);
   const stuck = { "fix-checks": "gate", "fix-review": "review", "fix-block": "review", "fix-security": "secure", "fix-ship": "ship" }[p.next];
-  const keys = all.stages.map(([k]) => k), last = keys.reduce((m, k, i) => (d.stages[k] ? i : m), -1);
+  const keys = all.stages.map(([k]) => k), out = d.outside || {}, skipped = d.skipped || {};
   const steps = `<div class="steps">${keys.map((k, i) => {
-    const skip = !d.stages[k] && i < last && k !== p.next, [cmd, what] = STEP_WHY[k] || ["", ""];
-    const cls = k === stuck ? "stuck" : d.stages[k] ? "done" : k === p.next ? "next" : skip ? "skipped" : "";
-    const state = { stuck: "Needs fixing", done: "Done", next: "Next", skipped: "Skipped" }[cls] || "Not yet";
-    return `<span class="${cls}" tabindex="0">${esc(STEP[k] || k)}<span class="tip" role="tooltip"><span class="tip-state">${state}</span> <code>${esc(cmd)}</code><br>${esc(what)}</span></span>`;
-  }).join("")}</div><p class="muted small">Hover a step for what it is. <code>/lfg:lfg</code> runs every step in order.</p>`;
+    const [cmd, what] = STEP_WHY[k] || ["", ""];
+    const cls = k === stuck ? "stuck" : d.stages[k] ? "done" : out[k] ? "done outside" : skipped[k] != null ? "skipped"
+      : k === p.next ? "next" : i < p.last ? "unrecorded" : "";
+    const state = k === stuck ? "Needs fixing" : d.stages[k] ? "Done" : out[k] ? `Done outside LFG (${plural(out[k], "commit")} on the run's branch)`
+      : skipped[k] != null ? `Skipped: ${skipped[k]}` : k === p.next ? "Next" : i < p.last ? "Not recorded: a later step ran without it" : "Not yet";
+    return `<span class="${cls}" tabindex="0">${esc(STEP[k] || k)}<span class="tip" role="tooltip"><span class="tip-state">${esc(state)}</span><br><code>${esc(cmd)}</code> ${esc(what)}</span></span>`;
+  }).join("")}</div><p class="muted small">Hover a step for what it is. <code>/lfg:lfg</code> runs every step in order; <code>lfg run skip &lt;step&gt; "why"</code> marks one you left out on purpose.</p>`;
   const files = d.files.filter(f => fileName(f.name)).map(f => ({ ...f, run, label: fileName(f.name) }))
     .sort((a, b) => fileRank(a.name) - fileRank(b.name) || a.name.localeCompare(b.name));
   const tasks = d.tasks_list.length ? `<div class="box items">${d.tasks_list.map(taskItem).join("")}</div>` : "";

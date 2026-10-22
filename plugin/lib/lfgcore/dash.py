@@ -224,6 +224,24 @@ def _ticket(d):
     return m.group(1).upper() if m else ""
 
 
+def _commits_ahead(meta):
+    """Commits on the run's worktree branch that its starting branch (and origin's copy of it) doesn't have: code
+    written outside /lfg:build still shows that something was built."""
+    base = meta.get("branch") or ""
+    for w in reversed(meta.get("worktrees") or []):
+        if not isinstance(w, dict) or not w.get("branch") or not os.path.isdir(w.get("path") or ""):
+            continue
+        if not base or w["branch"] == base:
+            return 0
+        known = [b for b in (base, "origin/" + base)
+                 if C.run(["git", "rev-parse", "--verify", "-q", b], cwd=w["path"], timeout=5).returncode == 0]
+        if not known:
+            return 0
+        cp = C.run(["git", "rev-list", "--count", w["branch"]] + ["^" + b for b in known], cwd=w["path"], timeout=5)
+        return int(cp.stdout.strip() or 0) if cp.returncode == 0 else 0
+    return 0
+
+
 def _run_summary(d):
     meta = C.read_json(os.path.join(d, "run.json"), {}) or {}
     rd = C.read_json(os.path.join(d, "ready.json"), None)
@@ -235,6 +253,9 @@ def _run_summary(d):
     tl = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", []) if isinstance(tasks, dict) else []
     stages = _stage_state(d)
     title, about = _about(d, rv)
+    keys = [k for k, _, _ in STAGES]
+    skipped = {k: str(v)[:300] for k, v in (meta.get("skipped") or {}).items() if k in keys and not stages.get(k)}
+    ahead = 0 if stages["build"] else _commits_ahead(meta)
     ready = None if rd is None else ("green" if rd.get("green") else "red")
     if ready and _newer_work(d, os.path.join(d, "ready.json")):
         ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
@@ -244,7 +265,8 @@ def _run_summary(d):
             "branch": next((w["branch"] for w in reversed(meta.get("worktrees") or [])
                             if isinstance(w, dict) and w.get("branch")), meta.get("branch") or ""),
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
-            "stages": stages, "progress": sum(stages.values()),
+            "stages": stages, "progress": sum(stages.values()) + bool(ahead),
+            "skipped": skipped, "outside": {"build": ahead} if ahead else {},
             "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),
             "review": (rv or {}).get("verdict"), "secure": _verdict((se or {}).get("verdict")),
             "pentest": (pt or {}).get("status") if isinstance(pt, dict) else None,

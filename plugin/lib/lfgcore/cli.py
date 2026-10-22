@@ -383,6 +383,8 @@ def cmd_run(a):
         return 0
     if a.action == "set":
         return _run_set(root, rid, a)
+    if a.action in ("skip", "unskip"):
+        return _run_skip(root, rid, a)
     if a.action == "use":
         runs = C.runs_dir(root, create=False)
         name = os.path.basename(a.arg or "")
@@ -396,6 +398,30 @@ def cmd_run(a):
     for d in sorted(os.listdir(runs) if os.path.isdir(runs) else [], reverse=True)[:20]:
         if os.path.isdir(os.path.join(runs, d)):
             print(("* " if d == cur else "  ") + d)
+    return 0
+
+
+def _run_skip(root, rid, a):
+    """`lfg run skip <step> "<reason>"`: a step left out on purpose (e.g. design, when the ticket settled it). The
+    dashboard shows it as skipped with the reason, and the next step moves past it. `lfg run unskip <step>` undoes."""
+    from . import dash
+    r = C.current_run(root)
+    if not r:
+        C.die("no current run for %s - start one with `lfg run new <slug>`" % rid)
+    steps = [k for k, _, _ in dash.STAGES]
+    reason = " ".join(a.more or []).strip()
+    if a.arg not in steps or (a.action == "skip" and not reason):
+        C.die('usage: lfg run %s <%s>%s' % (a.action, "|".join(steps), ' "<why>"' if a.action == "skip" else ""), 2)
+    p = os.path.join(r, "run.json")
+    meta = C.read_json(p, {}) or {}
+    skipped = dict(meta.get("skipped") or {})
+    if a.action == "skip":
+        skipped[a.arg] = reason[:300]
+    else:
+        skipped.pop(a.arg, None)
+    meta.update(skipped=skipped, updated=C.now_iso())
+    C.write_json(p, meta)
+    print("run.json: skipped %s" % (", ".join("%s (%s)" % kv for kv in skipped.items()) or "nothing"))
     return 0
 
 
@@ -1081,11 +1107,11 @@ def main(argv=None):
     for f in ("--background", "--allow-stale", "--json", "--quiet", "--rebuild"):
         g.add_argument(f, action="store_true")
     r = sp.add_parser("run")
-    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use"],
+    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip"],
                    help="scratch: this machine's folder for the current run (/build's ticket worktrees); "
                         "use: make a run current (taking over a teammate's)")
     r.add_argument("arg", nargs="?")
-    r.add_argument("more", nargs="*", help="set: more key=value pairs")
+    r.add_argument("more", nargs="*", help="set: more key=value pairs; skip: why the step is left out")
     r.add_argument("--force", action="store_true", help="set: allow lowering the lane (only on the user's word)")
     kn = sp.add_parser("knowledge", help="the repo's shared knowledge in .lfg/ (sync with dev-graph, migrate); "
                                          "tag a saved decision or lesson with its repo, feature or topic")
