@@ -499,6 +499,8 @@ def review_action(what, body):
         if what == "review_post":
             return R.post(repo, number, str(body.get("event") or ""), body=str(body.get("body") or ""),
                           dry_run=bool(body.get("dry_run")))
+        if what == "review_check":
+            return R.check_fixed(repo, number, str(body.get("id") or ""))
         if what == "review_remember":
             return R.remember(repo, number, body.get("pass"), str(body.get("id") or ""), str(body.get("to") or ""))
         if what == "review_run":

@@ -1299,6 +1299,80 @@ def discuss(repo, number, fid, question):
     return {"q": q, "a": shown, "changed": changed}
 
 
+CHECK = ("A code review found this problem in a pull request. Since then the author pushed more commits. Say whether "
+         "this one finding is fixed now, from the changes and the code below. Answer only with one ```json block "
+         "{\"state\": \"fixed\" or \"partly\" or \"not\", \"why\": \"one plain sentence a person can check, naming "
+         "the line or change that settles it\"}.\n\nThe finding (%s, %s): %s\nWhere: %s line %s\nIssue: %s\n"
+         "Suggested fix: %s\n\nWhat changed in %s since the review (%s to %s):\n%s\n\nThat file now, around the "
+         "spot:\n%s\n\nOther files changed since the review: %s")
+CHECK_STATES = ("fixed", "partly", "not")
+
+
+def _last_object(text, key):
+    """The last JSON object in some text that has `key`, or {}."""
+    dec, best = json.JSONDecoder(), {}
+    for m in re.finditer(r"\{", text or ""):
+        try:
+            obj, _ = dec.raw_decode(text, m.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and key in obj:
+            best = obj
+    return best
+
+
+def check_fixed(repo, number, fid):
+    """Is one finding fixed yet, without a re-review: the commits since the review, and the code where the finding
+    points now, go to Claude with no tools, which answers fixed, partly or not, and why. Kept on the finding."""
+    import subprocess
+    rec = need(repo, number)
+    f = find(rec, fid)
+    p = next(x for x in rec["passes"] if f in x["findings"])
+    head = (gh_status(repo, number, max_age=0) or {}).get("head_sha")
+    if not head:
+        raise ReviewError("couldn't ask GitHub where the PR is now")
+    if head == p["head_sha"]:
+        out = {"state": "not", "why": "No commits since this review, so nothing has changed yet.", "head": head,
+               "at": C.now_iso(), "quick": True}
+    else:
+        if not C.which("claude"):
+            raise ReviewError("Claude Code (`claude`) is not on PATH")
+        files = gh_json(["api", "repos/%s/compare/%s...%s" % (repo, p["head_sha"], head)], timeout=120) or {}
+        changed = files.get("files") or []
+        patch = next((x.get("patch") or "" for x in changed if x.get("filename") == f.get("file")), "")
+        now = ""
+        if f.get("file"):
+            raw = _gh(["api", "-H", "Accept: application/vnd.github.raw",
+                       "repos/%s/contents/%s?ref=%s" % (repo, f["file"], head)], timeout=60)
+            if raw.returncode == 0:
+                lines, at = raw.stdout.splitlines(), int(f.get("line") or 1)
+                lo = max(0, at - 40)
+                now = "\n".join("%d %s" % (lo + i + 1, t) for i, t in enumerate(lines[lo:at + 40]))
+            else:
+                now = "(the file is gone at the new head)"
+        others = [x["filename"] for x in changed if x.get("filename") != f.get("file")]
+        if not f.get("file"):  # about the PR as a whole: every change counts
+            patch = "\n".join("--- %s\n%s" % (x["filename"], x.get("patch") or "") for x in changed)
+        prompt = CHECK % (fid, f.get("severity"), f.get("title") or "", f.get("file") or "the PR as a whole",
+                          f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", f.get("file") or "the PR",
+                          p["head_sha"][:8], head[:8], (patch or "(no changes to this file)")[:30000],
+                          now[:12000] or "-", ", ".join(others[:40]) or "none")
+        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
+                            + _model(), input=prompt, capture_output=True, text=True, timeout=300)
+        try:
+            ans = _last_object(json.loads(cp.stdout).get("result") or "", "state")
+        except ValueError:
+            ans = {}
+        if ans.get("state") not in CHECK_STATES:
+            raise ReviewError("Claude didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
+        out = {"state": ans["state"], "why": _text(ans.get("why"), "why", 600), "head": head, "at": C.now_iso()}
+    rec = need(repo, number)
+    find(rec, fid)["check"] = out
+    store(rec)
+    C.audit("review_check", {"pr": ref(repo, number), "finding": fid, "state": out["state"]})
+    return out
+
+
 DISCUSS = ("This is about one finding, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\nThe comment drafted "
            "for the author: %s%s\n\nLee says: %s\n\nIf Lee says it isn't needed and the code agrees, say so in a "
            "sentence and drop it (\"status\": \"drop\"), lowering \"score\" if the finding had cost points. If you "

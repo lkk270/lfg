@@ -1042,3 +1042,7 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .chip-fact { cursor: default; background: transparent; padding: 0 4px; color: var(--text-2); }
 .chip-fact:hover { filter: none; }
 .chip-fact.c-green, .chip-fact.c-orange, .chip-fact.c-red { box-shadow: none; }
+/* "Is it fixed?" on a finding */
+.pr-check { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+.pr-check .dot { align-self: center; }
+.pr-check.ok { background: var(--c-green); } .pr-check.warn { background: var(--c-yellow); } .pr-check.bad { background: var(--c-red); }
