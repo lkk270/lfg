@@ -338,6 +338,85 @@ def recent(sid, n=4):
     return {"id": sid, "turns": turns}
 
 
+SLASH = re.compile(r"<command-name>/?([\w:.-]+)</command-name>")
+BUILTIN_SLASH = {"clear", "compact", "model", "usage", "cost", "config", "resume", "rename", "color", "help", "login",
+                 "logout", "exit", "status", "context", "memory", "permissions", "hooks", "mcp", "plugin", "agents",
+                 "reload-plugins", "fast", "effort", "doctor", "ide", "init", "add-dir", "export", "vim", "theme"}
+
+
+LFG_CMD = re.compile(r"^\s*(?:\S*/)?lfg\s+([a-z][\w-]*)(?:\s+([a-z][\w-]*))?")
+
+
+def used(path):
+    """What a session or review log used: the models, skills (by the Skill tool or a slash command), subagents, MCP
+    servers and claude.ai connectors, the plugins those came from, Claude Code's own tools and the `lfg` commands it
+    ran, each with a count.
+    Works on a transcript and on a `claude -p` stream-json log alike; read on demand, nothing is indexed."""
+    models, skills, agents, mcp, tools, lfg = {}, {}, {}, {}, {}, {}
+
+    def bump(d, k, **extra):
+        d.setdefault(k, dict(extra, name=k, count=0))["count"] += 1
+
+    try:
+        fh = open(path, "rb")
+    except OSError:
+        return None
+    with fh:
+        for ln in fh:
+            if b"tool_use" not in ln and b'"model"' not in ln and b"command-name" not in ln:
+                continue
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+            m = msg.get("model") or (ev.get("model") if ev.get("subtype") == "init" else None)
+            if ev.get("type") == "assistant" and m and m != "<synthetic>":
+                models[m] = models.get(m, 0) + 1
+            content = msg.get("content")
+            if ev.get("type") == "user":
+                for name in SLASH.findall(content if isinstance(content, str) else _prompt_text(content) or ""):
+                    if name not in BUILTIN_SLASH:
+                        bump(skills, name, plugin=name.split(":")[0] if ":" in name else "")
+                continue
+            for b in content if ev.get("type") == "assistant" and isinstance(content, list) else []:
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                name, inp = str(b.get("name") or ""), b.get("input") if isinstance(b.get("input"), dict) else {}
+                if name == "Skill" and inp.get("skill"):
+                    sk = str(inp["skill"]).lstrip("/")
+                    bump(skills, sk, plugin=sk.split(":")[0] if ":" in sk else "")
+                elif name in ("Task", "Agent"):
+                    ag = str(inp.get("subagent_type") or "general-purpose")
+                    bump(agents, ag, plugin=ag.split(":")[0] if ":" in ag else "")
+                elif name.startswith("mcp__"):
+                    server = name.split("__")[1] if name.count("__") >= 2 else name[5:]
+                    if server.startswith("plugin_") and server.count("_") >= 2:
+                        _, plugin, server = server.split("_", 2)
+                        bump(mcp, server, kind="plugin", plugin=plugin)
+                    elif server.startswith("claude_ai_"):
+                        bump(mcp, server[10:].replace("_", " "), kind="connector", plugin="")
+                    else:
+                        bump(mcp, server, kind="server", plugin="")
+                elif name:
+                    bump(tools, name)
+                    cm = LFG_CMD.match(str(inp.get("command") or "")) if name == "Bash" else None
+                    if cm:
+                        bump(lfg, " ".join(x for x in cm.groups() if x))
+    by_count = lambda d: sorted(d.values(), key=lambda x: (-x["count"], x["name"]))  # noqa: E731
+    plugins = sorted({x["plugin"] for d in (skills, agents, mcp) for x in d.values() if x.get("plugin")})
+    return {"models": [k for k, _ in sorted(models.items(), key=lambda kv: -kv[1])], "skills": by_count(skills),
+            "agents": by_count(agents), "mcp": by_count(mcp), "plugins": plugins, "tools": by_count(tools),
+            "lfg": by_count(lfg)}
+
+
+def usage_of(sid):
+    """used() for a session on this machine, by its id."""
+    return dict(used(glob.glob(os.path.join(PROJECTS, "*", _known(sid) + ".jsonl"))[0]) or {}, id=sid)
+
+
 def star(sid, on=True):
     """Star a session you still care about: starred ones come first in their group, and are never folded away."""
     sid, p = _known(sid), prefs()

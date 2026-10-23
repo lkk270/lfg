@@ -2673,6 +2673,30 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(self.SS.recent(a, n=1)["turns"][-1]["text"], "now add a test")
         self.assertFalse(ui.api("sessionrecent", {"id": ["../etc"]})["available"])
 
+    def test_a_session_shows_the_model_skills_mcp_servers_and_tools_it_used(self):
+        a = "%08d-0000-0000-0000-000000000000" % 6
+        self.write(a, "/nowhere/app", "main", "<command-name>/conform-pr</command-name>")
+        p = glob.glob(os.path.join(self.dir, "*", a + ".jsonl"))[0]
+        use = lambda name, **inp: {"type": "assistant", "message": {"model": "claude-opus-5-5", "content": [  # noqa: E731
+            {"type": "tool_use", "name": name, "input": inp}]}}
+        ev = [use("Skill", skill="lfg:secure"), use("Skill", skill="lfg:secure"), use("Agent", subagent_type="lfg:qa"),
+              use("mcp__plugin_lfg_dev-graph__query"), use("mcp__claude_ai_Google_Drive__search"),
+              use("mcp__linear__get_issue"), use("Bash", command="lfg review context acme/api#3"), use("Read"),
+              {"type": "assistant", "message": {"model": "<synthetic>", "content": []}}]
+        with open(p, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in ev))
+        u = self.SS.usage_of(a)
+        self.assertEqual(u["models"], ["claude-opus-5-5"])
+        skills = [(x["name"], x["count"]) for x in u["skills"]]
+        self.assertEqual(skills, [("lfg:secure", 2), ("conform-pr", 1), ("x", 1)])  # /x: the fixture's own line
+        self.assertEqual([x["name"] for x in u["agents"]], ["lfg:qa"])
+        self.assertEqual(sorted((x["name"], x["kind"]) for x in u["mcp"]),
+                         [("Google Drive", "connector"), ("dev-graph", "plugin"), ("linear", "server")])
+        self.assertEqual(u["plugins"], ["lfg"])
+        self.assertEqual([x["name"] for x in u["lfg"]], ["review context"])
+        self.assertEqual(sorted(x["name"] for x in u["tools"]), ["Bash", "Read"])
+        self.assertEqual(ui.api("sessionrecent", {"id": [a]})["used"]["models"], ["claude-opus-5-5"])
+
     def test_a_group_following_a_pr_gathers_its_sessions_and_review_runs(self):
         SS = self.SS
         a, b, c, d = ("%08d-0000-0000-0000-00000000000%d" % (40 + i, i) for i in range(4))
@@ -3218,6 +3242,32 @@ class ReviewTest(unittest.TestCase):
             R.run("o/r", 7, fresh=True)
             R.run("o/r", 7)
         self.assertEqual([p["kind"] for p in R.load("o/r", 7)["passes"]], ["first", "full", "re-review"])
+
+    def test_reviews_run_on_the_model_you_picked_and_say_what_they_used(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "s1", "model": "claude-fable-5-1"},
+                  {"type": "assistant", "session_id": "s1", "message": {"model": "claude-fable-5-1", "content": [
+                      {"type": "tool_use", "name": "mcp__linear__get_issue", "input": {}}]}},
+                  {"type": "result", "session_id": "s1",
+                   "result": "```json\n%s\n```" % json.dumps({"summary": "s", "findings": [self.finding()]})}]
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=self.fake_claude(events)) as run:
+            R.run("o/r", 7)
+            self.assertEqual(ui.save("review_model", {"model": "claude-fable-5-1"})["changed"], ["review.model"])
+            R.run("o/r", 7)
+            R.run("o/r", 7, model="claude-haiku-5-5")
+        cmds = [c[0][0] for c in run.call_args_list if c[0][0][0] == "claude"]
+        models = [c[c.index("--model") + 1] if "--model" in c else "" for c in cmds]
+        self.assertEqual(models, ["", "claude-fable-5-1", "claude-haiku-5-5"])  # "": Claude Code's own default
+        self.assertEqual(R.job("o/r", 7)["model"], "claude-haiku-5-5")
+        used = R.load("o/r", 7)["passes"][-1]["run"]["used"]
+        self.assertEqual(used["models"], ["claude-fable-5-1"])
+        self.assertEqual(used["skills"][0]["name"], "lfg:review")
+        self.assertEqual([x["name"] for x in used["mcp"]], ["linear"])
+        with self.assertRaises(ui.S.Invalid):
+            ui.save("review_model", {"model": "gpt-5"})
+        self.assertEqual(R.models()[1], {"id": "claude-fable-5-1", "label": "Fable 5.1"})
 
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"

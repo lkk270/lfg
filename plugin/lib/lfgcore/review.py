@@ -14,6 +14,7 @@ import re
 import time
 
 from . import common as C
+from . import sessions as SS
 
 SEVERITIES = ("blocker", "major", "minor", "nitpick", "note")
 ORIGINS = ("introduced", "exposed", "pre-existing")      # who the bug belongs to
@@ -124,8 +125,8 @@ def rewrite(repo, number, fid, instruction):
     ctx = "\n".join(x for x in ("Title: " + (f.get("title") or ""), "Issue: " + (f.get("issue") or ""),
                                  "Fix: " + (f.get("fix") or ""), "Where: %s:%s" % (f.get("file") or "-", f.get("line")
                                                                                    or "-")) if x)
-    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""],
-                        input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"]),
+    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
+                        + _model(), input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"]),
                         capture_output=True, text=True, timeout=300)
     try:
         text = (json.loads(cp.stdout).get("result") or "").strip()
@@ -807,7 +808,28 @@ def _alive(pid):
         return False
 
 
-def start(repo, number, ticket=None, fresh=False, together=()):
+MODELS = [("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"),
+          ("claude-haiku-5-5", "Haiku 5.5")]
+
+
+def models():
+    """The models a review can run on, with names a person knows. "" is Claude Code's own default (its settings)."""
+    own = (C.read_json(os.path.join(C.HOME, ".claude", "settings.json"), {}) or {}).get("model") or ""
+    return [{"id": "", "label": "Claude Code default" + (" (%s)" % own if own else "")}] + [
+        {"id": i, "label": lb} for i, lb in MODELS]
+
+
+def chosen_model():
+    """The model reviews, chats and fixes run on: Settings → Model for reviews. "" leaves it to Claude Code."""
+    return str((C.config().get("review") or {}).get("model") or "")
+
+
+def _model(m=None):
+    m = chosen_model() if m is None else m
+    return ["--model", m] if m else []
+
+
+def start(repo, number, ticket=None, fresh=False, together=(), model=None):
     """Start `lfg review run` detached (the dashboard's Review / Re-review / Review together buttons). together: more
     (repo, number) PRs to review in the same session."""
     import subprocess
@@ -821,6 +843,7 @@ def start(repo, number, ticket=None, fresh=False, together=()):
         args += ["--with", ref(*x)]
     args += ["--ticket", ticket] if ticket else []
     args += ["--fresh"] if fresh else []
+    args += ["--model", model] if model else []
     with open(os.devnull, "wb") as dn:
         subprocess.Popen(args, stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True,
                          close_fds=True)
@@ -835,7 +858,7 @@ def _passes(repo, number):
     return len((load(repo, number) or {}).get("passes") or [])
 
 
-def run(repo, number, ticket=None, fresh=False, together=()):
+def run(repo, number, ticket=None, fresh=False, together=(), model=None):
     """Review one PR with Claude Code in print mode, on your own login, and wait for it. together: more PRs reviewed
     in the same session as one change (a backend and the frontend that calls it): each gets its own review, and the
     session also checks they agree with each other. Every review it saves remembers the session, so you can resume it,
@@ -853,7 +876,7 @@ def run(repo, number, ticket=None, fresh=False, together=()):
         C.write_json(job_path(*x), {
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
-            "with": [r for r in refs if r != ref(*x)], "ticket": ticket or ""})
+            "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model()})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     if len(prs) == 1:
         what = "to review %s" % refs[0]
@@ -874,7 +897,7 @@ def run(repo, number, ticket=None, fresh=False, together=()):
                  " Do a full first review of the whole PR, as if there were no earlier reviews: no prior list, every "
                  "finding since \"first\"." if fresh else ""))
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
-           "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)]
+           "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)] + _model(model)
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         # this code's own `lfg` first on PATH, so the session saves with the same version that started it
@@ -893,7 +916,8 @@ def run(repo, number, ticket=None, fresh=False, together=()):
             p = rec["passes"][-1]
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
             shutil.copyfile(log, kept)
-            p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)]}
+            p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)],
+                        "used": used(log)}
             if fresh and p["n"] > 1:
                 p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)
@@ -965,9 +989,18 @@ def session_id(log):
     return ""
 
 
+def used(log):
+    """What a review run used (sessions.used), with the review skill it was told to follow: it reads the skill's file
+    rather than calling the Skill tool, so the log alone wouldn't show it."""
+    u = SS.used(log)
+    if u is not None and not any(x["name"] == "lfg:review" for x in u["skills"]):
+        u["skills"].insert(0, {"name": "lfg:review", "count": 1, "plugin": "lfg"})
+        u["plugins"] = sorted(set(u["plugins"]) | {"lfg"})
+    return u
+
+
 def resume(run):
     """The command that picks a review's session back up, so you can ask it about its findings."""
-    from . import sessions as SS
     return SS.resume_command({"cwd": run.get("cwd"), "id": run["session_id"]}) if run.get("session_id") else ""
 
 
@@ -1077,7 +1110,7 @@ def ask(repo, number, n, question):
                ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
     else:
         cmd = ["claude", "-p", prompt, "--tools", ""]
-    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"],
+    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
     try:
@@ -1159,7 +1192,7 @@ def discuss(repo, number, fid, question):
         code = "\n".join("%s %s" % (r["new"] or r["old"] or "", r["text"]) for r in (snip or {}).get("rows") or [])
         cmd = ["claude", "-p", ASK % (_review_now(rec, p), about + ("\n\nThe code:\n" + code if code else "")),
                "--tools", ""]
-    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"],
+    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
     try:
@@ -1375,7 +1408,7 @@ def fix_run(repo, number):
         with os.fdopen(fd, "w") as fh:
             cp = subprocess.run(["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format",
                                  "stream-json", "--verbose", "--allowedTools", ",".join(FIX_ALLOW),
-                                 "--disallowedTools", ",".join(FIX_DENY)],
+                                 "--disallowedTools", ",".join(FIX_DENY)] + _model(),
                                 cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         out = json_from_session(log, "fixed") or {}
         commits = [c for c in out.get("commits") or [] if isinstance(c, str) and re.match(r"^[0-9a-f]{7,40}$", c)]
@@ -1388,7 +1421,7 @@ def fix_run(repo, number):
         p = rec["passes"][-1]
         p["fix"] = {"ended": C.now_iso(), "commits": commits, "note": str(out.get("note") or "")[:4000],
                     "skipped": [x for x in out.get("skipped") or [] if isinstance(x, dict)],
-                    "session_id": session_id(log), "cwd": cwd}
+                    "session_id": session_id(log), "cwd": cwd, "used": SS.used(log)}
         store(rec)
         ok = bool(out.get("fixed")) and bool(commits)
         j.update(status="done" if ok else "failed", exit=cp.returncode, ended=C.now_iso(),
@@ -1623,8 +1656,8 @@ def import_session(repo, number, path, ticket=None, convert=True):
         if not C.which("claude"):
             raise ReviewError("Claude Code (`claude`) is not on PATH")
         said = "\n\n".join(t for t in _session_texts(path) if t.strip())[-60000:]
-        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""],
-                            input=CONVERT % (SHAPE, said), capture_output=True, text=True, timeout=600)
+        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
+                            + _model(), input=CONVERT % (SHAPE, said), capture_output=True, text=True, timeout=600)
         try:
             data = find_review_json(json.loads(cp.stdout).get("result") or "")
         except ValueError:

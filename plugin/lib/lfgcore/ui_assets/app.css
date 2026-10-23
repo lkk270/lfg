@@ -14,6 +14,8 @@
   --yellow-bg: #fdecc8; --yellow-tx: #402c1b; --yellow: #cb912f;
   --red-bg: #ffe2dd; --red-tx: #5d1715; --red: #d44c47;
   --blue-bg: #d3e5ef; --blue-tx: #183347; --blue-dot: #337ea9;
+  --purple-bg: #e8deee; --purple-tx: #412454; --pink-bg: #f5e0e9; --pink-tx: #4c2337;
+  --orange-bg: #fadec9; --orange-tx: #49290e;
   /* callout tints */
   --c-gray: #f1f1ef; --c-green: #edf3ec; --c-yellow: #fbf3db; --c-red: #fdebec; --c-blue: #e7f3f8;
   --code-bg: rgba(135, 131, 120, .15); --code-tx: #eb5757;
@@ -37,6 +39,8 @@
     --yellow-bg: #564328; --yellow-tx: #f2d38f; --yellow: #ca9849;
     --red-bg: #522e2a; --red-tx: #ffb4a8; --red: #df5452;
     --blue-bg: #143a4e; --blue-tx: #a6d2ef; --blue-dot: #5e87c9;
+    --purple-bg: #3c2d49; --purple-tx: #d7bdee; --pink-bg: #4e2c3c; --pink-tx: #f2b8d1;
+    --orange-bg: #5c3b23; --orange-tx: #f5c597;
     --c-gray: #252525; --c-green: #222b26; --c-yellow: #38311e; --c-red: #362422; --c-blue: #1d282e;
     --code-tx: #ff7369;
     --shadow: rgba(15, 15, 15, .2) 0 0 0 1px, rgba(15, 15, 15, .3) 0 3px 6px, rgba(15, 15, 15, .45) 0 9px 24px;
@@ -838,3 +842,25 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 /* more review tabs than fit: fade the edge so it's clear there are more to scroll to */
 .tabs.pr-passes.more { mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
 .view.stale { opacity: .75; transition: opacity .2s; pointer-events: none; }
+
+/* What a session or review used: a row of soft tags per kind */
+.used { display: grid; grid-template-columns: 64px 1fr; gap: 6px 12px; align-items: baseline; margin: 6px 0 10px; }
+.used-k { font-size: 12px; color: var(--muted); padding-top: 2px; }
+.used-v { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 11px;
+  font-size: 12px; line-height: 1; white-space: nowrap; color: var(--gray-tx); background: var(--gray-bg);
+  transition: filter .12s; cursor: default; }
+.chip:hover { filter: brightness(.96); }
+.chip.mono { font-family: var(--mono); font-size: 11.5px; }
+.chip .n { font-size: 10.5px; font-weight: 500; opacity: .6; font-variant-numeric: tabular-nums; }
+.chip.c-purple { color: var(--purple-tx); background: var(--purple-bg); font-weight: 500; }
+.chip.c-blue { color: var(--blue-tx); background: var(--blue-bg); }
+.chip.c-pink { color: var(--pink-tx); background: var(--pink-bg); }
+.chip.c-orange { color: var(--orange-tx); background: var(--orange-bg); }
+.chip.c-green { color: var(--green-tx); background: var(--green-bg); }
+.chip.connector::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .55; }
+.sess-recent .used { margin-bottom: 12px; }
+
+/* The model reviews run on, beside the buttons that start them */
+.model-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.model-pick select { font-size: 13px; padding-top: 4px; padding-bottom: 4px; min-width: 150px; }
