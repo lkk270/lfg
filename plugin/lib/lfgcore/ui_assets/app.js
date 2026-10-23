@@ -2247,7 +2247,8 @@ function ghTag(g) {
   if (!g || g.available === false) return "";
   if (g.state === "MERGED") return '<span class="tag ok">Merged</span>';
   if (g.state === "CLOSED") return '<span class="tag">Closed</span>';
-  const [t, tn] = GH_DECISION[g.decision] || [(g.reviewers || []).length ? "Not approved yet" : "No reviews yet", ""];
+  // GitHub's own state: reviews done here stay here until posted, and GitHub never counts your own PR's
+  const [t, tn] = GH_DECISION[g.decision] || [(g.reviewers || []).length ? "Not approved yet" : "No reviews on GitHub", ""];
   const mine = (g.reviewers || []).find(r => r.who === g.me);
   const fails = (g.checks || {}).FAILURE || 0;
   return `<span class="tag ${tn}">${esc(t)}</span>${mine ? ` <span class="tag">you: ${esc(({ APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" })[mine.state] || mine.state.toLowerCase())}</span>` : ""}${fails ? ` <span class="tag bad">${plural(fails, "check")} failing</span>` : ""}${g.draft ? ' <span class="tag">draft</span>' : ""}`;
@@ -2260,11 +2261,11 @@ function diffStat(g) {
   const boxes = [...Array(5)].map((_, i) => `<i class="${i < green ? "add" : i < green + red ? "del" : ""}"></i>`).join("");
   return `<span class="diffstat" title="${esc(`${a} added and ${r} removed lines in ${g.files} files`)}">${plural(g.files, "file")} <b class="add">+${a}</b> <b class="del">−${r}</b><span class="bar">${boxes}</span></span>`;
 }
-function ghPanel(g) {
+function ghPanel(g, ours) {
   if (!g || g.available === false) return g && g.why ? `<p class="muted small">Couldn't ask GitHub: ${esc(g.why)}</p>` : "";
   const word = { APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" };
   const checks = Object.entries(g.checks || {}).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", ");
-  return `<div class="pr-status small"><div class="tags">${ghTag(g)}${diffStat(g)}</div><div class="muted">${(g.reviewers || []).map(r => `${esc(r.who)} ${esc(word[r.state] || r.state.toLowerCase())} ${ago(r.at)}`).join(" · ") || "nobody has reviewed yet"}${(g.waiting_on || []).length ? ` · waiting on ${esc(g.waiting_on.join(", "))}` : ""}${checks ? ` · checks: ${esc(checks)}` : ""}</div></div>`;
+  return `<div class="pr-status small"><div class="tags">${ghTag(g)}${diffStat(g)}</div><div class="muted">${(g.reviewers || []).map(r => `${esc(r.who)} ${esc(word[r.state] || r.state.toLowerCase())} ${ago(r.at)}`).join(" · ") || (ours ? `nobody has reviewed on GitHub; your ${plural(ours, "LFG review")} ${ours > 1 ? "stay" : "stays"} here until you post one` : "nobody has reviewed on GitHub yet")}${(g.waiting_on || []).length ? ` · waiting on ${esc(g.waiting_on.join(", "))}` : ""}${checks ? ` · checks: ${esc(checks)}` : ""}</div></div>`;
 }
 PAGES.prs = async arg => {
   if (arg && arg.startsWith("ticket/")) return prTicket(decodeURIComponent(arg.slice(7)));
@@ -2898,7 +2899,7 @@ async function prDetail(arg) {
   const together = p.together || [];
   const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
   return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
-    ${ghPanel(d.gh)}
+    ${ghPanel(d.gh, passes.length)}
     ${jobBox}
     ${actions}
     ${passTabs}
