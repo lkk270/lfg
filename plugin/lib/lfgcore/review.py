@@ -1282,9 +1282,19 @@ def fix_job(repo, number):
     return j
 
 
+def carried(rec):
+    """Earlier findings the newest review followed up on and found still there (not fixed or withdrawn): they act
+    like the newest review's own, so Fix can take them."""
+    p = rec["passes"][-1]
+    open_ids = [x["id"] for x in p.get("prior") or [] if x["state"] not in ("fixed", "withdrawn")]
+    older = {f["id"]: f for q in rec["passes"][:-1] for f in q["findings"]}
+    return [older[i] for i in open_ids if i in older]
+
+
 def to_fix(rec):
     p = rec["passes"][-1]
-    return [f for f in p["findings"] if f["status"] == "keep" and not (f.get("fixed") or {}).get("commit")]
+    return [f for f in p["findings"] + carried(rec)
+            if f["status"] == "keep" and not (f.get("fixed") or {}).get("commit")]
 
 
 def fix_start(repo, number):

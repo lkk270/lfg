@@ -828,3 +828,7 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .notice:hover { border-color: var(--blue); }
 .flash { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: 6px; transition: outline-color .6s; }
 .pr-pass-body, .pr-fixbar { scroll-margin-top: 60px; }  /* a notice scrolls here: land below the top bar */
+.prior-item { margin-bottom: 14px; }
+.prior-item .prior-head { margin-bottom: 6px; gap: 8px; }
+.prior-item p.small { margin: 0 0 6px; color: var(--text-2); }
+.pr-finding { scroll-margin-top: 60px; }
