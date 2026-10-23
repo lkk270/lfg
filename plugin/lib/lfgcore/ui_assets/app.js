@@ -2411,7 +2411,7 @@ function prFinding(f, pr, unlocked, live, own) {
     ${f.raised_by && own && f.status === "drop" ? replyBox(f, pr, unlocked) : ""}
     <div class="pr-discuss" ${chat.length ? "" : "hidden"}><div class="k">Discussion</div><div class="pr-thread">${chat.map(chatTurn).join("")}</div>
       <div class="row"><input type="text" class="grow" data-pr-discussq placeholder="e.g. is this reachable? would the other fix be simpler?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-discussgo='${ref}' ${unlocked ? "" : "disabled"}>Send</button></div></div>
-    <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss ${chat.length ? "hidden" : ""}>Discuss</button></div></div>`;
+    <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss ${chat.length ? "hidden" : ""}>Discuss</button><span class="grow"></span>${copyBtns(findingForPerson(f, pr), findingForAgent(f, pr))}</div></div>`;
 }
 const WORTH = { fix: ["Worth fixing", "warn"], maybe: ["Maybe worth it", ""], skip: ["Not worth fixing", "ok"] };
 /* One turn of a conversation with Claude, and what it changed in the review. */
@@ -2438,6 +2438,30 @@ function talkPane(pr, p, unlocked) {
   return `<aside class="pr-talk"><div class="pr-talk-h"><b>Talk it through</b><span class="muted small mono">${esc(pr)}</span></div>
     <div class="pr-thread">${chat.length ? chat.map(chatTurn).join("") : `<p class="muted small">Ask why something is rated the way it is, push back, or ask for a change: "drop 1.3, it's handled in the caller", "make 1.1 softer". The review changes to match.</p>`}</div>
     <div class="pr-talk-send"><textarea rows="2" data-pr-chat placeholder="Ask or push back" ${unlocked ? "" : "disabled"}></textarea><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Send</button></div></aside>`;
+}
+/* Copy one finding or earlier comment: short for a person, everything an agent needs to act on it. */
+const copyBtns = (person, agent) => `<button class="btn small" data-copy="${esc(person)}" title="What's wrong, where, and the comment: to paste to a person">Copy</button><button class="btn small" data-copy="${esc(agent)}" title="Everything needed to act on it: file and line, issue, fix, the evidence, the comment and its status">Copy for an agent</button>`;
+const whereOf = f => f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
+const DECIDED = { keep: "kept", drop: "dropped", pending: "not decided yet" };
+function findingForPerson(f, pr) {
+  return [`${f.title || f.issue} (${f.severity}) in ${pr}`, `Where: ${whereOf(f)}`, f.body, f.comment_url || ""].filter(Boolean).join("\n\n");
+}
+function findingForAgent(f, pr) {
+  return [`# Review finding ${f.id} on ${pr}: ${f.title || f.issue}`,
+    `Severity: ${f.severity}. Status: ${DECIDED[f.status] || f.status}${f.comment_url ? ", posted" : ""}${(f.fixed || {}).commit ? `, fixed in ${f.fixed.commit}` : ""}.`,
+    `Where: ${whereOf(f)}`, f.issue ? `Issue: ${f.issue}` : "", f.fix ? `Suggested fix: ${f.fix}` : "",
+    f.detail ? `What the review checked: ${f.detail}` : "", f.raised_by ? `Raised by: ${f.raised_by.who}${f.raised_by.url ? " (" + f.raised_by.url + ")" : ""}` : "",
+    (f.echoes || []).length ? `Also raised by: ${f.echoes.map(e => `${e.who}${e.url ? " (" + e.url + ")" : ""}`).join(", ")}` : "",
+    f.body ? `Comment for the author:\n${f.body}` : "", f.comment_url ? `On GitHub: ${f.comment_url}` : "",
+    "Verify it against the code before changing anything; if it's wrong, say why instead."].filter(Boolean).join("\n\n");
+}
+function earlierForPerson(x, f, pr, said) {
+  return [`${f.title || x.id} on ${pr}: ${said}`, x.note || "", f.comment_url || ""].filter(Boolean).join("\n\n");
+}
+function earlierForAgent(x, f, pr, said) {
+  return [`# Earlier review comment ${x.id} on ${pr}: ${f.title || ""}`, `Now: ${said}.`, x.note ? `Why: ${x.note}` : "",
+    `Where: ${whereOf(f)}`, f.issue ? `Original issue: ${f.issue}` : "", f.fix ? `Suggested fix: ${f.fix}` : "",
+    f.body ? `What was posted:\n${f.body}` : "", f.comment_url ? `On GitHub: ${f.comment_url}` : ""].filter(Boolean).join("\n\n");
 }
 /* The code a finding points at, like GitHub shows it: file name on top, old and new line numbers, added and removed lines. */
 function snipHtml(sn) {
@@ -2505,7 +2529,7 @@ async function prDetail(arg) {
   const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
   const label = x => `Review ${x.n}${full(x) ? " · full review" : x.kind === "re-review" ? " · re-review" : ""}`;
   const passTabs = `<div class="tabs pr-passes">${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
-  const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
+  const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}<div class="row">${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}<span class="grow"></span>${copyBtns(earlierForPerson(x, f, pr, t), earlierForAgent(x, f, pr, t))}</div></div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
   const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
   const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
