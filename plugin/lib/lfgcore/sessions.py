@@ -250,10 +250,11 @@ def _following(group_prs):
     return out
 
 
-def listing(days=None, scripted=False, hidden=False, only=None):
+def listing(days=None, scripted=False, hidden=False, only=None, loose=False):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
     by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`. `only`: a main
-    checkout; keeps the sessions that ran in it or one of its worktrees."""
+    checkout; keeps the sessions that ran in it or one of its worktrees. `loose`: only the sessions started outside
+    any git repo (your home folder, ~/code, a scratch folder), whatever `only` says. `loose_count` counts those."""
     p = prefs()
     want = os.path.realpath(only) if only else ""
     folder_of = {sid: f for f, ids in p["folders"].items() for sid in ids}
@@ -262,7 +263,7 @@ def listing(days=None, scripted=False, hidden=False, only=None):
     starred = set(p["starred"])
     hid = set(p["hidden"])
     cut = time.time() - days * 86400 if days else 0
-    rows = []
+    rows, loose_count = [], 0
     for s in scan():
         # a script's session (`claude -p`, e.g. a dashboard review run) shows when it joined a group through its PR
         if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted and s["id"] not in auto) or \
@@ -273,9 +274,10 @@ def listing(days=None, scripted=False, hidden=False, only=None):
             _, w_root, wt = _where(s["worked_in"])
             if root and w_root and os.path.realpath(w_root) != os.path.realpath(root):
                 wt = ""  # a worktree of another repo: not where this session's own work is
-        if want and (not root or os.path.realpath(root) != want):
+        loose_count += not root
+        if loose and root or not loose and want and (not root or os.path.realpath(root) != want):
             continue
-        r = dict(s, repo=repo, root=root, worktree=wt,
+        r = dict(s, repo=repo, root=root, worktree=wt, loose=not root,
                  ticket=_ticket(s["branch"], s["title"], s["ai_title"], s["first"]),
                  folder_exists=bool(s["cwd"]) and os.path.isdir(s["cwd"]),
                  app="desktop" if s["entrypoint"] == "claude-desktop" else "")
@@ -295,7 +297,7 @@ def listing(days=None, scripted=False, hidden=False, only=None):
         rows.append(r)
     rows.sort(key=lambda r: r["modified"], reverse=True)
     return {"sessions": rows, "folders": sorted(set(p["folders"]) | set(p["group_prs"])), "group_prs": p["group_prs"],
-            "projects_dir": PROJECTS, "hidden_count": len(hid)}
+            "projects_dir": PROJECTS, "hidden_count": len(hid), "loose_count": loose_count}
 
 
 def _known(sid):
