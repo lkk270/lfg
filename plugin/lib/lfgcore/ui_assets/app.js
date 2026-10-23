@@ -2339,8 +2339,11 @@ function usedTags(u) {
    for reviews started from this page while it's open; the saved one is in "Review method" below the lists. */
 function methodPick(d, unlocked) {
   if (!d.methods) return "";
-  const cur = state.reviewMethod || "";
-  return `<label class="model-pick" title="The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded">Method<select data-review-method ${unlocked ? "" : "disabled"}><option value="" ${cur ? "" : "selected"}>Saved: ${esc(d.method_now || "LFG's built-in method")}</option>${d.methods.map(m => `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>`;
+  const saved = d.methods.find(m => m.saved) || d.methods[0], cur = state.reviewMethod || saved.id;
+  const all = state.reviewMethodsAll, shown = d.methods.filter(m => all || m.fits || m.id === cur);
+  const opt = m => `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""} title="${esc(m.about || "")}">${esc(m.label)}${m.saved ? " (saved)" : ""}</option>`;
+  const others = d.methods.length - d.methods.filter(m => m.fits || m.id === cur).length;
+  return `<label class="model-pick" title="The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded. Your saved one is in Review method, below the lists">Method<select data-review-method ${unlocked ? "" : "disabled"}>${shown.map(opt).join("")}${!all && others ? `<option value="__all">Other skill… (${others})</option>` : ""}</select></label>`;
 }
 function modelPick(d, unlocked) {
   if (!d.models) return "";
@@ -3081,7 +3084,10 @@ function wirePrs(root) {
   $$(".pr-steps", root).forEach(el => (el.scrollTop = el.scrollHeight));  // newest step in view
   $$("[data-prs-done]", root).forEach(c => c.onchange = () => { localStorage.setItem("lfg.prs.done", c.checked ? "1" : "0"); softRoute(); });
   $$("[data-pr-group]", root).forEach(b => b.onclick = prGroup);
-  $$("[data-review-method]", root).forEach(s => s.onchange = () => { state.reviewMethod = s.value; });
+  $$("[data-review-method]", root).forEach(s => s.onchange = () => {
+    if (s.value === "__all") { state.reviewMethodsAll = true; return softRoute().then(() => $("[data-review-method]")?.focus()); }
+    state.reviewMethod = s.value;
+  });
   $$("[data-review-model]", root).forEach(s => s.onchange = async () => {
     const r = await save("review_model", { model: s.value });
     if (!r.ok) return alertMsg(s, r);

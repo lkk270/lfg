@@ -843,11 +843,17 @@ def _model(m=None):
 
 
 def method_choices():
-    """Methods one review can use instead of the saved one: LFG's built-in method and each of your own skills."""
-    out = [{"id": "builtin", "label": "LFG's built-in method", "sources": []}]
+    """Methods one review can use instead of the saved one: LFG's built-in method and each of your own skills. `fits`:
+    a skill whose job is reviewing (its description starts "Review" or "Audit"), or the one you saved; the page shows
+    those and keeps the rest behind "Other skill"."""
+    from . import control as K
+    saved = (C.config().get("review") or {}).get("sources") or []
+    out = [{"id": "builtin", "label": "LFG's built-in method", "sources": [], "fits": True, "saved": not saved}]
     for d in sorted(glob.glob(os.path.join(C.HOME, ".claude", "skills", "*", "SKILL.md"))):
-        name = os.path.basename(os.path.dirname(d))
-        out.append({"id": name, "label": name, "sources": ["~/.claude/skills/%s" % name]})
+        name, src = os.path.basename(os.path.dirname(d)), "~/.claude/skills/%s" % os.path.basename(os.path.dirname(d))
+        about = str(K._frontmatter(C.read_text(d)[:20000]).get("description") or "").lstrip(">- \n").strip()
+        out.append({"id": name, "label": name, "sources": [src], "about": about[:300], "saved": saved == [src],
+                    "fits": saved == [src] or bool(re.match(r"(review|audit)\b", about, re.I))})
     return out
 
 
