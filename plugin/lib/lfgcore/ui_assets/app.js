@@ -614,7 +614,7 @@ function fieldInput(f, locked) {
 }
 function settingsGeneral() {
   const { cfg, unlocked } = state.settings;
-  return `<div>${cfg.fields.filter(f => !f.owner).map(f => `<label class="set-row" for="cfg-${esc(f.key)}"><div><div class="set-label">${esc(f.label)}</div><div class="set-help">${esc(f.help || "")}</div></div><div class="set-input">${fieldInput(f, !unlocked)}</div></label>`).join("")}</div>
+  return `<div>${notifyRow()}${cfg.fields.filter(f => !f.owner).map(f => `<label class="set-row" for="cfg-${esc(f.key)}"><div><div class="set-label">${esc(f.label)}</div><div class="set-help">${esc(f.help || "")}</div></div><div class="set-input">${fieldInput(f, !unlocked)}</div></label>`).join("")}</div>
     <div class="set-actions"><button class="btn primary" id="cfg-save" ${unlocked ? "" : "disabled"}>Save</button><span class="save-msg" id="cfg-msg"></span></div>`;
 }
 function settingsSkills() {
@@ -973,6 +973,12 @@ async function loadStorage() {
   };
 }
 function wireSettings(root) {
+  const nt = $("#notify-test", root);
+  if (nt) nt.onclick = async () => {
+    if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission();
+    const sent = desktopNotice("LFG test notification", "If you can see this, notifications work.", () => {});
+    saidMsg($("#notify-msg", root), sent ? { ok: true } : { ok: false, why: "the browser hasn't allowed them" }, "Sent. If nothing appeared, check macOS's notification settings for your browser.");
+  };
   if ($("#cc-box", root)) loadClaudeCode();
   if ($("#skills-box", root)) loadSkills();
   if ($("#mylib-box", root)) loadMyLibrary();
@@ -2370,9 +2376,9 @@ function fixBar(pr, p, live, unlocked, fj) {
   if (!live) return done || `<p class="muted small">An older review. Only the newest one can be fixed.</p>`;
   const pending = p.findings.filter(f => f.status === "pending").length;
   const todo = p.findings.filter(f => f.status === "keep" && !(f.fixed || {}).commit).length;
-  return `${done}${failed}<div class="panel"><div class="k" style="margin-top:0">Fix your PR: <span class="mono">${esc(pr)}</span></div>
+  return `<div class="pr-fixbar">${done}${failed}<div class="panel"><div class="k" style="margin-top:0">Fix your PR: <span class="mono">${esc(pr)}</span></div>
       <div class="row"><button class="btn primary" data-pr-fix="${esc(pr)}" ${unlocked && !pending && todo ? "" : "disabled"}>Fix ${plural(todo, "finding")}</button>
-      <span class="muted small">${pending ? `Choose Fix or Pass on ${plural(pending, "more finding")} first.` : todo ? "Claude fixes them in a checkout of the PR's branch, runs the tests, and pushes one commit (more only if one would be too big to review)." : "Nothing marked Fix."}</span></div></div>`;
+      <span class="muted small">${pending ? `Choose Fix or Pass on ${plural(pending, "more finding")} first.` : todo ? "Claude fixes them in a checkout of the PR's branch, runs the tests, and pushes one commit (more only if one would be too big to review)." : "Nothing marked Fix."}</span></div></div></div>`;
 }
 /* Post one PR's review to GitHub. Every PR on a reviewed-together page gets its own, whichever repo is picked. */
 function postBar(pr, p, live, own, unlocked, fj) {
@@ -2965,7 +2971,7 @@ async function route(opts) {
   let html;
   try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); }
   if (seq !== renderSeq) return;
-  if (soft && html === lastHtml && location.hash === lastHash) return;  // nothing changed: leave the page alone
+  if (soft && html === lastHtml && location.hash === lastHash) return applyGoto(view);  // nothing changed: leave the page alone
   lastHtml = html; lastHash = location.hash;
   view.innerHTML = html;
   mountTables(view); mountTabs(view); wire(view);
@@ -2985,6 +2991,7 @@ async function route(opts) {
     uiRestore(view, snap);
     window.scrollTo(0, y);
   } else if (!arg) window.scrollTo(0, 0);
+  applyGoto(view);
 }
 function wireDocs() {
   const body = $("#doc-body");
@@ -3057,20 +3064,47 @@ async function watchNotices() {
   await tick();
   setInterval(tick, 15000);
 }
-function noticeShow(x) {
+/* Where a notice takes you: the PR on its newest review, scrolled to the findings or the Fix box, which flashes. */
+const NOTICE_PLACE = { findings: ".pr-pass-body", fix: ".pr-fixbar" };
+function noticeGo(x) {
+  sessionStorage.removeItem("lfg.prpass." + x.pr);
+  state.goto = NOTICE_PLACE[x.place] || NOTICE_PLACE.findings;
   const href = `#prs/${x.pr.replace("#", "/")}`;
-  if ("Notification" in window && Notification.permission === "granted") {
-    const n = new Notification(x.title, { body: x.body, tag: `lfg-${x.n}` });
-    n.onclick = () => { window.focus(); location.hash = href; n.close(); };
-  }
+  if (location.hash === href) route(); else location.hash = href;
+}
+function applyGoto(view) {
+  if (!state.goto) return;
+  const el = $(state.goto, view);
+  state.goto = null;
+  if (!el) return;
+  el.scrollIntoView({ block: "start", behavior: "smooth" });
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 1800);
+}
+function desktopNotice(title, body, onclick) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return false;
+  const n = new Notification(title, { body });
+  n.onclick = () => { window.focus(); onclick(); n.close(); };
+  return true;
+}
+function noticeShow(x) {
+  desktopNotice(x.title, x.body, () => noticeGo(x));
   const box = document.createElement("div");
   box.className = `notice ${x.ok ? "ok" : "bad"}`;
-  box.innerHTML = `${dot(x.ok ? "ok" : "bad")}<div class="grow"><a href="${esc(href)}"><b>${esc(x.title)}</b></a><div class="small muted">${esc(x.body)}</div>${"Notification" in window && Notification.permission === "default" ? '<button class="btn tiny" data-notify-on>Also tell me on the desktop</button>' : ""}</div><button class="btn tiny" data-notice-x aria-label="Close">×</button>`;
+  box.title = "Open it";
+  box.innerHTML = `${dot(x.ok ? "ok" : "bad")}<div class="grow"><b>${esc(x.title)}</b><div class="small muted">${esc(x.body)}</div>${"Notification" in window && Notification.permission === "default" ? '<button class="btn tiny" data-notify-on>Also tell me on the desktop</button>' : ""}</div><button class="btn tiny" data-notice-x aria-label="Close">×</button>`;
+  box.onclick = e => { if (e.target.closest("button")) return; box.remove(); noticeGo(x); };
   $("[data-notice-x]", box).onclick = () => box.remove();
-  $("a", box).onclick = () => box.remove();
   const on = $("[data-notify-on]", box);
   if (on) on.onclick = async () => { await Notification.requestPermission(); on.remove(); };
   ($("#notices") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "notices" }))).appendChild(box);
+}
+/* Settings → General: check desktop notifications end to end, and say what's in the way when they don't show. */
+function notifyRow() {
+  const p = "Notification" in window ? Notification.permission : "unsupported";
+  const say = { granted: "Allowed in this browser.", denied: "Blocked in this browser: allow it in the site settings (the icon left of the address).", default: "Not asked yet.", unsupported: "This browser can't show them." }[p];
+  return `<div class="set-row"><div><div class="set-label">Desktop notifications</div><div class="set-help">When a review or a fix finishes. ${esc(say)} If the test shows nothing, macOS is holding them: System Settings → Notifications → your browser → Allow notifications, and check Focus is off.</div></div>
+    <div class="row"><button class="btn small" id="notify-test">${p === "default" ? "Allow and send a test" : "Send a test"}</button><span class="save-msg" id="notify-msg"></span></div></div>`;
 }
 async function loadBranches() {
   /* runs and checks are tagged with the branch they ran on; the code map is one per project */
