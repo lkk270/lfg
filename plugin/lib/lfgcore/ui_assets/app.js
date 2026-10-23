@@ -2560,7 +2560,6 @@ function questionsBox(pr, p, unlocked) {
 const VERDICT = { mergeable: ["Mergeable", "ok"], almost: ["Almost mergeable", "warn"], not: ["Not mergeable", "bad"] };
 function mergeVerdict(p) {
   if (VERDICT[p.verdict]) return { v: p.verdict, why: p.verdict_why || "", guessed: false };
-  if ((p.posted || {}).event === "APPROVE") return { v: "mergeable", why: "You approved it", guessed: true };
   const open = (p.findings || []).filter(f => f.status !== "drop" && !(f.fixed || {}).commit);
   const big = open.filter(f => ["blocker", "major"].includes(f.severity)), small = open.filter(f => f.severity === "minor");
   if (big.length) return { v: "not", why: `${plural(big.length, big.some(f => f.severity === "blocker") ? "blocker or major finding" : "major finding")} still open`, guessed: true };
@@ -2569,12 +2568,12 @@ function mergeVerdict(p) {
 }
 const scoreTone = sc => (sc >= 85 ? "ok" : sc >= 70 ? "warn" : "bad");
 /* The verdict and the score, big, at the top of a review. */
-function verdictHero(p, together) {
-  const { v, why, guessed } = mergeVerdict(p), [label, tone] = VERDICT[v];
+function verdictHero(p, together, gh) {
+  const { v, why, guessed } = mergeVerdict(p), [label, tone] = VERDICT[v], clash = approvedAnyway(gh, v);
   const sc = p.score != null && !together ? Number(p.score) : null;
   const ring = sc == null ? "" : `<div class="score-ring ${scoreTone(sc)}" style="--pct:${Math.max(0, Math.min(100, sc))}" title="The review's score out of 100"><span>${esc(sc)}</span><small>score</small></div>`;
   const upTo = (p.history || []).filter(x => x.n <= p.n);
-  return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}</div>${together ? "" : trend(upTo)}</div>`;
+  return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}</div>${together ? "" : trend(upTo)}</div>${clash ? `<div class="callout ${clash.others ? "bad" : "warn"} approved-anyway">${dot(clash.others ? "bad" : "warn")}<span>${esc(clash.text)}</span></div>` : ""}`;
 }
 /* Which way the score is heading: against the review before, and a small line of every score so far. */
 function trend(list, compact) {
@@ -2591,10 +2590,18 @@ function trend(list, compact) {
   const spark = `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${esc(title)}"><polyline points="${pts.map(p => p.join(",")).join(" ")}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${pts.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="${i === pts.length - 1 ? 3.5 : 2.5}"><title>Review ${xs[i].n}: ${xs[i].score}</title></circle>`).join("")}</svg>`;
   return `<div class="trend-box ${cls}">${badge}<span class="muted small">from review ${a.n}</span>${spark}</div>`;
 }
+/* Approved on GitHub while the review says it isn't ready: say who, loudest when it wasn't you. */
+function approvedAnyway(gh, v) {
+  if (!gh || v === "mergeable") return null;
+  const who = (gh.reviewers || []).filter(r => r.state === "APPROVED").map(r => r.who);
+  if (!who.length) return null;
+  const names = who.map(w => (w === gh.me ? "you" : "@" + w));
+  return { names, others: who.some(w => w !== gh.me), text: `Approved by ${names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.slice(-1) : names[0]}, but this review says it ${v === "not" ? "isn't ready to merge" : "isn't quite ready"}.` };
+}
 /* A compact verdict for lists. */
 function verdictPill(r) {
-  const v = VERDICT[r.verdict] ? r.verdict : null;
-  return v ? `<span class="tag ${VERDICT[v][1]} verdict-pill">${esc(VERDICT[v][0])}</span>` : "";
+  const v = VERDICT[r.verdict] ? r.verdict : null, clash = v && approvedAnyway(r.gh, v);
+  return v ? `<span class="tag ${VERDICT[v][1]} verdict-pill">${esc(VERDICT[v][0])}</span>${clash ? `<span class="tag ${clash.others ? "bad" : "warn"}" title="${esc(clash.text)}">approved anyway</span>` : ""}` : "";
 }
 /* Keep an answer: a decision for this repo (dev-graph) or a note for you (second-brain). */
 function rememberRow(pr, n, q, unlocked) {
@@ -2741,7 +2748,7 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-split"><div class="pr-pass-body">
-      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length)}<div class="row"><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
+      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>

@@ -974,3 +974,4 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .run-form [hidden] { display: none; }
 .merge-cell { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap; }
 .merge-cell .score-mini, .merge-cell .trend { margin-left: 0; }
+.approved-anyway { display: flex; align-items: center; gap: 8px; margin: -6px 0 14px; font-weight: 500; }

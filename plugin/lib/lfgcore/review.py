@@ -1183,8 +1183,6 @@ def verdict_of(p):
     """The review's own call on whether it can merge, else one worked out from what's still open (older reviews)."""
     if p.get("verdict") in VERDICTS:
         return p["verdict"]
-    if (p.get("posted") or {}).get("event") == "APPROVE":
-        return "mergeable"  # you approved it
     open_ = [f for f in p.get("findings") or [] if f["status"] != "drop" and not (f.get("fixed") or {}).get("commit")]
     if any(f["severity"] in ("blocker", "major") for f in open_):
         return "not"

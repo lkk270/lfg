@@ -3032,7 +3032,7 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(R.verdict_of({"findings": [f("major")]}), "not")
         self.assertEqual(R.verdict_of({"findings": [f("major", "drop"), f("minor")]}), "almost")
         self.assertEqual(R.verdict_of({"findings": [f("nitpick")]}), "mergeable")
-        self.assertEqual(R.verdict_of({"findings": [f("major")], "posted": {"event": "APPROVE"}}), "mergeable")
+        self.assertEqual(R.verdict_of({"findings": [f("major")], "posted": {"event": "APPROVE"}}), "not")
         self.assertEqual(R.verdict_of({"verdict": "almost", "findings": []}), "almost")
         rec = {"passes": [{"n": 1, "score": 60}, {"n": 2, "score": None}, {"n": 3, "score": 80, "kind": "full"}]}
         self.assertEqual(R.scores(rec), [{"n": 1, "score": 60, "kind": "first"}, {"n": 3, "score": 80, "kind": "full"}])
