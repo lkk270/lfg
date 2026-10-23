@@ -2833,7 +2833,7 @@ async function checkUpdate(fresh) {
         <span class="muted small">Paste it into a new Claude Code session and decide there; it adds your decision to FORK.md so the next update follows it. Then press Update.</span></div></div>`
       : F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">The last try ${ago(F.ended)} stopped: ${esc(F.why || "")}</span>` : "";
     const unlocked = await isUnlocked();
-    box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
+    box.innerHTML = `<span>${dot("bad")}<b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
       ${H.files.length ? `<details class="more inline"><summary>${H.state === "conflict" ? "Conflicting files" : "Changed files"}</summary><ul>${H.files.map(f => `<li class="mono small">${esc(f)}</li>`).join("")}</ul></details>` : ""}
       ${H.output ? `<details class="more inline"><summary>Test output</summary><pre class="raw mono small">${esc(H.output)}</pre></details>` : ""}
       ${tried}
@@ -2858,14 +2858,14 @@ async function checkUpdate(fresh) {
   if (j && j.status === "done" && !seen && !(d.available && d.ready) && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
     box.hidden = false;
     box.className = "callout ok";
-    box.innerHTML = `${dot("ok")}<span><b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
+    box.innerHTML = `<span>${dot("ok")}<b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
     $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }
   if (j && j.status === "failed" && !seen && !(d.available && d.ready && Date.parse(j.ended) < Date.now() - 60e3)) {
     box.hidden = false;
     box.className = "callout bad";
-    box.innerHTML = `${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span> <button class="btn small" id="update-ok">OK</button>`;
+    box.innerHTML = `<span>${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span></span> <button class="btn small" id="update-ok">OK</button>`;
     $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }
