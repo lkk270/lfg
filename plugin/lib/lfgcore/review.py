@@ -852,6 +852,8 @@ def run(repo, number, ticket=None, fresh=False, together=()):
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
             shutil.copyfile(log, kept)
             p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)]}
+            if fresh and p["n"] > 1:
+                p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)
         j = dict(job(*x) or {}, status="done" if ok else "failed", exit=cp.returncode, ended=C.now_iso(),
                  why="" if ok else why)

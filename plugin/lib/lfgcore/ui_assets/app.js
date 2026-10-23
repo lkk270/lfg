@@ -2376,7 +2376,9 @@ async function prDetail(arg) {
   const p = passes.find(x => x.n === pick) || last;
   const live = p === last && !p.posted;
   const byId = Object.fromEntries(passes.flatMap(x => x.findings).map(f => [f.id, f]));
-  const label = x => `Review ${x.n}${x.kind === "re-review" ? " · re-review" : ""}`;
+  // a full review saved before LFG recorded the kind: no earlier findings followed up, and every finding is new
+  const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
+  const label = x => `Review ${x.n}${full(x) ? " · full review" : x.kind === "re-review" ? " · re-review" : ""}`;
   const passTabs = `<div class="tabs pr-passes">${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
   const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
@@ -2712,7 +2714,7 @@ async function route(opts) {
   const key = PAGES[page] ? page : "home";
   const arg = rest.join("/");
   renderNav(key);
-  crumbs(key);
+  if (!soft) crumbs(key);  // a refresh keeps the page's own crumbs (e.g. the PR) instead of flashing back to the page
   document.title = `${TITLES[key]} · LFG`;
   const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
   view.classList.toggle("wide", key === "review" && !!arg);  // the review screens are two panes: use the width

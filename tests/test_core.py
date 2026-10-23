@@ -2888,6 +2888,19 @@ class ReviewTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
         return run
 
+    def test_a_new_full_review_is_recorded_as_one_not_as_a_re_review(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1",
+                   "result": "```json\n%s\n```" % json.dumps({"summary": "s", "findings": [self.finding()]})}]
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=self.fake_claude(events)):
+            R.run("o/r", 7)
+            R.run("o/r", 7, fresh=True)
+            R.run("o/r", 7)
+        self.assertEqual([p["kind"] for p in R.load("o/r", 7)["passes"]], ["first", "full", "re-review"])
+
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
         both = {"reviews": [{"pr": "o/api#7", "summary": "backend", "findings": [self.finding()]},
