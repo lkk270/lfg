@@ -740,6 +740,7 @@ def together(p):
         q = next((x for x in reversed((rec or {}).get("passes") or [])
                   if run_.get("session_id") and (x.get("run") or {}).get("session_id") == run_["session_id"]), None)
         out.append({"pr": other, "title": (rec or {}).get("title") or "", "url": (rec or {}).get("url") or "",
+                    "author": (rec or {}).get("author") or "",
                     "pass": q, "live": bool(q) and q is rec["passes"][-1] and not q.get("posted")})
     return out
 
