@@ -3070,6 +3070,22 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual([x["name"] for x in d["repos"]], ["o/api", "o/web"])
         self.assertEqual(d["overall"]["to_approval"], 1.5)
 
+    def test_answering_a_question_is_tagged_in_the_chat(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [], "questions": [{"ask": "still used?", "why": "w"}]})
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=self.claude_says("Fine.")):
+            R.answer("o/r", 7, 1, "q1", "no")
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["chat"][-1]["qid"], "q1")
+
+    def test_a_pr_that_isnt_ready_never_scores_like_one_that_is(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "score": 100, "verdict": "almost", "findings": []})
+            R.save("o/r", 7, {"summary": "s", "score": 90, "verdict": "not", "findings": []})
+            R.save("o/r", 7, {"summary": "s", "score": 100, "verdict": "mergeable", "findings": []})
+        self.assertEqual([p["score"] for p in R.load("o/r", 7)["passes"]], [94, 79, 100])
+        self.assertEqual(R.apply_changes("o/r", 7, 3, {"verdict": "almost"}), ["score 94", "verdict almost"])
+
     def test_a_review_says_whether_it_can_merge_and_talking_can_change_that(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "score": 70, "verdict": "almost", "verdict_why": "one minor left",
@@ -3080,7 +3096,7 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((p["verdict"], p["verdict_why"]), ("almost", "one minor left"))
         changed = R.apply_changes("o/r", 7, 1, {"changes": [{"id": "1.1", "status": "drop"}], "score": 92,
                                                 "verdict": "mergeable", "verdict_why": "nothing left"})
-        self.assertEqual(changed, ["1.1: dropped", "verdict", "score 92"])
+        self.assertEqual(changed, ["1.1: dropped", "verdict mergeable", "score 92"])
         p = R.load("o/r", 7)["passes"][0]
         self.assertEqual((p["verdict"], p["score"], p["findings"][0]["dropped_by"]), ("mergeable", 92, "claude"))
         R.mark("o/r", 7, ["1.1"], status="keep")  # your own call replaces Claude's

@@ -32,7 +32,10 @@ The default way `/lfg:review` finds and judges issues. Replace it by pointing `r
 | nitpick | Cosmetic or taste |
 | note | Not a defect: context for the author, never deducted |
 
-Score: start at 100; blocker -25, major -12, minor -4, nitpick -1 (once per kind of nitpick). Floor 0.
+Score: start at 100; blocker -25, major -12, minor -4, nitpick -1 (once per kind of nitpick). An open question or an
+unverified risk that could stop the merge (the verdict is `almost` or `not` because of it) costs what the finding it
+could become would: -4 if it would be minor, -12 if major, -25 if a blocker. Floor 0. The score and the verdict agree:
+100 means nothing stands between the PR and merging; `almost` scores at most 94 and `not` at most 79.
 
 ## Comments
 
