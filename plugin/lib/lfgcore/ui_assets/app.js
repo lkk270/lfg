@@ -1734,7 +1734,7 @@ function skillRuns(runs, unlocked) {
     const what = j.skill || "Instruction";
     return `<div class="skill-run ${tone}"><div class="row">${dot(tone)}<b class="mono">${esc(what)}</b><span class="muted small">${esc(st)}${j.times > 1 ? ` · pass ${(j.passes || []).length + (j.status === "running" ? 1 : 0)} of ${j.times}` : ""}${j.until_clean && last && last.clean ? " · nothing left to change" : ""} · ${ago(j.ended || j.started)}${j.fork ? " · in a copy" : ""}</span><span class="grow"></span>${j.status === "running" && !j.stop ? `<button class="btn small" data-run-stop="${esc(j.id)}" ${unlocked ? "" : "disabled"} title="Stop after the pass that's running now">Stop after this pass</button>` : ""}<button class="btn small" data-copy="${esc(j.resume)}" title="${esc(j.resume)}">Copy resume command</button></div>
       ${j.say && j.skill ? `<div class="small muted">${esc(j.say.slice(0, 200))}</div>` : !j.skill ? `<div class="small">${esc(j.say.slice(0, 200))}</div>` : ""}
-      ${j.status === "running" && (j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.slice(-6).map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${j.status === "running" && (j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
       ${j.status === "failed" && j.why ? `<div class="small bad-tx">${esc(j.why)}</div>` : ""}
       ${last && last.said ? `<details class="more"><summary class="small">What Claude said last</summary><div class="md small">${md(last.said)}</div></details>` : ""}
       ${j.used ? `<details class="more"><summary class="small">What it used</summary>${usedTags(j.used)}</details>` : ""}</div>`;
@@ -2236,7 +2236,7 @@ function tallyLine(r) {
 async function prStart(pr, btn) {
   const fresh = btn.dataset.fresh === "1";
   btn.disabled = true; btn.textContent = "Starting…";
-  const d = await save("review_run", { pr, fresh });
+  const d = await save("review_run", { pr, fresh, method: state.reviewMethod || "" });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
   btn.textContent = d.started ? "Started" : "Already running";
   setTimeout(softRoute, 1200);
@@ -2303,7 +2303,7 @@ PAGES.prs = async arg => {
     ${prTabs("list")}
     ${d.no_remote && !allRepos("prs") ? `<p class="muted small">${esc(repoName())} has no GitHub remote, so this shows PRs from every repo.</p>` : ""}
     ${lock}
-    <div class="row pr-actions"><span class="grow"></span>${modelPick(d, unlocked)}</div>
+    <div class="row pr-actions"><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>
     <div class="callout" id="pr-pickbar" hidden></div>
     ${ticketSection(d, unlocked)}
     ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { ...qopts, emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
@@ -2335,6 +2335,13 @@ function usedTags(u) {
   return rows.length ? `<div class="used">${rows.map(([k, cs]) => `<div class="used-k">${k}</div><div class="used-v">${cs.join("")}</div>`).join("")}</div>` : "";
 }
 /* Which model reviews run on, next to the buttons that start them. One setting for every review, chat and fix. */
+/* Which method the next review here follows: your saved one (Settings), LFG's built-in, or one of your skills. Only
+   for reviews started from this page while it's open; the saved one is in "Review method" below the lists. */
+function methodPick(d, unlocked) {
+  if (!d.methods) return "";
+  const cur = state.reviewMethod || "";
+  return `<label class="model-pick" title="The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded">Method<select data-review-method ${unlocked ? "" : "disabled"}><option value="" ${cur ? "" : "selected"}>Saved: ${esc(d.method_now || "LFG's built-in method")}</option>${d.methods.map(m => `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>`;
+}
 function modelPick(d, unlocked) {
   if (!d.models) return "";
   return `<label class="model-pick" title="The model every review, re-review, chat and fix runs on, from now on">Model<select data-review-model ${unlocked ? "" : "disabled"}>${d.models.map(m => `<option value="${esc(m.id)}" ${m.id === (d.model || "") ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>`;
@@ -2674,7 +2681,7 @@ function questionsBox(pr, p, unlocked) {
   return `<div class="panel pr-questions"><div class="k" style="margin-top:0">${open ? `${plural(open, "question")} for you` : "Questions, answered"}</div><p class="muted small">Your answer goes to the review's chat. Claude replies here and changes the review if your answer settles something.</p>${qs.map(q => {
     const key = `q:${pr}:${p.n}:${q.id}`, waiting = pend[key];
     const said = q.answer || waiting;
-    return `<div class="pr-question" id="q-${esc(q.id)}" data-ask="${esc(q.ask)}"><div class="pr-ask"><button class="btn tiny pr-q-copy" data-copy="${esc(q.ask + (q.why ? "\n\nWhy it matters: " + q.why : ""))}" title="Copy the question, and why it matters">Copy</button>${txt(q.ask)}${q.why ? `<div class="muted small">${txt(q.why)}</div>` : ""}</div>${said
+    return `<div class="pr-question" id="q-${esc(q.id)}" data-ask="${esc(q.ask)}"><div class="pr-ask">${q.costs ? `<span class="pts q-pts ${q.answer ? "off" : ""}" title="${q.answer ? `Cost ${q.costs} points until you answered it` : `This question costs ${q.costs} points until it's answered: it could become a finding that holds the merge back`}">−${q.costs}</span>` : ""}<button class="btn tiny pr-q-copy" data-copy="${esc(q.ask + (q.why ? "\n\nWhy it matters: " + q.why : ""))}" title="Copy the question, and why it matters">Copy</button>${txt(q.ask)}${q.why ? `<div class="muted small">${txt(q.why)}</div>` : ""}</div>${said
       ? `<div class="pr-chat-thread">${chatTurn({ q: said, a: waiting ? null : q.reply || (q.answer ? "" : null), changed: q.changed }, pr).replace('<div class="bubble md"></div>', '<div class="bubble md muted">Sent to the review\'s chat. Answers from before this update show their reply there.</div>')}</div>${q.answer ? rememberRow(pr, p.n, q, unlocked) : ""}`
       : `<div class="pr-compose"><textarea data-grow rows="2" data-pr-answer placeholder="Your answer" ${unlocked ? "" : "disabled"}></textarea><button class="btn small primary" data-pr-answergo='${esc(JSON.stringify([pr, p.n, q.id]))}' ${unlocked ? "" : "disabled"}>Answer</button></div>`}</div>`;
   }).join("")}</div>`;
@@ -2709,7 +2716,15 @@ function verdictHero(p, together, gh) {
   const sc = raw == null ? null : Math.min(raw, { almost: 94, not: 79 }[v] ?? 100);
   const ring = sc == null ? "" : `<div class="score-ring ${scoreTone(sc)}" style="--pct:${Math.max(0, Math.min(100, sc))}" title="${sc < raw ? `Saved as ${raw}, shown as ${sc}: a PR that is ${label.toLowerCase()} can't score higher` : "The review's score out of 100"}"><span>${esc(sc)}</span><small>score</small></div>`;
   const upTo = (p.history || []).filter(x => x.n <= p.n);
-  return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}${RUBRIC}</div>${together ? "" : trend(upTo)}</div>${clash ? `<div class="callout ${clash.others ? "bad" : "warn"} approved-anyway">${dot(clash.others ? "bad" : "warn")}<span>${esc(clash.text)}</span></div>` : ""}`;
+  /* where the points went: findings, open questions, and anything the review took off without saying */
+  const kinds = new Set(), fpts = (p.findings || []).filter(f => f.status !== "drop").reduce((a, f) => {
+    if (f.severity === "nitpick") { if (kinds.has(f.title)) return a; kinds.add(f.title); }
+    return a + (POINTS[f.severity] || 0);
+  }, 0);
+  const qpts = (p.questions || []).filter(q => !q.answer).reduce((a, q) => a + (q.costs || 0), 0);
+  const other = raw == null ? 0 : Math.max(0, 100 - raw - fpts - qpts);
+  const breakdown = raw == null || together ? "" : `<div class="score-why small" title="The score is 100 minus these">100 <span class="muted">−</span> <b>${fpts}</b> <span class="muted">findings</span>${qpts ? ` <span class="muted">−</span> <b>${qpts}</b> <span class="muted">open questions</span>` : ""}${other ? ` <span class="muted">−</span> <b>${other}</b> <span class="muted" title="The review took these off without tying them to a finding or question, often risks named in the summary">not itemized</span>` : ""} <span class="muted">=</span> <b>${raw}</b></div>`;
+  return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}${breakdown}${RUBRIC}</div>${together ? "" : trend(upTo)}</div>${clash ? `<div class="callout ${clash.others ? "bad" : "warn"} approved-anyway">${dot(clash.others ? "bad" : "warn")}<span>${esc(clash.text)}</span></div>` : ""}`;
 }
 /* Which way the score is heading: against the review before, and a small line of every score so far. */
 function trend(list, compact) {
@@ -2845,10 +2860,10 @@ async function prDetail(arg) {
   if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const kindOf = j && (j.fresh ? "review from scratch" : j.re_review ? "re-review" : "review");
-  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
+  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}${j.method ? `, following <b>${esc(j.method)}</b>` : ""}${j.model ? ` on ${esc(modelName(j.model))}` : ""}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
   const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
@@ -2889,7 +2904,7 @@ async function prDetail(arg) {
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
-        ${p.run.used ? `<div class="k mt">What it used</div>${usedTags(p.run.used)}` : ""}
+        ${p.run.used ? `<div class="k mt">What it used</div>${p.run.method ? `<div class="used"><div class="used-k">Method</div><div class="used-v"><span class="chip c-blue" title="The checklist this review followed: what to look for, how serious, how to word comments">${esc(p.run.method)}</span></div></div>` : ""}${usedTags(p.run.used)}` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted"><span class="loading-inline">Loading…</span></div></details>` : ""}</div>
       ${questionsBox(pr, p, unlocked)}
       ${prior}
@@ -3063,8 +3078,10 @@ function grow(t) {
   fit();
 }
 function wirePrs(root) {
+  $$(".pr-steps", root).forEach(el => (el.scrollTop = el.scrollHeight));  // newest step in view
   $$("[data-prs-done]", root).forEach(c => c.onchange = () => { localStorage.setItem("lfg.prs.done", c.checked ? "1" : "0"); softRoute(); });
   $$("[data-pr-group]", root).forEach(b => b.onclick = prGroup);
+  $$("[data-review-method]", root).forEach(s => s.onchange = () => { state.reviewMethod = s.value; });
   $$("[data-review-model]", root).forEach(s => s.onchange = async () => {
     const r = await save("review_model", { model: s.value });
     if (!r.ok) return alertMsg(s, r);
@@ -3076,7 +3093,7 @@ function wirePrs(root) {
   $$("[data-ticket-run]", root).forEach(b => b.onclick = async () => {
     const [t, refs] = JSON.parse(b.dataset.ticketRun);
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t, fresh: b.dataset.fresh === "1" });
+    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t, fresh: b.dataset.fresh === "1", method: state.reviewMethod || "" });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     setTimeout(softRoute, 1000);
   });
@@ -3087,7 +3104,7 @@ function wirePrs(root) {
   $$("[data-pr-together]", root).forEach(b => b.onclick = async () => {
     const [pr, others] = JSON.parse(b.dataset.prTogether);
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr, with: others, fresh: b.dataset.fresh === "1" });
+    const r = await save("review_run", { pr, with: others, fresh: b.dataset.fresh === "1", method: state.reviewMethod || "" });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     setTimeout(softRoute, 1000);
   });
@@ -3374,7 +3391,8 @@ function uiSnapshot(view) {
     open: new Map(keyed(view, "details").map(([k, d]) => [k, d.open])),
     shown: new Map(keyed(view, KEEP_SHOWN).map(([k, el]) => [k, el.hidden])),
     typed: new Map(keyed(view, "input, textarea").filter(([, el]) => el.type !== "checkbox" && el.type !== "radio" && el.value !== el.defaultValue).map(([k, el]) => [k, el.value])),
-    scroll: new Map(keyed(view, ".pr-thread, .pr-activity ol, .pr-steps, .scroll").filter(([, el]) => el.scrollTop).map(([k, el]) => [k, el.scrollTop])),
+    // a list scrolled to its end stays at the end as lines arrive (-1); one you scrolled up stays where you left it
+    scroll: new Map(keyed(view, ".pr-thread, .pr-activity ol, .pr-steps, .scroll").filter(([, el]) => el.scrollTop).map(([k, el]) => [k, el.scrollHeight - el.scrollTop - el.clientHeight < 8 ? -1 : el.scrollTop])),
     focus: a && keys.has(a) ? { key: keys.get(a), start: a.selectionStart, end: a.selectionEnd } : null,
   };
 }
@@ -3385,7 +3403,7 @@ function uiRestore(view, snap) {
     if (snap.typed.has(k)) el.value = snap.typed.get(k);
     if (snap.focus && snap.focus.key === k) { el.focus({ preventScroll: true }); try { el.setSelectionRange(snap.focus.start, snap.focus.end); } catch (e) { /* not a text field */ } }
   });
-  keyed(view, ".pr-thread, .pr-activity ol, .pr-steps, .scroll").forEach(([k, el]) => { if (snap.scroll.has(k)) el.scrollTop = snap.scroll.get(k); });
+  keyed(view, ".pr-thread, .pr-activity ol, .pr-steps, .scroll").forEach(([k, el]) => { if (snap.scroll.has(k)) el.scrollTop = snap.scroll.get(k) === -1 ? el.scrollHeight : snap.scroll.get(k); });
 }
 /* Re-draw the current page in place: no loading placeholder, same scroll position, open sections stay open. For
    buttons that change one thing on the page (Keep, Save comment, Review); route() is for going to a page. */

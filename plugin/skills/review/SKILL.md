@@ -95,13 +95,16 @@ The file passed to `lfg review save`:
    "raised_by": {"who": "coderabbitai", "url": "...", "comment_id": 123, "kind": "inline|review|comment",
                  "bot": true},
    "worth": "fix|maybe|skip", "reply": "only with raised_by: the user's answer if they pass on it"}],
- "questions": [{"ask": "is the old export endpoint still called by the mobile app?", "why": "if so, 1.2 is a blocker"}],
+ "questions": [{"ask": "is the old export endpoint still called by the mobile app?", "why": "if so, 1.2 is a blocker",
+                "costs": 12}],
  "prior": [{"id": "1.3", "state": "fixed|replied|withdrawn|resolved-unchanged|ignored|open", "note": "why"}]}
 ```
 
 `line` is a line in the PR's version of the file, or null for a finding about the PR as a whole.
 
-`verdict` and `score` must agree (the method's Score rule): an open question or unchecked risk that holds the
+A question that holds the verdict back costs points (the method's Score rule): put that cost in its `costs` (4, 12 or
+25; leave it out when the question costs nothing), so the score adds up from what the page shows. `verdict` and
+`score` must agree (the method's Score rule): an open question or unchecked risk that holds the
 verdict back costs points too, so a PR that is only `almost` never scores 100. `verdict`: `mergeable` when nothing
 should hold it up, `almost` when only small fixes stand in the way (minors, a
 failing check with an obvious cause, a question to answer), `not` with any blocker or major, or a design problem.

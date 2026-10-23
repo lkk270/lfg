@@ -264,7 +264,9 @@ def api(view, q):
             return R.score_stats(only=_only(q))
         if view == "prreviews":
             return dict(R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q)), method=R.method(),
-                        ticket_titles=ticket_titles(), models=R.models(), model=R.chosen_model())
+                        ticket_titles=ticket_titles(), models=R.models(), model=R.chosen_model(),
+                        methods=R.method_choices(),
+                        method_now=R.method_label((C.config().get("review") or {}).get("sources")))
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             pr = R.ref(repo, number)
@@ -288,7 +290,8 @@ def api(view, q):
                     "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],
                     "groups": SS.groups_of(pr), "all_groups": SS.listing()["folders"],
-                    "models": R.models(), "model": R.chosen_model()}
+                    "models": R.models(), "model": R.chosen_model(), "methods": R.method_choices(),
+                    "method_now": R.method_label((C.config().get("review") or {}).get("sources"))}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
     rid = _rid(q)
@@ -508,7 +511,7 @@ def review_action(what, body):
             if not isinstance(together, list):
                 raise S.Invalid("with must be a list of PRs")
             return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")),
-                           together=[R.parse_pr(str(x)) for x in together])
+                           together=[R.parse_pr(str(x)) for x in together], method=body.get("method") or None)
         if what == "review_link":
             return R.link(R.ref(repo, number), str(body.get("other") or ""), on=body.get("on", True) is not False)
         if what == "review_link_session":
