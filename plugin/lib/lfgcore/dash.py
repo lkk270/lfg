@@ -234,12 +234,20 @@ def _ticket(d):
     return m.group(1).upper() if m else ""
 
 
-def _commits_ahead(meta):
+def _own_worktree(meta, ticket=""):
+    """The worktree a run's work is on. A run's session can go on to make worktrees for other work, so it is the one
+    whose branch names the run's ticket, else the first the run made: never simply the latest."""
+    wts = [w for w in meta.get("worktrees") or [] if isinstance(w, dict) and w.get("branch")]
+    t = (ticket or "").lower()
+    return next((w for w in wts if t and t in w["branch"].lower()), wts[0] if wts else None)
+
+
+def _commits_ahead(meta, ticket=""):
     """Commits on the run's worktree branch that its starting branch (and origin's copy of it) doesn't have: code
     written outside /lfg:build still shows that something was built."""
     base = meta.get("branch") or ""
-    for w in reversed(meta.get("worktrees") or []):
-        if not isinstance(w, dict) or not w.get("branch") or not os.path.isdir(w.get("path") or ""):
+    for w in [_own_worktree(meta, ticket)]:
+        if not w or not os.path.isdir(w.get("path") or ""):
             continue
         if not base or w["branch"] == base:
             return 0
@@ -269,15 +277,15 @@ def _run_summary(d):
         for other in keys:
             if other not in skipped and not stages.get(other) and STEP_CMD[other] == STEP_CMD[k]:
                 skipped[other] = "%s was skipped with %s: %s" % (STEP_CMD[k], STEP_LABEL[k], why)
-    ahead = 0 if stages["build"] else _commits_ahead(meta)
+    ticket = _ticket(d)
+    ahead = 0 if stages["build"] else _commits_ahead(meta, ticket)
     ready = None if rd is None else C.checks_state(rd)
     if ready and _newer_work(d, os.path.join(d, "ready.json")):
         ready = "stale"  # the work changed after the checks ran: their result says nothing about it now
     return {"run": os.path.basename(d), "slug": meta.get("slug"), "created": meta.get("created"),
-            "title": title, "about": about, "ticket": _ticket(d),
+            "title": title, "about": about, "ticket": ticket,
             # the run starts on one branch and its work moves to the worktree `lfg worktree new` gives it
-            "branch": next((w["branch"] for w in reversed(meta.get("worktrees") or [])
-                            if isinstance(w, dict) and w.get("branch")), meta.get("branch") or ""),
+            "branch": (_own_worktree(meta, ticket) or {}).get("branch") or meta.get("branch") or "",
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()) + bool(ahead),
             "skipped": skipped, "outside": {"build": ahead} if ahead else {},

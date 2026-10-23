@@ -1387,6 +1387,30 @@ class RunChecksTest(unittest.TestCase):
 
 
 class RunStepsTest(unittest.TestCase):
+    def test_a_run_shows_its_own_worktree_branch_not_one_made_later_for_other_work(self):
+        """A run's session went on to make worktrees for other work: the run is still on the one it made for its
+        ticket (or its first), never the latest one and never the main checkout's branch."""
+        root, rid = git_repo()
+        who = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        C.run(who + ["commit", "-q", "--allow-empty", "-m", "start"], cwd=root)
+        own = "lee/ato-4223-queue-terraform-runs-one-at-a-time-per-system-and-what-it"
+        wts = []
+        for b in ("lee/dependabot-node-pin", own, "lee/deploy-on-lockfile-change", "lee/agents-db-tests"):
+            wt = os.path.join(tempfile.mkdtemp(), b.replace("/", "-"))
+            C.run(["git", "worktree", "add", "-q", "-b", b, wt], cwd=root)
+            wts.append({"path": wt, "branch": b})
+        C.run(who + ["commit", "-q", "--allow-empty", "-m", "the queue"], cwd=wts[1]["path"])
+        C.run(["git", "checkout", "-q", "-b", "lee/something-else"], cwd=root)  # the main checkout moved on
+        run = os.path.join(C.runs_dir(root), "20261021-1249-ato-4223-terraform-run-queue")
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "worktrees": wts})
+        r = dash._run_summary(run)
+        self.assertEqual(r["branch"], own)  # the worktree for its ticket
+        self.assertEqual(r["outside"], {"build": 1})  # its commits are counted on that branch too
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "worktrees": wts[2:]})
+        run2 = os.path.join(C.runs_dir(root), "20261022-0900-no-ticket-here")
+        C.write_json(os.path.join(run2, "run.json"), {"branch": "main", "worktrees": wts[2:]})
+        self.assertEqual(dash._run_summary(run2)["branch"], "lee/deploy-on-lockfile-change")  # no ticket: the first
+
     def test_skipped_steps_and_work_done_outside_lfg_show_on_the_run(self):
         root, rid = git_repo()
         who = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
