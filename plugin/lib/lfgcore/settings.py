@@ -65,6 +65,9 @@ FIELDS = [
      ("token", "cache")),
     ("headroom.port", "Headroom port", "int", "Local proxy port (restart Claude Code after changing).",
      (1024, 65535)),
+    ("review.model", "Model for reviews", "choice", "The model every review, re-review, chat and fix runs on. "
+                                                    "Default is whatever Claude Code itself uses.",
+     ("", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")),
     ("ui.port", "Dashboard port", "int", "Used the next time you run lfg ui.", (1024, 65535)),
     ("replies.lfg_tag", "Say whether LFG was used", "bool", "In LFG repos, Claude starts each reply with the LFG "
                                                            "skill or tools it used, or why it didn't use LFG.", None),
@@ -146,6 +149,13 @@ def _coerce(field, raw):
     return v
 
 
+def _labels(key):
+    """Names for a choice's values, where the raw value means nothing to a person."""
+    if key != "review.model":
+        return None
+    from . import review as R
+    return {m["id"]: m["label"] for m in R.models()}
+
 # Which integration (pack) a setting belongs to: it shows on that integration's card, not in Settings → General.
 FIELD_OWNER = {"linear.": "linear", "headroom.": "headroom", "graphs.": "core", "pentest.": "pentest",
                "secure.": "security", "shipcheck.": "shipcheck", "dictate.": "dictate", "sonarqube.": "sonarqube"}
@@ -158,7 +168,7 @@ def field_owner(key):
 def config_view():
     cfg = C.config()
     return {"fields": [{"key": k, "label": lb, "type": t, "help": h, "owner": field_owner(k),
-                        "options": list(x) if t == "choice" else None,
+                        "options": list(x) if t == "choice" else None, "labels": _labels(k),
                         "min": x[0] if t == "int" else None, "max": x[1] if t == "int" else None,
                         "value": _get(cfg, k)} for k, lb, t, h, x in FIELDS],
             "path": C.lfg_path("config.json")}

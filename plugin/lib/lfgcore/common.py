@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
     "linear": {"team": "", "workspace": ""},
     "headroom": {"port": 8787, "mode": "token", "scope": "off"},
     "guard": {"hardened": False, "allow_commit": False},
-    "review": {"sources": []},
+    "review": {"sources": [], "model": ""},
     "replies": {"lfg_tag": False},
     "sonarqube": {"telemetry": False},
     "dictate": {"shortcut": "option+space", "insert": "paste", "cleanup": True},

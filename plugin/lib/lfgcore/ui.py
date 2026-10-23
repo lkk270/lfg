@@ -212,7 +212,7 @@ def api(view, q):
     if view == "sessionrecent":
         from . import sessions as SS
         try:
-            return SS.recent(_arg(q, "id"))
+            return dict(SS.recent(_arg(q, "id")), used=SS.usage_of(_arg(q, "id")))
         except ValueError as e:
             return {"available": False, "why": str(e)}
     if view == "sessiondone":
@@ -251,7 +251,7 @@ def api(view, q):
         from . import sessions as SS
         if view == "prreviews":
             return dict(R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q)), method=R.method(),
-                        ticket_titles=ticket_titles())
+                        ticket_titles=ticket_titles(), models=R.models(), model=R.chosen_model())
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             pr = R.ref(repo, number)
@@ -265,6 +265,8 @@ def api(view, q):
             for p in (rec or {}).get("passes") or []:
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
+                    if "used" not in p["run"] and p["run"].get("log"):  # reviews from before LFG kept this
+                        p["run"]["used"] = R.used(p["run"]["log"])
                     p["together"] = R.together(p)
             fj = R.fix_job(repo, number)
             return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
@@ -272,7 +274,8 @@ def api(view, q):
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
                     "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],
-                    "groups": SS.groups_of(pr), "all_groups": SS.listing()["folders"]}
+                    "groups": SS.groups_of(pr), "all_groups": SS.listing()["folders"],
+                    "models": R.models(), "model": R.chosen_model()}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
     rid = _rid(q)
@@ -460,6 +463,8 @@ def review_action(what, body):
     try:
         if what == "review_sources":
             return R.set_sources(body.get("sources"))
+        if what == "review_model":
+            return S.save_config({"review.model": str(body.get("model") or "")})
         repo, number = R.parse_pr(str(body.get("pr") or ""))
         if what == "review_mark":
             ids = body.get("ids") or []
