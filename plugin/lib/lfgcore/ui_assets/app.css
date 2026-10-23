@@ -867,7 +867,7 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .msg.claude .bubble { background: var(--soft); color: var(--text); border-bottom-left-radius: 4px; }
 .msg.claude .bubble > :first-child { margin-top: 0; } .msg.claude .bubble > :last-child { margin-bottom: 0; }
 .msg-at { font-size: 11px; color: var(--faint); margin-top: 3px; }
-.msg-changes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.msg-changes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
 .msg-changes a.chip { text-decoration: none; cursor: pointer; }
 .chip.c-red { color: var(--red-tx); background: var(--red-bg); }
 .bubble.typing { display: inline-flex; gap: 4px; padding: 12px 14px; }
@@ -1020,3 +1020,18 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .chart-tip .ic-t { font-weight: 600; margin-bottom: 3px; }
 .chart-tip[hidden] { display: none; }
 .done-toggle { gap: 6px; margin: 0 0 8px; color: var(--muted); cursor: pointer; width: fit-content; }
+.msg-tag { display: block; white-space: nowrap; line-height: 22px; align-self: flex-end; margin-bottom: 4px; font-size: 11.5px; text-decoration: none; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.remember-help { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 6px; line-height: 1.45; }
+.remember-help b { color: var(--text-2); font-weight: 600; }
+@media (max-width: 800px) { .remember-help { grid-template-columns: 1fr; } }
+/* Points a finding costs, and the rubric */
+.pts { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; margin-left: 6px; border-radius: 4px; font-size: 12px;
+  font-weight: 650; font-variant-numeric: tabular-nums; color: var(--red-tx); background: var(--red-bg); }
+.pts.off { color: var(--muted); background: var(--gray-bg); text-decoration: line-through; }
+.rubric { margin-top: 6px; }
+.rubric summary { color: var(--muted); cursor: pointer; width: fit-content; }
+.rubric > div { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: var(--page); color: var(--text-2); line-height: 1.5; }
+.rubric p { margin: 0 0 8px; } .rubric p:last-child { margin: 8px 0 0; }
+.rubric-grid { display: grid; grid-template-columns: auto auto 1fr; gap: 6px 10px; align-items: center; }
+.rubric-grid b { font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
+.pr-q-copy { float: right; margin: 0 0 4px 10px; }

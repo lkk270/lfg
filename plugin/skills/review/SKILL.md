@@ -101,7 +101,9 @@ The file passed to `lfg review save`:
 
 `line` is a line in the PR's version of the file, or null for a finding about the PR as a whole.
 
-`verdict`: `mergeable` when nothing should hold it up, `almost` when only small fixes stand in the way (minors, a
+`verdict` and `score` must agree (the method's Score rule): an open question or unchecked risk that holds the
+verdict back costs points too, so a PR that is only `almost` never scores 100. `verdict`: `mergeable` when nothing
+should hold it up, `almost` when only small fixes stand in the way (minors, a
 failing check with an obvious cause, a question to answer), `not` with any blocker or major, or a design problem.
 
 Then show the user, per PR: the earlier-finding states (re-review), the score, then one row per finding: id,

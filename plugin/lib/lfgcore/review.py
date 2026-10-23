@@ -365,6 +365,7 @@ def save(repo, number, data, ticket=None, meta=None):
     verdict = data.get("verdict") or None
     if verdict not in (None,) + VERDICTS:
         raise ReviewError("verdict must be one of %s, or left out" % ", ".join(VERDICTS))
+    score = cap_score(score, verdict)
     rec["passes"].append({
         "n": n, "kind": "first" if n == 1 else "re-review", "ts": C.now_iso(), "reviewer": data.get("reviewer") or "",
         "head_sha": data.get("head_sha") or meta["head_sha"], "base": meta["base"],
@@ -1080,12 +1081,16 @@ def apply_changes(repo, number, n, out):
         p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
         if p and p.get("verdict") != v:
             p["verdict"], p["verdict_why"] = v, _text((out or {}).get("verdict_why"), "verdict_why", 400)
+            if cap_score(p.get("score"), v) != p.get("score"):
+                p["score"] = cap_score(p["score"], v)
+                done.append("score %d" % p["score"])
             recs[(repo, number)] = rec
-            done.append("verdict")
+            done.append("verdict %s" % v)
     score = (out or {}).get("score")
     if isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100:
         rec = recs.get((repo, number)) or need(repo, number)
         p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
+        score = cap_score(score, p.get("verdict") if p else None)
         if p and p.get("score") != score:
             p["score"] = score
             recs[(repo, number)] = rec
@@ -1172,11 +1177,19 @@ def answer(repo, number, n, qid, text):
     p = next(x for x in rec["passes"] if x["n"] == int(n))
     qq = next(x for x in p.get("questions") or [] if x["id"] == qid)
     qq.update(reply=out["a"], changed=out["changed"])
+    if p.get("chat"):
+        p["chat"][-1]["qid"] = qid  # the chat shows it as your answer to that question
     store(rec)
     return out
 
 
 VERDICTS = ("mergeable", "almost", "not")
+SCORE_CAP = {"almost": 94, "not": 79}  # a PR that isn't ready never scores like one that is
+
+
+def cap_score(score, verdict):
+    """The score as high as the verdict allows: 100 only when nothing stands in the way of merging."""
+    return min(score, SCORE_CAP[verdict]) if score is not None and verdict in SCORE_CAP else score
 
 
 def verdict_of(p):
@@ -1860,7 +1873,15 @@ def dashboard(fresh=False, only=None):
     want = {(x["repo"], x["number"]) for x in q + mine + others}
     want |= {(r["repo"], r["number"]) for r in recs if r.get("state") == "OPEN"}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        st = dict(zip(want, pool.map(lambda k: gh_status(*k), want)))
+        # Refresh asks GitHub again; otherwise a minute old at most, so a PR merged on GitHub drops off soon
+        st = dict(zip(want, pool.map(lambda k: gh_status(*k, max_age=0 if fresh else 60), want)))
+    for r in recs:  # remember a PR that was merged or closed, so it counts as done even when GitHub isn't asked
+        g = st.get((r["repo"], r["number"])) or {}
+        if g.get("state") in ("MERGED", "CLOSED") and r.get("state") in (None, "OPEN"):
+            rec = load(r["repo"], r["number"])
+            if rec:
+                rec["state"] = r["state"] = g["state"]
+                C.write_json(record_path(r["repo"], r["number"]), rec)  # not store(): its place in the list stays
     for x in q + mine:
         x["gh"] = st.get((x["repo"], x["number"]))
         x["ticket"] = ticket_of(x["title"], "", (x["gh"] or {}).get("branch")) or x.get("ticket") or ""
