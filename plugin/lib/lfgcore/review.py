@@ -237,7 +237,30 @@ def _clean_finding(f, i):
     return {"title": _text(f.get("title"), "title", 200), "severity": sev, "file": f.get("file") or None,
             "line": line, "issue": _text(f.get("issue"), "issue", 1000), "fix": _text(f.get("fix"), "fix", 1000),
             "detail": _text(f.get("detail"), "detail"), "body": body, "origin": origin, "since": since,
-            "echoes": _echoes(f.get("echoes"), i), "status": "pending", "comment_id": None, "comment_url": None}
+            "echoes": _echoes(f.get("echoes"), i), "status": "pending", "comment_id": None, "comment_url": None,
+            **_raised(f, i)}
+
+
+WORTH = ("fix", "maybe", "skip")
+
+
+def _raised(f, i):
+    """Your own PR: a finding that is someone else's comment (CodeRabbit, Sonar, a teammate), with Claude's read on
+    whether it's worth fixing and the reply to send if you pass on it."""
+    rb = f.get("raised_by")
+    if not rb:
+        return {}
+    if not isinstance(rb, dict) or not str(rb.get("who") or "").strip():
+        raise ReviewError("finding %d: raised_by is {who, url, comment_id, kind}" % i)
+    worth = f.get("worth") or "maybe"
+    if worth not in WORTH:
+        raise ReviewError("finding %d: worth is one of %s" % (i, ", ".join(WORTH)))
+    cid = rb.get("comment_id")
+    return {"raised_by": {"who": _text(rb.get("who"), "raised_by.who", 100), "url": _text(rb.get("url"), "url", 500),
+                          "comment_id": cid if isinstance(cid, int) else None,
+                          "kind": rb.get("kind") if rb.get("kind") in ("inline", "review", "comment") else "comment",
+                          "bot": bool(rb.get("bot"))},
+            "worth": worth, "reply": _text(f.get("reply"), "reply", 4000), "replied": None}
 
 
 def _echoes(raw, i):
@@ -272,7 +295,8 @@ def others(repo, number):
             return
         out.append({"who": u.get("login") or "", "bot": u.get("type") == "Bot" or (u.get("login") or "").endswith(
             "[bot]"), "kind": kind, "file": file, "line": line, "said": body[:1500], "url": c.get("html_url") or "",
-            "at": c.get("submitted_at") or c.get("created_at") or ""})
+            "at": c.get("submitted_at") or c.get("created_at") or "", "comment_id": c.get("id"),
+            "reply_to": c.get("in_reply_to_id")})
     for c in gh_json(["api", "--paginate", "repos/%s/pulls/%d/comments" % (repo, number)], timeout=120) or []:
         add(c, "inline", c.get("path"), c.get("line") or c.get("original_line"))
     for c in gh_json(["api", "--paginate", "repos/%s/pulls/%d/reviews" % (repo, number)], timeout=120) or []:
@@ -342,6 +366,10 @@ def save(repo, number, data, ticket=None, meta=None):
         "head_sha": data.get("head_sha") or meta["head_sha"], "base": meta["base"],
         "summary": _text(data.get("summary"), "summary"), "score": score,
         "approach_notes": [_text(x, "approach note", 4000) for x in data.get("approach_notes") or []],
+        "questions": [{"id": "q%d" % k, "ask": _text(q.get("ask"), "question", 1000), "why": _text(q.get("why"), "why",
+                                                                                                    1000),
+                       "answer": None} for k, q in enumerate([q for q in data.get("questions") or []
+                                                               if isinstance(q, dict) and q.get("ask")][:10], 1)],
         "findings": found, "prior": prior, "posted": None})
     store(rec)
     C.audit("review_save", {"pr": "%s#%d" % (repo, number), "pass": n, "findings": len(found)})
@@ -960,29 +988,95 @@ def backfill(repo, number):
     return rec
 
 
-ASK = ("Lee is asking about the review you just did, from the LFG dashboard. Answer from what you found and what the "
-       "code says; read more of it if you need to. Don't save, post or change anything, and don't rewrite the review "
-       "unless asked: just answer, short and plain. If a finding was wrong, say so.\n\n%s")
+ASK = ("Lee is talking to you about the review you did, from the LFG dashboard. Answer from what you found and what "
+       "the code says; read more of it if you need to. Answer short and plain. If a finding was wrong, say so. If the "
+       "conversation settles a change to the review (Lee asks for one, or you agree a finding is wrong, mis-rated or "
+       "badly worded), end your reply with one ```json block {\"changes\": [{\"pr\": \"owner/repo#n\", \"id\": "
+       "\"1.2\", and only the fields that change: \"title\", \"severity\", \"issue\", \"fix\", \"body\", \"reply\", "
+       "\"status\" (\"keep\" or \"drop\")}], \"summary\": \"only if the summary changes\"}. LFG applies it. Never save, "
+       "post or run anything that writes.\n\nThe review as it stands: %s\n\n%s")
+
+
+CHANGE_FIELDS = {"title": 200, "issue": 1000, "fix": 1000, "body": MAX_BODY, "reply": 4000}
+
+
+def apply_changes(repo, number, n, out):
+    """Apply what a conversation settled ({"changes": [...], "summary": ...} from Claude's reply) to the review it is
+    about, and to PRs reviewed in the same session. Posted comments stay as they are. Returns what changed, in words."""
+    done, recs = [], {}
+    for c in (out or {}).get("changes") or []:
+        if not isinstance(c, dict) or not c.get("id"):
+            continue
+        try:
+            r, k = parse_pr(str(c.get("pr") or ref(repo, number)))
+            rec = recs.get((r, k)) or need(r, k)
+            f = find(rec, str(c["id"]))
+        except ReviewError:
+            continue
+        if f.get("comment_id"):
+            continue
+        what = []
+        for k2, limit in CHANGE_FIELDS.items():
+            if isinstance(c.get(k2), str) and c[k2].strip() and c[k2] != f.get(k2):
+                f[k2] = _text(c[k2], k2, limit)
+                what.append({"body": "comment"}.get(k2, k2))
+        if c.get("severity") in SEVERITIES and c["severity"] != f["severity"]:
+            f["severity"] = c["severity"]
+            what.append("severity")
+        if c.get("status") in ("keep", "drop") and c["status"] != f["status"]:
+            f["status"] = c["status"]
+            what.append("kept" if c["status"] == "keep" else "dropped")
+        if what:
+            recs[(r, k)] = rec
+            done.append("%s%s: %s" % ("" if (r, k) == (repo, number) else ref(r, k) + " ", f["id"], ", ".join(what)))
+    summary = (out or {}).get("summary")
+    if isinstance(summary, str) and summary.strip():
+        rec = recs.get((repo, number)) or need(repo, number)
+        p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
+        if p and p.get("summary") != summary:
+            p["summary"] = _text(summary, "summary")
+            recs[(repo, number)] = rec
+            done.append("summary")
+    for rec in recs.values():
+        store(rec)
+    return done
+
+
+def _reply_text(text):
+    """Claude's reply without the ```json change block, and that block parsed."""
+    found = find_review_json(text, "changes")
+    shown = re.sub(r"```json\s*\{[\s\S]*?\}\s*```\s*$", "", text).strip() if found else text
+    return shown or "Done.", found
+
+
+def _review_now(rec, p):
+    """The pass as Claude needs it to change it: ids, ratings, statuses and comments, compact."""
+    return json.dumps({"pr": ref(rec["repo"], rec["number"]), "summary": p.get("summary"),
+                       "findings": [{k: f.get(k) for k in ("id", "severity", "status", "title", "file", "line", "body",
+                                                           "reply") if f.get(k) is not None} for f in p["findings"]]})
 
 
 def ask(repo, number, n, question):
-    """Ask the very session that did a review about it (resumes it, read-only). The question and answer are kept on
-    the pass, so the conversation shows on the review's page."""
+    """Talk to the session that did a review (resumes it), or to Claude with the review when it was imported. What the
+    conversation settles changes the review; the conversation is kept on the pass."""
     import subprocess
     if not str(question or "").strip():
         raise ReviewError("ask something, e.g. \"why is 1.2 a blocker?\"")
-    rec = need(repo, number)
-    p = next((x for x in rec["passes"] if x["n"] == int(n or 0)), None)
-    run_ = (p or {}).get("run") or {}
-    if not run_.get("session_id"):
-        raise ReviewError("this review has no session to ask: it was imported, or run before LFG kept sessions")
     if not C.which("claude"):
         raise ReviewError("Claude Code (`claude`) is not on PATH")
+    rec = need(repo, number)
+    p = next((x for x in rec["passes"] if x["n"] == int(n or 0)), None)
+    if not p:
+        raise ReviewError("no review %s on %s" % (n, ref(repo, number)))
+    run_ = p.get("run") or {}
     q = _text(question, "question", 4000)
-    cp = subprocess.run(["claude", "-p", ASK % q, "--resume", run_["session_id"], "--output-format", "json",
-                         "--permission-mode", "dontAsk", "--allowedTools",
-                         ",".join(x for x in RUN_ALLOW if "review save" not in x),
-                         "--disallowedTools", ",".join(RUN_DENY)],
+    prompt = ASK % (_review_now(rec, p), q)
+    if run_.get("session_id"):
+        cmd = ["claude", "-p", prompt, "--resume", run_["session_id"], "--allowedTools",
+               ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
+    else:
+        cmd = ["claude", "-p", prompt, "--tools", ""]
+    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"],
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
     try:
@@ -991,9 +1085,53 @@ def ask(repo, number, n, question):
         text = ""
     if not text:
         raise ReviewError("Claude didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
-    p.setdefault("chat", []).append({"q": q, "a": text, "at": C.now_iso()})
+    shown, out = _reply_text(text)
+    changed = apply_changes(repo, number, p["n"], out) if out else []
+    rec = need(repo, number)  # read again: changes and the page may have saved meanwhile
+    p = next(x for x in rec["passes"] if x["n"] == int(n))
+    p.setdefault("chat", []).append({"q": q, "a": shown, "at": C.now_iso(), "changed": changed})
     store(rec)
-    return {"q": q, "a": text}
+    return {"q": q, "a": shown, "changed": changed}
+
+
+def answer(repo, number, n, qid, text):
+    """Your answer to a question the review couldn't settle: kept on the question, then sent to the review's
+    conversation, so Claude can change the review to match."""
+    if not str(text or "").strip():
+        raise ReviewError("write an answer")
+    rec = need(repo, number)
+    p = next((x for x in rec["passes"] if x["n"] == int(n or 0)), None)
+    qq = next((x for x in (p or {}).get("questions") or [] if x["id"] == qid), None)
+    if not qq:
+        raise ReviewError("no question %s on review %s" % (qid, n))
+    qq["answer"] = _text(text, "answer", 4000)
+    store(rec)
+    return ask(repo, number, n, "You asked: %s\nMy answer: %s" % (qq["ask"], qq["answer"]))
+
+
+def post_reply(repo, number, fid, body=None):
+    """Reply to the comment a finding came from (your own PR, when you pass on it): in its thread when it was inline,
+    else on the PR. The dashboard's button; agents can't reach it."""
+    rec = need(repo, number)
+    f = find(rec, fid)
+    rb = f.get("raised_by")
+    if not rb:
+        raise ReviewError("%s isn't someone else's comment" % fid)
+    text = _text(body if body is not None else f.get("reply"), "reply", 4000).strip()
+    if not text:
+        raise ReviewError("the reply is empty")
+    if rb.get("kind") == "inline" and rb.get("comment_id"):
+        out = gh_json(["api", "-X", "POST", "repos/%s/pulls/%d/comments/%d/replies" % (repo, number, rb["comment_id"]),
+                       "-f", "body=" + text])
+    else:
+        quoted = "@%s %s" % (rb["who"], text) if not rb.get("bot") else text
+        out = gh_json(["api", "-X", "POST", "repos/%s/issues/%d/comments" % (repo, number), "-f", "body=" + quoted])
+    rec = need(repo, number)
+    f = find(rec, fid)
+    f["reply"], f["replied"] = text, {"url": (out or {}).get("html_url") or "", "at": C.now_iso()}
+    store(rec)
+    C.audit("review_reply", {"pr": ref(repo, number), "finding": fid})
+    return f["replied"]
 
 
 def discuss(repo, number, fid, question):
@@ -1013,12 +1151,13 @@ def discuss(repo, number, fid, question):
     about = DISCUSS % (fid, f.get("title") or f.get("issue") or "", f.get("file") or "the PR as a whole",
                        f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", f.get("body") or "", said, q)
     if run_.get("session_id"):
-        cmd = ["claude", "-p", ASK % about, "--resume", run_["session_id"], "--allowedTools",
+        cmd = ["claude", "-p", ASK % (_review_now(rec, p), about), "--resume", run_["session_id"], "--allowedTools",
                ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
     else:
         snip = snippet(repo, number, fid)
         code = "\n".join("%s %s" % (r["new"] or r["old"] or "", r["text"]) for r in (snip or {}).get("rows") or [])
-        cmd = ["claude", "-p", ASK % (about + ("\n\nThe code:\n" + code if code else "")), "--tools", ""]
+        cmd = ["claude", "-p", ASK % (_review_now(rec, p), about + ("\n\nThe code:\n" + code if code else "")),
+               "--tools", ""]
     cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"],
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
@@ -1029,9 +1168,12 @@ def discuss(repo, number, fid, question):
     if not text:
         raise ReviewError("Claude didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
     rec = need(repo, number)  # read again: the answer took a while and the page may have saved meanwhile
-    find(rec, fid).setdefault("chat", []).append({"q": q, "a": text, "at": C.now_iso()})
+    shown, out = _reply_text(text)
+    changed = apply_changes(repo, number, p["n"], out) if out else []
+    rec = need(repo, number)
+    find(rec, fid).setdefault("chat", []).append({"q": q, "a": shown, "at": C.now_iso(), "changed": changed})
     store(rec)
-    return {"q": q, "a": text}
+    return {"q": q, "a": shown, "changed": changed}
 
 
 DISCUSS = ("This is about one finding, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\nThe comment drafted "

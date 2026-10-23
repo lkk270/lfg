@@ -2980,7 +2980,8 @@ function runningMsg(j) {
   const steps = j.steps || [], now = steps.slice(-1)[0] || "Starting";
   const done = steps.slice(0, -1).map(s => `<li>${dot("ok")}${esc(s)}</li>`).join("");
   const hint = UPDATE_STEP_HINT[now] ? ` <span class="muted">(${esc(UPDATE_STEP_HINT[now])})</span>` : "";
-  return `${dot("on")}<span><b>Updating LFG:</b> ${esc(now)}…${hint} <span class="muted small">started ${ago(j.started)}. You can leave this page; every tab shows this.</span></span>${done ? `<details class="more inline"><summary>${plural(steps.length - 1, "step")} done</summary><ul class="small">${done}</ul></details>` : ""}`;
+  const open = !!$("#update-banner details.inline[open]");  // the banner redraws every few seconds: stay open if you opened it
+  return `${dot("on")}<span><b>Updating LFG:</b> ${esc(now)}…${hint} <span class="muted small">started ${ago(j.started)}. You can leave this page; every tab shows this.</span></span>${done ? `<details class="more inline"${open ? " open" : ""}><summary>${plural(steps.length - 1, "step")} finished</summary><ul class="small">${done}</ul></details>` : ""}`;
 }
 /* Tabs tell each other when an update starts or ends, so none keeps offering an Update button meanwhile. */
 const updateTabs = "BroadcastChannel" in window ? new BroadcastChannel("lfg-update") : null;
