@@ -909,7 +909,10 @@ def notify(pr, title, body, ok=True):
     if time.time() - float(d.get("seen") or 0) > SEEN_FOR and C.which("osascript"):
         script = "display notification %s with title %s" % (json.dumps(str(body)[:200]),
                                                              json.dumps("LFG: " + title[:150]))
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        try:  # a notice is a courtesy: never let it break the review or fix that sent it
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
 
 def notices(since):

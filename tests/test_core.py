@@ -3032,7 +3032,8 @@ class ReviewTest(unittest.TestCase):
         self.saved(author="me")
         R.mark("o/r", 7, ["1.1"], status="keep")
         with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
-                mock.patch.object(R, "fix_checkout", side_effect=R.ReviewError("x has uncommitted changes")):
+                mock.patch.object(R, "fix_checkout", side_effect=R.ReviewError("x has uncommitted changes")), \
+                mock.patch("subprocess.run", side_effect=FileNotFoundError("osascript")):  # Linux: no notifier
             j = R.fix_run("o/r", 7)
         self.assertEqual((j["status"], j["why"]), ("failed", "x has uncommitted changes"))
         self.assertEqual(R.fix_job("o/r", 7)["status"], "failed")
