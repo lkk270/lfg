@@ -118,8 +118,8 @@ code { font-size: .86em; background: var(--code-bg); border-radius: 4px; padding
 .head .back { display: none; }  /* the breadcrumb does this */
 
 .section { margin-top: 38px; }
-.section > h2 { font-size: 17px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.section > h2 .sub { font-weight: 400; color: var(--muted); font-size: 13.5px; }
+.section > h2 { font-size: 17px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: baseline; gap: 10px; }
+.section > h2 .sub { font-weight: 400; color: var(--muted); font-size: 13.5px; flex: 1; min-width: 0; }  /* wraps beside the title, not under it */
 .section > h2 .sub a { color: var(--muted); }
 .muted { color: var(--muted); } .small { font-size: 13px; } .nowrap { white-space: nowrap; } .grow { flex: 1; min-width: 0; }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -210,6 +210,7 @@ a.now:hover { background: var(--soft-2); }
 .table-tools { padding: 8px 0 10px; display: flex; gap: 10px; align-items: center; }
 .box > .table-tools { border-bottom: 0; }
 .table-tools input { flex: 1; max-width: 300px; }
+.table-tools input[type="search"] { max-width: 340px; min-width: 260px; }
 .table-tools .count { color: var(--muted); font-size: 13px; white-space: nowrap; }
 /* a filter's name sits beside its dropdown, so every control in the row lines up with the search box */
 .table-tools { flex-wrap: wrap; }
@@ -457,7 +458,8 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 .sess-list > li.sess { display: flex; gap: 8px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 /* the name keeps room to read; the buttons go onto the next line when the row runs out of space */
 .sess-list > li.sess { flex-wrap: wrap; }
-.sess-list > li.sess > .grow { flex: 1 1 280px; }
+.sess-list > li.sess > .grow { flex: 1 1 320px; min-width: 0; }
+.sess-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; flex: 0 1 430px; }  /* the buttons wrap as one block */
 .sess-list > li.sess:last-child { border-bottom: 0; }
 .sess-list .title { font-weight: 500; }
 .sess-list .star { background: none; border: 0; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
@@ -833,3 +835,6 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .prior-item .prior-head { margin-bottom: 6px; gap: 8px; }
 .prior-item p.small { margin: 0 0 6px; color: var(--text-2); }
 .pr-finding { scroll-margin-top: 60px; }
+/* more review tabs than fit: fade the edge so it's clear there are more to scroll to */
+.tabs.pr-passes.more { mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+.view.stale { opacity: .75; transition: opacity .2s; pointer-events: none; }

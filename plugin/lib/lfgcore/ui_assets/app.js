@@ -1690,14 +1690,14 @@ PAGES.sessions = async () => {
   const line = s => `<li class="sess" data-sid="${esc(s.id)}"><button class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${unlocked ? "" : "disabled"} title="${s.starred ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away"}" aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div>
       <details class="more" data-sess-recent="${esc(s.id)}"><summary class="small">Recent messages</summary><div class="sess-recent small muted">Loading…</div></details></div>
-      <button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
+      <div class="sess-actions"><button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
       <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
       <button class="btn small" data-sess-remind="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once">Remind it of my style</button>
       <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
       ${s.folder ? `<span class="tag" title="${s.via_pr ? "Joined because it mentions a PR this group follows" : "Your group"}">${esc(s.folder)}${s.via_pr ? " · via PR" : ""} <a href="#" data-sess-ungroup='${esc(JSON.stringify([s.id, s.via_pr ? s.folder : ""]))}' title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
       <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Group sessions your own way, e.g. one feature across repos. Only LFG stores this; nothing on disk moves.">${s.folder ? "Change group" : "Group…"}</button>
       <button class="btn small" data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}' ${unlocked ? "" : "disabled"}>${s.hidden ? "Show again" : "Hide"}</button>
-      <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></li>`;
+      <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></div></li>`;
   const GP = d.group_prs || {};
   if (!q) for (const name of Object.keys(GP)) {
     if (!byRepo.has("Your groups")) byRepo.set("Your groups", new Map());
@@ -2183,7 +2183,7 @@ function ghTag(g) {
   if (!g || g.available === false) return "";
   if (g.state === "MERGED") return '<span class="tag ok">Merged</span>';
   if (g.state === "CLOSED") return '<span class="tag">Closed</span>';
-  const [t, tn] = GH_DECISION[g.decision] || ["No reviews yet", ""];
+  const [t, tn] = GH_DECISION[g.decision] || [(g.reviewers || []).length ? "Not approved yet" : "No reviews yet", ""];
   const mine = (g.reviewers || []).find(r => r.who === g.me);
   const fails = (g.checks || {}).FAILURE || 0;
   return `<span class="tag ${tn}">${esc(t)}</span>${mine ? ` <span class="tag">you: ${esc(({ APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" })[mine.state] || mine.state.toLowerCase())}</span>` : ""}${fails ? ` <span class="tag bad">${plural(fails, "check")} failing</span>` : ""}${g.draft ? ' <span class="tag">draft</span>' : ""}`;
@@ -2441,7 +2441,7 @@ function questionsBox(pr, p, unlocked) {
 /* The review's own conversation, beside it: ask, push back, or ask for changes, and the review changes to match. */
 function talkPane(pr, p, unlocked) {
   const chat = p.chat || [];
-  return `<aside class="pr-talk"><div class="pr-talk-h"><b>Talk it through</b><span class="muted small mono">${esc(pr)}</span></div>
+  return `<aside class="pr-talk"><div class="pr-talk-h"><b>Talk it through</b><span class="muted small mono" title="${esc(pr)}">#${esc(pr.split("#")[1])}</span></div>
     <div class="pr-thread">${chat.length ? chat.map(chatTurn).join("") : `<p class="muted small">Ask why something is rated the way it is, push back, or ask for a change: "drop 1.3, it's handled in the caller", "make 1.1 softer". The review changes to match.</p>`}</div>
     <div class="pr-talk-send"><textarea rows="2" data-pr-chat placeholder="Ask or push back" ${unlocked ? "" : "disabled"}></textarea><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Send</button></div></aside>`;
 }
@@ -2499,10 +2499,19 @@ async function prTicket(t) {
   }).join("");
   return `${head(`${t}${title ? ": " + title : ""}`, `The newest review of each of this ticket's ${plural(refs.length, "reviewed PR")}. Each PR is posted on its own.`, back)}${parts}`;
 }
+/* A PR page is about its own repo: when LFG knows a checkout of it, pick that repo top left too. */
+function followRepo(full) {
+  const short = full.split("/")[1], hit = (state.repos || []).filter(x => x.name === short);
+  if (hit.length !== 1 || hit[0].id === state.repo) return;
+  state.repo = hit[0].id; localStorage.setItem("lfg.repo", state.repo);
+  const sel = $("#repo"); if (sel) sel.value = state.repo;
+  loadBranches();
+}
 async function prDetail(arg) {
   const m = /^([\w.-]+\/[\w.-]+)\/(\d+)$/.exec(arg);
   if (!m) return unavailable({ why: "Not a PR address." });
   const pr = `${m[1]}#${m[2]}`;
+  followRepo(m[1]);
   const [d, unlocked] = await Promise.all([api("prreview", { pr }), isUnlocked()]);
   if (d.available === false) return unavailable(d);
   const rec = d.record, j = d.job;
@@ -2534,12 +2543,12 @@ async function prDetail(arg) {
   // a full review saved before LFG recorded the kind: no earlier findings followed up, and every finding is new
   const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
   const label = x => `Review ${x.n}${full(x) ? " · full review" : x.kind === "re-review" ? " · re-review" : ""}`;
-  const passTabs = `<div class="tabs pr-passes">${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
+  const passTabs = `<div class="tabs pr-passes" data-scroll-on>${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
   const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
   const passOf = Object.fromEntries(passes.flatMap(x => x.findings.map(f => [f.id, x.n])));
   const prior = (p.prior || []).length ? section("Earlier comments", p.prior.map(x => {
     const [t, tn] = PRIOR[x.state] || [x.state, ""], f = byId[x.id];
-    const from = passOf[x.id], head = `<div class="row prior-head">${dot(tn)}<b>${esc(t)}</b>${f && f.status === "drop" ? '<span class="tag">you dropped it</span>' : ""}<span class="grow"></span>${from && from !== p.n ? `<a href="#" class="small" data-pr-goto='${esc(JSON.stringify([pr, from, x.id]))}'>From review ${from} ↗</a>` : ""}${f ? copyBtns(earlierForPerson(x, f, pr, t), earlierForAgent(x, f, pr, t)) : ""}</div>${x.note ? `<p class="small">${txt(x.note)}</p>` : ""}`;
+    const from = passOf[x.id], head = `<div class="row prior-head">${dot(tn)}<b>${esc(t)}</b>${f && f.status === "drop" ? `<span class="tag" title="The review still sees it in the code; you decided not to act on it">${own ? "you passed on it" : "you dropped it"}</span>` : ""}<span class="grow"></span>${from && from !== p.n ? `<a href="#" class="small" data-pr-goto='${esc(JSON.stringify([pr, from, x.id]))}'>From review ${from} ↗</a>` : ""}${f ? copyBtns(earlierForPerson(x, f, pr, t), earlierForAgent(x, f, pr, t)) : ""}</div>${x.note ? `<p class="small">${txt(x.note)}</p>` : ""}`;
     return `<div class="prior-item">${head}${f ? prFinding(f, pr, unlocked, true, own) : ""}</div>`;
   }).join(""), "what happened to each earlier finding; decide, discuss or fix them here") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
@@ -2552,7 +2561,7 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-split"><div class="pr-pass-body">
-      <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null && !together.length ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
+      <div class="panel"><div class="row"><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null && !together.length ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
@@ -2925,6 +2934,7 @@ async function mapStatus() {
   } catch (e) { el.innerHTML = ""; }
 }
 let renderSeq = 0, lastHtml = "", lastHash = "";
+const pageCache = {};  // each page as last drawn, shown at once when you come back to it
 /* A refresh redraws the page from scratch. What you did to it (opened, shown, typed, focused, scrolled) is noted
    first, by a key that survives the redraw, and put back after, so a page that updates itself never undoes you. */
 const KEEP_SHOWN = ".pr-discuss, .pr-edit, [data-pr-body], [data-pr-discuss], [data-pr-editbox]";
@@ -2979,14 +2989,23 @@ async function route(opts) {
   const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
   view.classList.toggle("wide", (key === "review" || key === "prs") && !!arg);  // the review screens are two panes: use the width
   const snap = soft ? uiSnapshot(view) : null;
-  if (!soft) view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
+  const seen = !soft && pageCache[location.hash];
+  if (seen) { view.innerHTML = seen; view.classList.add("stale"); }  // last time's page, at once; updated below
+  else if (!soft) view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
   let html;
   try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); }
   if (seq !== renderSeq) return;
   if (soft && html === lastHtml && location.hash === lastHash) return applyGoto(view);  // nothing changed: leave the page alone
   lastHtml = html; lastHash = location.hash;
+  pageCache[location.hash] = html;
+  view.classList.remove("stale");
   view.innerHTML = html;
   mountTables(view); mountTabs(view); wire(view);
+  $$("[data-scroll-on]", view).forEach(el => {
+    el.classList.toggle("more", el.scrollWidth > el.clientWidth);
+    const on = $(".tab.on", el);  // scroll only if the chosen tab is out of view
+    if (on) { const r = on.getBoundingClientRect(), b = el.getBoundingClientRect(); if (r.left < b.left || r.right > b.right - 40) el.scrollLeft += r.left - b.left - 8; }
+  });
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
   if (key === "prs") wirePrs(view);
