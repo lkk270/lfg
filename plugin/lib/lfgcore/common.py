@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 
 AUTHOR = "Varun Singh"
 
@@ -98,12 +99,18 @@ def read_text(path, default=""):
 
 def write_json(path, data, mode=0o600):
     ensure_dir(os.path.dirname(path))
-    tmp = path + ".tmp"
+    # a temp file of its own: the dashboard serves requests on threads, and two may save the same file at once
+    tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, indent=2, sort_keys=False)
-        f.write("\n")
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=False)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def write_text(path, text, mode=0o600):

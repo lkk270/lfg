@@ -554,9 +554,18 @@ function decorateRules(root) {
     t.replaceWith(frag);
   }
 }
+/* A status dot in running text needs a space after it; in a flex or grid row the row's gap already spaces it. */
+function spaceDots(node) {
+  if (!node || node.nodeType !== 1) return;
+  [...(node.matches(".dot") ? [node] : []), ...node.querySelectorAll(".dot")].forEach(d => {
+    const parent = d.parentElement;
+    d.classList.toggle("in-text", !!parent && !/flex|grid/.test(getComputedStyle(parent).display));
+  });
+}
 function mountRuleTips() {
-  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(decorateRules))).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { decorateRules(n); spaceDots(n); }))).observe(document.body, { childList: true, subtree: true });
   decorateRules(document.body);
+  spaceDots(document.body);
   const tip = document.createElement("div");
   tip.id = "tip"; tip.hidden = true; document.body.append(tip);
   document.addEventListener("mouseover", e => {
@@ -2137,6 +2146,7 @@ function ghPanel(g) {
   return `<div class="pr-status small"><div class="tags">${ghTag(g)}</div><div class="muted">${(g.reviewers || []).map(r => `${esc(r.who)} ${esc(word[r.state] || r.state.toLowerCase())} ${ago(r.at)}`).join(" · ") || "nobody has reviewed yet"}${(g.waiting_on || []).length ? ` · waiting on ${esc(g.waiting_on.join(", "))}` : ""}${checks ? ` · checks: ${esc(checks)}` : ""}</div></div>`;
 }
 PAGES.prs = async arg => {
+  if (arg && arg.startsWith("ticket/")) return prTicket(decodeURIComponent(arg.slice(7)));
   if (arg) return prDetail(arg);
   const [d, unlocked] = await Promise.all([api("prreviews", scopeArgs("prs")), isUnlocked()]);
   state.prMethod = d.method;
@@ -2210,7 +2220,7 @@ function ticketSection(d, unlocked) {
     seen.add(prRef(x));
     (by.get(x.ticket) || by.set(x.ticket, []).get(x.ticket)).push(x);
   }
-  const groups = [...by].sort((a, b) => b[1].length - a[1].length || b[0].localeCompare(a[0])).map(([t, prs]) => `<details class="item" ${prs.length > 1 ? "open" : ""}><summary><span class="grow"><b class="mono">${esc(t)}</b> ${esc((state.ticketTitles || {})[t] || "")} <span class="muted small">${plural(prs.length, "open PR")}</span></span></summary>
+  const groups = [...by].sort((a, b) => b[1].length - a[1].length || b[0].localeCompare(a[0])).map(([t, prs]) => `<details class="item" ${prs.length > 1 ? "open" : ""}><summary><span class="grow"><b class="mono">${esc(t)}</b> ${esc((state.ticketTitles || {})[t] || "")} <span class="muted small">${plural(prs.length, "open PR")}</span></span>${prs.some(x => x.passes) ? `<a class="small" href="#prs/ticket/${encodeURIComponent(t)}" title="Every review of this ticket's PRs on one page">Open reviews</a>` : ""}</summary>
     <ul class="list">${prs.map(x => `<li><input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} aria-label="Pick ${esc(prRef(x))}"><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.passes ? ` · ${plural(x.passes, "review")}` : ""}</div>${x.job ? `<div class="meta">${jobLine(x.job)}</div>` : ""}</div><a class="small" href="${esc(prHash(x))}">Open</a></li>`).join("")}</ul>
     <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button><button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div></details>`).join("");
   return section("By Linear ticket", `${groups ? `<div class="box">${groups}</div>` : ""}
@@ -2310,6 +2320,30 @@ function prFinding(f, pr, unlocked, live) {
       <textarea class="editor small">${esc(f.body)}</textarea>
       <div class="set-actions"><button class="btn small primary" data-pr-editsave='${esc(JSON.stringify([pr, f.id]))}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>
     <div class="row mt">${posted || `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}</div></div>`;
+}
+/* Every reviewed PR on one Linear ticket, on one page: each with its newest review, score and post box. */
+async function prTicket(t) {
+  const [d, unlocked] = await Promise.all([api("prreviews", { all: "1" }), isUnlocked()]);
+  crumbs("prs", t);
+  const back = '<a class="back" href="#prs">← All reviews</a>';
+  const seen = new Set();
+  const refs = [...(d.reviews || []), ...(d.mine || []), ...(d.queue || []), ...(d.ticket_more || [])]
+    .filter(x => x.ticket === t && x.passes && !seen.has(prRef(x)) && seen.add(prRef(x))).map(prRef);
+  const title = (d.ticket_titles || {})[t] || "";
+  if (!refs.length) return `${head(t, esc(title || "No reviews yet."), back)}${empty("No reviews yet", "None of this ticket's PRs has been reviewed. Review them from the PR reviews page.")}`;
+  const all = await Promise.all(refs.map(pr => api("prreview", { pr }).then(x => [pr, x])));
+  const parts = all.map(([pr, x]) => {
+    const rec = x.record, p = rec && rec.passes[rec.passes.length - 1];
+    if (!p) return "";
+    const live = !p.posted, me = x.gh && x.gh.me, own = !!(rec.author && me && rec.author === me);
+    const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
+    const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
+    const link = `<a class="mono" href="#prs/${esc(pr.replace("#", "/"))}">${esc(pr)}</a>`;
+    return section(`Findings on ${pr}`, `<p class="muted small">${esc(rec.title || "")} · by ${esc(rec.author || "")} · ${link}${rec.passes.length > 1 ? `, review ${p.n} of ${rec.passes.length}` : ""} · ${ago(p.ts)}</p>${ghPanel(x.gh)}${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
+      ${fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
+      ${postBar(pr, p, live, own, unlocked)}`, prTally(p));
+  }).join("");
+  return `${head(`${t}${title ? ": " + title : ""}`, `The newest review of each of this ticket's ${plural(refs.length, "reviewed PR")}. Each PR is posted on its own.`, back)}${parts}`;
 }
 async function prDetail(arg) {
   const m = /^([\w.-]+\/[\w.-]+)\/(\d+)$/.exec(arg);
@@ -2518,13 +2552,16 @@ function wirePrs(root) {
     if (!d.ok) { b.disabled = false; b.title = d.why || ""; alertMsg(b, d); return; }
     softRoute();
   });
+  // finding ids repeat across PRs on one page (1.1 on each), so look inside the finding's own card
   $$("[data-pr-edit]", root).forEach(b => b.onclick = () => {
-    $(`[data-pr-editbox="${b.dataset.prEdit}"]`, root).hidden = false;
-    $(`[data-pr-body="${b.dataset.prEdit}"]`, root).hidden = true;
+    const card = b.closest(".pr-finding");
+    $(`[data-pr-editbox="${b.dataset.prEdit}"]`, card).hidden = false;
+    $(`[data-pr-body="${b.dataset.prEdit}"]`, card).hidden = true;
   });
   $$("[data-pr-editcancel]", root).forEach(b => b.onclick = () => {
-    $(`[data-pr-editbox="${b.dataset.prEditcancel}"]`, root).hidden = true;
-    $(`[data-pr-body="${b.dataset.prEditcancel}"]`, root).hidden = false;
+    const card = b.closest(".pr-finding");
+    $(`[data-pr-editbox="${b.dataset.prEditcancel}"]`, card).hidden = true;
+    $(`[data-pr-body="${b.dataset.prEditcancel}"]`, card).hidden = false;
   });
   $$("[data-pr-importpath]", root).forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
   $$("[data-pr-pass]", root).forEach(b => b.onclick = () => { const [pr, n] = JSON.parse(b.dataset.prPass); sessionStorage.setItem("lfg.prpass." + pr, n); softRoute(); });
@@ -2557,7 +2594,7 @@ function wirePrs(root) {
     const text = $("textarea", box).value;
     const d = await save("review_mark", { pr, ids: [id], body: text });
     if (!d.ok) return saidMsg($(".save-msg", box), d);
-    const shown = $(`[data-pr-body="${id}"]`, root);
+    const shown = $(`[data-pr-body="${id}"]`, b.closest(".pr-finding"));
     shown.innerHTML = md(text);
     shown.hidden = false;
     box.hidden = true;
