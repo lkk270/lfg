@@ -705,9 +705,14 @@ def _restart():
                               str(Handler.port), "--no-open"])
 
 
-def open_editor(port):
-    """Open the dashboard with the edit key in the URL fragment (never sent to a server, never printed)."""
-    return webbrowser.open("http://127.0.0.1:%d/#unlock=%s" % (port, S.edit_key()))
+def open_editor(port, browser=None):
+    """Open the dashboard with the edit key in the URL fragment (never sent to a server, never printed). browser: a
+    macOS app name ("Google Chrome", "Microsoft Edge") to unlock that one instead of the default browser."""
+    url = "http://127.0.0.1:%d/#unlock=%s" % (port, S.edit_key())
+    if not browser:
+        return webbrowser.open(url)
+    import subprocess
+    return subprocess.run(["open", "-a", browser, url], capture_output=True, timeout=20).returncode == 0
 
 
 def _state_path():

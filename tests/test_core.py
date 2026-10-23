@@ -87,6 +87,22 @@ class GuardTest(unittest.TestCase):
         self.assertIsNone(bash("docker rm -f lfg-shipcheck-abc"))
 
 
+class UnlockTest(unittest.TestCase):
+    def test_unlock_opens_the_named_browser_with_the_key_and_never_prints_it(self):
+        from lfgcore import ui as U
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                mock.patch.object(U.S, "edit_key", return_value="k3y"), mock.patch("sys.stdout", io.StringIO()) as out:
+            self.assertTrue(U.open_editor(7777, "Google Chrome"))
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[:3], ["open", "-a", "Google Chrome"])
+        self.assertEqual(cmd[3], "http://127.0.0.1:7777/#unlock=k3y")
+        self.assertNotIn("k3y", out.getvalue())
+        with mock.patch.object(U.webbrowser, "open", return_value=True) as wb, \
+                mock.patch.object(U.S, "edit_key", return_value="k3y"):
+            U.open_editor(7777)
+        wb.assert_called_once()  # no --browser: the default one, as before
+
+
 class CommonTest(unittest.TestCase):
     def test_two_writes_of_one_file_at_once_both_land(self):
         """The dashboard serves each request on its own thread, so two pages can save the same file together."""
