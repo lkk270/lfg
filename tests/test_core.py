@@ -3078,6 +3078,29 @@ class ReviewTest(unittest.TestCase):
             R.answer("o/r", 7, 1, "q1", "no")
         self.assertEqual(R.load("o/r", 7)["passes"][0]["chat"][-1]["qid"], "q1")
 
+    def test_is_it_fixed_checks_one_finding_against_the_new_commits(self):
+        self.saved()
+        p = R.load("o/r", 7)["passes"][0]
+        with mock.patch.object(R, "gh_status", return_value={"head_sha": p["head_sha"]}):
+            self.assertEqual(R.check_fixed("o/r", 7, "1.1")["state"], "not")  # nothing new: no need to ask Claude
+        asked = []
+
+        def run(cmd, input=None, **kw):
+            asked.append(input)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": '```json\n{"state": "fixed", "why": '
+                                                                            '"line 3 now checks for empty"}\n```'}), "")
+        compare = {"files": [{"filename": "app.py", "patch": "@@ -3 +3 @@\n-x\n+if not s: return"}]}
+        now = subprocess.CompletedProcess([], 0, "a\nb\nif not s: return\n")
+        with mock.patch.object(R, "gh_status", return_value={"head_sha": "b" * 40}), \
+                mock.patch.object(R, "gh_json", return_value=compare), mock.patch.object(R, "_gh", return_value=now), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=run):
+            out = R.check_fixed("o/r", 7, "1.1")
+        self.assertEqual((out["state"], out["why"]), ("fixed", "line 3 now checks for empty"))
+        self.assertIn("+if not s: return", asked[0])
+        self.assertIn("3 if not s: return", asked[0])  # the file now, with line numbers
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["findings"][0]["check"]["state"], "fixed")
+
     def test_a_pr_that_isnt_ready_never_scores_like_one_that_is(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "score": 100, "verdict": "almost", "findings": []})

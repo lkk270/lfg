@@ -2625,10 +2625,14 @@ function prFinding(f, pr, unlocked, live, own) {
       <div class="pr-compose slim"><textarea data-grow rows="1" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"></textarea><button class="btn small" data-pr-askgo='${ref}'>Ask Claude</button></div>
       <textarea class="editor small">${esc(f.body)}</textarea>
       <div class="set-actions"><button class="btn small primary" data-pr-editsave='${ref}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>`}
+    ${f.check ? checkLine(f.check) : ""}
     ${f.raised_by && own && f.status === "drop" ? replyBox(f, pr, unlocked) : ""}
     ${chat.length ? `<button class="pr-discussed" data-pr-discuss='${ref}' title="Open this conversation in the chat"><span class="pr-discussed-n">${plural(chat.length, "message")}</span><span class="pr-discussed-last">${esc(chat[chat.length - 1].a.replace(/```[\s\S]*?```/g, "").replace(/[*_`#>]/g, "").trim().slice(0, 140))}</span><span class="pr-discussed-go">Open ↗</span></button>` : ""}
-    <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss='${ref}' title="Talk this finding through with Claude: push back, ask why, or say it isn't needed">Discuss</button><span class="grow"></span>${copyBtns(findingForPerson(f, pr), findingForAgent(f, pr))}</div></div>`;
+    <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss='${ref}' title="Talk this finding through with Claude: push back, ask why, or say it isn't needed">Discuss</button>${f.status !== "drop" && !(f.fixed || {}).commit ? `<button class="btn small" data-pr-check='${ref}' ${unlocked ? "" : "disabled"} title="Look at the commits since this review and say whether this one finding is fixed, without a whole re-review">${f.check ? "Check again" : "Is it fixed?"}</button>` : ""}<span class="grow"></span>${copyBtns(findingForPerson(f, pr), findingForAgent(f, pr))}</div></div>`;
 }
+/* The last "Is it fixed?" answer for a finding. */
+const CHECKED = { fixed: ["Fixed", "ok"], partly: ["Partly fixed", "warn"], not: ["Not fixed yet", "bad"] };
+const checkLine = c => `<div class="pr-check ${CHECKED[c.state][1]}">${dot(CHECKED[c.state][1])}<b>${CHECKED[c.state][0]}</b><span class="grow">${txt(c.why)}</span><span class="muted small nowrap" title="Checked at commit ${esc((c.head || "").slice(0, 8))}">${ago(c.at)}</span></div>`;
 const WORTH = { fix: ["Worth fixing", "warn"], maybe: ["Maybe worth it", ""], skip: ["Not worth fixing", "ok"] };
 /* One turn of a conversation with Claude, and what it changed in the review. */
 const chatTurn = (x, pr) => {
@@ -3177,6 +3181,15 @@ function wirePrs(root) {
     (state.chatAbout || (state.chatAbout = {}))[pr] = id;
     if (chatMode() === "hidden") localStorage.setItem("lfg.chat", "side");  // a Discuss opens the chat
     softRoute().then(() => { const t = $("[data-pr-chat]"); if (t) t.focus(); });
+  });
+  $$("[data-pr-check]", root).forEach(b => b.onclick = async () => {
+    const [pr, id] = JSON.parse(b.dataset.prCheck), card = b.closest(".pr-finding");
+    b.disabled = true; b.innerHTML = '<span class="loading-inline">Checking the new commits…</span>';
+    $(".pr-check", card)?.remove();
+    const d = await save("review_check", { pr, id });
+    if (!d.ok) { b.disabled = false; b.textContent = "Is it fixed?"; return alertMsg(b, d); }
+    b.closest(".row").insertAdjacentHTML("beforebegin", checkLine(d));
+    b.disabled = false; b.textContent = "Check again";
   });
   $$("[data-pr-fix]", root).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
