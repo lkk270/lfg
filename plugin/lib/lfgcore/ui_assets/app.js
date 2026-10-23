@@ -2389,7 +2389,8 @@ function prFinding(f, pr, unlocked, live, own) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
   const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("")
     + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("")
-    + ((f.fixed || {}).commit ? `<span class="tag ok">Fixed in ${esc(f.fixed.commit.slice(0, 8))}</span>` : "");
+    + ((f.fixed || {}).commit ? `<span class="tag ok">Fixed in ${esc(f.fixed.commit.slice(0, 8))}</span>` : "")
+    + (f.raised_by ? `<a class="tag" ${f.raised_by.url ? `href="${esc(f.raised_by.url)}" target="_blank" rel="noopener noreferrer"` : ""}>From ${f.raised_by.bot ? "" : "@"}${esc(f.raised_by.who)}${f.raised_by.url ? " ↗" : ""}</a>${WORTH[f.worth] ? `<span class="tag ${WORTH[f.worth][1]}">${WORTH[f.worth][0]}</span>` : ""}` : "");
   const posted = f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">Posted ↗</a>` : "";
   const can = unlocked && live && !f.comment_id && !(f.fixed || {}).commit;
   const btn = (status, text) => `<button class="btn small${f.status === status ? " primary" : ""}" data-pr-mark='${esc(JSON.stringify([pr, f.id, status]))}' ${can ? "" : "disabled"}>${text}</button>`;
@@ -2407,9 +2408,36 @@ function prFinding(f, pr, unlocked, live, own) {
       <div class="row"><input type="text" class="grow" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"><button class="btn small" data-pr-askgo='${ref}'>Ask Claude</button></div>
       <textarea class="editor small">${esc(f.body)}</textarea>
       <div class="set-actions"><button class="btn small primary" data-pr-editsave='${ref}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>`}
-    <div class="pr-discuss" ${chat.length ? "" : "hidden"}><div class="k">Discussion</div><div class="pr-thread">${chat.map(x => `<div class="pr-q"><b>You:</b> ${txt(x.q)}</div><div class="pr-a md">${md(x.a)}</div>`).join("")}</div>
+    ${f.raised_by && own && f.status === "drop" ? replyBox(f, pr, unlocked) : ""}
+    <div class="pr-discuss" ${chat.length ? "" : "hidden"}><div class="k">Discussion</div><div class="pr-thread">${chat.map(chatTurn).join("")}</div>
       <div class="row"><input type="text" class="grow" data-pr-discussq placeholder="e.g. is this reachable? would the other fix be simpler?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-discussgo='${ref}' ${unlocked ? "" : "disabled"}>Send</button></div></div>
     <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss ${chat.length ? "hidden" : ""}>Discuss</button></div></div>`;
+}
+const WORTH = { fix: ["Worth fixing", "warn"], maybe: ["Maybe worth it", ""], skip: ["Not worth fixing", "ok"] };
+/* One turn of a conversation with Claude, and what it changed in the review. */
+const chatTurn = x => `<div class="pr-q"><b>You:</b> ${txt(x.q)}</div><div class="pr-a md">${md(x.a)}</div>${(x.changed || []).length ? `<div class="pr-changed small">${dot("ok")}Changed ${esc(x.changed.join("; "))}</div>` : ""}`;
+/* Passing on someone else's comment on your PR: the reply Claude drafted, to edit and post in their thread. */
+function replyBox(f, pr, unlocked) {
+  const who = `${f.raised_by.bot ? "" : "@"}${f.raised_by.who}`;
+  if (f.replied) return `<div class="pr-reply"><div class="k">Your reply to ${esc(who)}</div><div class="pr-body md">${md(f.reply)}</div>${f.replied.url ? `<a class="small" href="${esc(f.replied.url)}" target="_blank" rel="noopener noreferrer">Posted ${ago(f.replied.at)} ↗</a>` : ""}</div>`;
+  return `<div class="pr-reply"><div class="k">Reply to ${esc(who)} (optional)</div><textarea class="editor small" data-pr-replytext>${esc(f.reply || "")}</textarea>
+    <div class="set-actions"><button class="btn small" data-pr-reply='${esc(JSON.stringify([pr, f.id]))}' ${unlocked ? "" : "disabled"}>Post reply on GitHub</button><span class="save-msg"></span></div></div>`;
+}
+/* Questions the review couldn't settle from the code: your answer goes to its conversation, which can change it. */
+function questionsBox(pr, p, unlocked) {
+  const qs = p.questions || [];
+  if (!qs.length) return "";
+  const open = qs.filter(q => !q.answer).length;
+  return `<div class="panel pr-questions"><div class="k" style="margin-top:0">${open ? `${plural(open, "question")} for you` : "Questions, answered"}</div>${qs.map(q => `<div class="pr-question"><div>${txt(q.ask)}${q.why ? `<div class="muted small">${txt(q.why)}</div>` : ""}</div>${q.answer
+    ? `<div class="pr-a"><b>You:</b> ${txt(q.answer)}</div>`
+    : `<div class="row"><input type="text" class="grow" data-pr-answer placeholder="Your answer" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-answergo='${esc(JSON.stringify([pr, p.n, q.id]))}' ${unlocked ? "" : "disabled"}>Answer</button></div>`}</div>`).join("")}</div>`;
+}
+/* The review's own conversation, beside it: ask, push back, or ask for changes, and the review changes to match. */
+function talkPane(pr, p, unlocked) {
+  const chat = p.chat || [];
+  return `<aside class="pr-talk"><div class="pr-talk-h"><b>Talk it through</b><span class="muted small mono">${esc(pr)}</span></div>
+    <div class="pr-thread">${chat.length ? chat.map(chatTurn).join("") : `<p class="muted small">Ask why something is rated the way it is, push back, or ask for a change: "drop 1.3, it's handled in the caller", "make 1.1 softer". The review changes to match.</p>`}</div>
+    <div class="pr-talk-send"><textarea rows="2" data-pr-chat placeholder="Ask or push back" ${unlocked ? "" : "disabled"}></textarea><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Send</button></div></aside>`;
 }
 /* The code a finding points at, like GitHub shows it: file name on top, old and new line numbers, added and removed lines. */
 function snipHtml(sn) {
@@ -2434,9 +2462,10 @@ async function prTicket(t) {
     const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
     const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
     const link = `<a class="mono" href="#prs/${esc(pr.replace("#", "/"))}">${esc(pr)}</a>`;
-    return section(`Findings on ${pr}`, `<p class="muted small">${esc(rec.title || "")} · by ${esc(rec.author || "")} · ${link}${rec.passes.length > 1 ? `, review ${p.n} of ${rec.passes.length}` : ""} · ${ago(p.ts)}</p>${ghPanel(x.gh)}${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
+    return section(`Findings on ${pr}`, `<div class="pr-split"><div class="pr-pass-body"><p class="muted small">${esc(rec.title || "")} · by ${esc(rec.author || "")} · ${link}${rec.passes.length > 1 ? `, review ${p.n} of ${rec.passes.length}` : ""} · ${ago(p.ts)}</p>${ghPanel(x.gh)}${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
+      ${questionsBox(pr, p, unlocked)}
       ${fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
-      ${postBar(pr, p, live, own, unlocked, x.fix_job)}`, prTally(p, own));
+      ${postBar(pr, p, live, own, unlocked, x.fix_job)}</div>${talkPane(pr, p, unlocked)}</div>`, prTally(p, own));
   }).join("");
   return `${head(`${t}${title ? ": " + title : ""}`, `The newest review of each of this ticket's ${plural(refs.length, "reviewed PR")}. Each PR is posted on its own.`, back)}${parts}`;
 }
@@ -2487,20 +2516,19 @@ async function prDetail(arg) {
     ${jobBox}
     ${actions}
     ${passTabs}
-    <div class="pr-pass-body">
+    <div class="pr-split"><div class="pr-pass-body">
       <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null && !together.length ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
-        ${p.run.session_id ? `<div class="pr-chat mt"><div class="k">Ask the session that did this review</div>${(p.chat || []).map(x => `<div class="pr-q"><b>You:</b> ${txt(x.q)}</div><div class="pr-a">${txt(x.a)}</div>`).join("")}
-          <div class="row"><input type="text" class="grow" data-pr-chat placeholder="e.g. why is 1.2 a blocker? did you check the caller in billing.py?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Ask</button></div></div>` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
+      ${questionsBox(pr, p, unlocked)}
       ${prior}
       ${together.length ? `<div class="callout">This review covered ${plural(together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Each PR has its own findings, score and post box below.</div>` : ""}
       ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked, d.fix_job) : ""), prTally(p, own))}
       ${together.length ? "" : postBar(pr, p, live, own, unlocked, d.fix_job)}
       ${together.map(t => togetherSection(t, unlocked, d.gh && d.gh.me)).join("")}
-    </div>
+    </div>${talkPane(pr, p, unlocked)}</div>
     ${sess}`;
 }
 /* One review pass as Markdown for an agent: what the PR is, the summary, approach notes, and every finding with
@@ -2613,23 +2641,44 @@ function wirePrs(root) {
   $$("[data-pr-linkpr]", root).forEach(b => b.onclick = () => prLinkPr(b.dataset.prLinkpr));
   $$("[data-pr-linksess]", root).forEach(b => b.onclick = () => prLinkSession(b.dataset.prLinksess));
   $$("[data-pr-chatgo]", root).forEach(b => {
-    const [pr, n] = JSON.parse(b.dataset.prChatgo), input = $("[data-pr-chat]", b.closest(".pr-chat"));
+    const [pr, n] = JSON.parse(b.dataset.prChatgo), input = $("[data-pr-chat]", b.closest(".pr-talk"));
     const go = async () => {
       if (!input.value.trim()) return input.focus();
-      b.disabled = input.disabled = true; b.textContent = "Asking…";
+      b.disabled = input.disabled = true; b.textContent = "Thinking…";
       const d = await save("review_ask", { pr, pass: n, question: input.value });
-      b.disabled = input.disabled = false; b.textContent = "Ask";
+      b.disabled = input.disabled = false; b.textContent = "Send";
       if (!d.ok) return alertMsg(b, d);
+      softRoute();
+    };
+    b.onclick = go;
+    input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } };
+  });
+  $$("[data-pr-answergo]", root).forEach(b => {
+    const [pr, n, id] = JSON.parse(b.dataset.prAnswergo), input = $("[data-pr-answer]", b.closest(".pr-question"));
+    const go = async () => {
+      if (!input.value.trim()) return input.focus();
+      b.disabled = input.disabled = true; b.textContent = "Sending…";
+      const d = await save("review_answer", { pr, pass: n, id, answer: input.value });
+      if (!d.ok) { b.disabled = input.disabled = false; b.textContent = "Answer"; return alertMsg(b, d); }
       softRoute();
     };
     b.onclick = go;
     input.onkeydown = e => { if (e.key === "Enter") go(); };
   });
+  $$("[data-pr-reply]", root).forEach(b => b.onclick = async () => {
+    const [pr, id] = JSON.parse(b.dataset.prReply), box = b.closest(".pr-reply");
+    b.disabled = true; b.textContent = "Posting…";
+    const d = await save("review_reply", { pr, id, body: $("[data-pr-replytext]", box).value });
+    if (!d.ok) { b.disabled = false; b.textContent = "Post reply on GitHub"; return saidMsg($(".save-msg", box), d); }
+    softRoute();
+  });
   $$("[data-pr-activity]", root).forEach(det => det.ontoggle = async () => {
     if (!det.open || det.dataset.loaded) return;
     det.dataset.loaded = "1";
-    const [pr, n] = JSON.parse(det.dataset.prActivity), box = det.querySelector("div");
-    const d = await api("prreviewlog", { pr, n });
+    const [pr, n] = JSON.parse(det.dataset.prActivity), box = det.querySelector("div"), key = det.dataset.prActivity;
+    const cache = state.activity || (state.activity = {});
+    const d = cache[key] || await api("prreviewlog", { pr, n });
+    cache[key] = d;  // a saved review's log never changes
     const steps = d.steps || [];
     box.className = "pr-activity small";
     box.innerHTML = steps.length ? `<ol>${steps.map(x => x.kind === "said" ? `<li class="said">${txt(x.text)}</li>` : `<li><span class="tag">${esc(x.tool)}</span> <span class="mono">${esc(x.text)}</span></li>`).join("")}</ol>` : '<p class="muted">Its log is gone, so there is nothing to show.</p>';
@@ -2652,8 +2701,10 @@ function wirePrs(root) {
   });
   // finding ids repeat across PRs on one page (1.1 on each), so look inside the finding's own card
   $$("[data-pr-snip]", root).forEach(async el => {
-    const [pr, id] = JSON.parse(el.dataset.prSnip);
+    const [pr, id] = JSON.parse(el.dataset.prSnip), cache = state.snips || (state.snips = {});
+    if (cache[el.dataset.prSnip]) return (el.innerHTML = snipHtml(cache[el.dataset.prSnip]));
     const d = await api("prsnippet", { pr, id }).catch(() => ({}));
+    if (d.snippet) cache[el.dataset.prSnip] = d.snippet;
     if (d.snippet) el.innerHTML = snipHtml(d.snippet);
     else $(".pad", el).textContent = "Couldn't get this code from GitHub.";
   });
@@ -2669,7 +2720,8 @@ function wirePrs(root) {
       const d = await save("review_discuss", { pr, id, question: input.value });
       b.disabled = false; b.textContent = "Send";
       if (!d.ok) return alertMsg(b, d);
-      $(".pr-thread", box).insertAdjacentHTML("beforeend", `<div class="pr-q"><b>You:</b> ${txt(d.q)}</div><div class="pr-a md">${md(d.a)}</div>`);
+      if ((d.changed || []).length) return softRoute();  // the finding itself changed: show it
+      $(".pr-thread", box).insertAdjacentHTML("beforeend", chatTurn(d));
       input.value = "";
     };
     b.onclick = go;
@@ -2830,7 +2882,46 @@ async function mapStatus() {
     }
   } catch (e) { el.innerHTML = ""; }
 }
-let renderSeq = 0;
+let renderSeq = 0, lastHtml = "", lastHash = "";
+/* A refresh redraws the page from scratch. What you did to it (opened, shown, typed, focused, scrolled) is noted
+   first, by a key that survives the redraw, and put back after, so a page that updates itself never undoes you. */
+const KEEP_SHOWN = ".pr-discuss, .pr-edit, [data-pr-body], [data-pr-discuss], [data-pr-editbox]";
+function uiKey(el, view) {
+  const part = e => {
+    if (e.id) return "#" + e.id;
+    const a = [...e.attributes].find(x => x.name.startsWith("data-") && x.name !== "data-loaded");
+    if (a) return `[${a.name}=${a.value}]`;
+    if (e.tagName === "DETAILS") { const sm = e.querySelector(":scope > summary"); return "details:" + (sm ? sm.textContent.trim().slice(0, 60) : ""); }
+    return "";
+  };
+  const path = [];
+  for (let e = el; e && e !== view; e = e.parentElement) { const k = part(e); if (k) path.unshift(k); if (e.id) break; }
+  return (el.className && typeof el.className === "string" ? el.className.split(" ")[0] : el.tagName) + "|" + path.join(">");
+}
+function keyed(view, sel) {
+  const seen = {}, out = [];
+  $$(sel, view).forEach(el => { const k = uiKey(el, view); seen[k] = (seen[k] || 0) + 1; out.push([k + "#" + seen[k], el]); });
+  return out;
+}
+function uiSnapshot(view) {
+  const a = document.activeElement, keys = new Map(keyed(view, "input, textarea, select").map(([k, el]) => [el, k]));
+  return {
+    open: new Map(keyed(view, "details").map(([k, d]) => [k, d.open])),
+    shown: new Map(keyed(view, KEEP_SHOWN).map(([k, el]) => [k, el.hidden])),
+    typed: new Map(keyed(view, "input, textarea").filter(([, el]) => el.type !== "checkbox" && el.type !== "radio" && el.value !== el.defaultValue).map(([k, el]) => [k, el.value])),
+    scroll: new Map(keyed(view, ".pr-thread, .pr-activity ol, .pr-steps, .scroll").filter(([, el]) => el.scrollTop).map(([k, el]) => [k, el.scrollTop])),
+    focus: a && keys.has(a) ? { key: keys.get(a), start: a.selectionStart, end: a.selectionEnd } : null,
+  };
+}
+function uiRestore(view, snap) {
+  keyed(view, "details").forEach(([k, d]) => { if (snap.open.has(k) && d.open !== snap.open.get(k)) d.open = snap.open.get(k); });
+  keyed(view, KEEP_SHOWN).forEach(([k, el]) => { if (snap.shown.has(k)) el.hidden = snap.shown.get(k); });
+  keyed(view, "input, textarea").forEach(([k, el]) => {
+    if (snap.typed.has(k)) el.value = snap.typed.get(k);
+    if (snap.focus && snap.focus.key === k) { el.focus({ preventScroll: true }); try { el.setSelectionRange(snap.focus.start, snap.focus.end); } catch (e) { /* not a text field */ } }
+  });
+  keyed(view, ".pr-thread, .pr-activity ol, .pr-steps, .scroll").forEach(([k, el]) => { if (snap.scroll.has(k)) el.scrollTop = snap.scroll.get(k); });
+}
 /* Re-draw the current page in place: no loading placeholder, same scroll position, open sections stay open. For
    buttons that change one thing on the page (Keep, Save comment, Review); route() is for going to a page. */
 function softRoute() { return route({ soft: true }); }
@@ -2844,12 +2935,14 @@ async function route(opts) {
   if (!soft) crumbs(key);  // a refresh keeps the page's own crumbs (e.g. the PR) instead of flashing back to the page
   document.title = `${TITLES[key]} · LFG`;
   const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
-  view.classList.toggle("wide", key === "review" && !!arg);  // the review screens are two panes: use the width
-  const open = soft ? $$("details[open]", view).map((d, i) => d.id || "i" + i) : [];
+  view.classList.toggle("wide", (key === "review" || key === "prs") && !!arg);  // the review screens are two panes: use the width
+  const snap = soft ? uiSnapshot(view) : null;
   if (!soft) view.innerHTML = '<div class="skeleton" style="height:60px;width:40%"></div><div class="skeleton mt"></div><div class="skeleton mt" style="height:220px"></div>';
   let html;
   try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); }
   if (seq !== renderSeq) return;
+  if (soft && html === lastHtml && location.hash === lastHash) return;  // nothing changed: leave the page alone
+  lastHtml = html; lastHash = location.hash;
   view.innerHTML = html;
   mountTables(view); mountTabs(view); wire(view);
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
@@ -2865,7 +2958,7 @@ async function route(opts) {
   const rf = $("#refreshed");
   if (rf) rf.textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (soft) {
-    $$("details", view).forEach((d, i) => { if (open.includes(d.id || "i" + i)) d.open = true; });
+    uiRestore(view, snap);
     window.scrollTo(0, y);
   } else if (!arg) window.scrollTo(0, 0);
 }
@@ -2980,7 +3073,8 @@ function runningMsg(j) {
   const steps = j.steps || [], now = steps.slice(-1)[0] || "Starting";
   const done = steps.slice(0, -1).map(s => `<li>${dot("ok")}${esc(s)}</li>`).join("");
   const hint = UPDATE_STEP_HINT[now] ? ` <span class="muted">(${esc(UPDATE_STEP_HINT[now])})</span>` : "";
-  return `${dot("on")}<span><b>Updating LFG:</b> ${esc(now)}…${hint} <span class="muted small">started ${ago(j.started)}. You can leave this page; every tab shows this.</span></span>${done ? `<details class="more inline"><summary>${plural(steps.length - 1, "step")} done</summary><ul class="small">${done}</ul></details>` : ""}`;
+  const open = !!$("#update-banner details.inline[open]");  // the banner redraws every few seconds: stay open if you opened it
+  return `${dot("on")}<span><b>Updating LFG:</b> ${esc(now)}…${hint} <span class="muted small">started ${ago(j.started)}. You can leave this page; every tab shows this.</span></span>${done ? `<details class="more inline"${open ? " open" : ""}><summary>${plural(steps.length - 1, "step")} finished</summary><ul class="small">${done}</ul></details>` : ""}`;
 }
 /* Tabs tell each other when an update starts or ends, so none keeps offering an Update button meanwhile. */
 const updateTabs = "BroadcastChannel" in window ? new BroadcastChannel("lfg-update") : null;

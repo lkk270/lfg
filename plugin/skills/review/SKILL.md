@@ -62,7 +62,16 @@ preflight: graphs
    only what is new ("@coderabbitai flagged this too; the part it missed is ..."). If they said everything you would,
    keep it as a short agreement rather than a second copy of their comment. Never echo LFG's own earlier comments
    (those are in `prior`).
-9. **Save.** Write the JSON below to a scratch file and `lfg review save <pr> --file <path> [--ticket <ID>]`. Fix
+   **On the user's own PR** (its author is the `gh` user) also triage what others said: every comment from
+   `lfg review others` that asks for a change, isn't answered or resolved, and isn't already one of your findings
+   becomes a finding with `raised_by` (`who`, `url`, `comment_id`, `kind`, `bot` from that entry), `worth` (`fix`:
+   it is right and worth the change; `maybe`; `skip`: wrong, already handled, or not worth it, and say why in
+   `issue`), your own `severity`, and `reply`: what the user would answer in that thread if they pass on it, in
+   their voice (one or two sentences: why not, or what was done instead). `body` stays your own read of it.
+9. **Questions.** Anything you couldn't settle from the code, the ticket or the sources and that would change a
+   finding (intent, a product decision, whether a caller exists elsewhere) goes in `questions`, at most five, each
+   with `why` it matters. Don't ask what the code can answer.
+10. **Save.** Write the JSON below to a scratch file and `lfg review save <pr> --file <path> [--ticket <ID>]`. Fix
    and re-run on a validation error.
 
 ## Output
@@ -78,7 +87,11 @@ The file passed to `lfg review save`:
    "body": "the comment the author reads, in the voice the sources describe",
    "origin": "introduced|exposed|pre-existing", "since": "first|new|missed",
    "echoes": [{"who": "coderabbitai", "url": "https://github.com/...#discussion_r1", "said": "what they said, short",
-               "bot": true}]}],
+               "bot": true}],
+   "raised_by": {"who": "coderabbitai", "url": "...", "comment_id": 123, "kind": "inline|review|comment",
+                 "bot": true},
+   "worth": "fix|maybe|skip", "reply": "only with raised_by: the user's answer if they pass on it"}],
+ "questions": [{"ask": "is the old export endpoint still called by the mobile app?", "why": "if so, 1.2 is a blocker"}],
  "prior": [{"id": "1.3", "state": "fixed|replied|withdrawn|resolved-unchanged|ignored|open", "note": "why"}]}
 ```
 

@@ -806,3 +806,19 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 #review-method ul.parts li { margin: 2px 0; }
 .talk-grid { grid-template-columns: 1fr; }
 .talk-rule textarea { min-height: 72px; }
+.pr-split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.pr-talk { position: sticky; top: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--page);
+  display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
+.pr-talk-h { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.pr-talk .pr-thread { padding: 8px 12px; overflow-y: auto; flex: 1; min-height: 80px; }
+.pr-talk .pr-q { margin: 8px 0 2px; }
+.pr-talk .pr-a { margin: 0 0 6px; padding: 6px 10px; border-left: 2px solid var(--line); color: var(--text-2); }
+.pr-talk-send { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); align-items: flex-end; }
+.pr-talk-send textarea { flex: 1; resize: vertical; min-height: 40px; font: inherit; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--line-2); background: var(--page); color: var(--text); }
+.pr-changed { color: var(--text-2); margin: 0 0 8px; }
+.pr-questions .pr-question { padding: 8px 0; border-top: 1px solid var(--line); }
+.pr-questions .pr-question:first-of-type { border-top: 0; }
+.pr-questions .pr-question .row { margin-top: 6px; }
+.pr-reply { margin-top: 10px; }
+@media (max-width: 1100px) { .pr-split { grid-template-columns: minmax(0, 1fr); } .pr-talk { position: static; } }
