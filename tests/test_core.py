@@ -3037,6 +3037,20 @@ class ReviewTest(unittest.TestCase):
         rec = {"passes": [{"n": 1, "score": 60}, {"n": 2, "score": None}, {"n": 3, "score": 80, "kind": "full"}]}
         self.assertEqual(R.scores(rec), [{"n": 1, "score": 60, "kind": "first"}, {"n": 3, "score": 80, "kind": "full"}])
 
+    def test_the_dashboard_restarts_once_an_update_has_finished_writing(self):
+        class Srv:
+            restart = False
+
+            def shutdown(self):
+                self.stopped = True
+        stamps = iter([1, 1, 2, 3, 3])  # start, unchanged, changing, changing, settled
+        srv = Srv()
+        with mock.patch.object(ui, "_code_stamp", side_effect=lambda: next(stamps)), \
+                mock.patch.object(ui.time, "sleep"):
+            ui._restart_on_update(srv)
+        self.assertTrue(srv.restart and srv.stopped)
+        self.assertGreater(ui._code_stamp(), 0)
+
     def test_scores_per_person_and_repo_keep_first_reviews_apart_from_later_ones(self):
         def rec(repo, n, author, passes):
             return {"repo": repo, "number": n, "author": author, "title": "t", "updated": "2026-10-2%d" % n,

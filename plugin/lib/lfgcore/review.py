@@ -1791,7 +1791,7 @@ def score_stats(only=None):
         prs.append({"repo": r["repo"], "number": r["number"], "title": r.get("title") or "", "author": r.get("author")
                     or "?", "first": ps[0]["score"], "latest": ps[-1]["score"], "reviews": len(r["passes"]),
                     "approved_after": approved, "verdict": verdict_of(r["passes"][-1]), "scores": scores(r),
-                    "updated": r.get("updated") or ps[-1].get("ts")})
+                    "updated": r.get("updated") or ps[-1].get("ts"), "first_at": ps[0].get("ts") or ""})
 
     def avg(xs):
         xs = [x for x in xs if x is not None]

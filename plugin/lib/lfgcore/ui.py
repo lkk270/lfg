@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.parse
 import webbrowser
 
@@ -794,6 +795,34 @@ def _exit_with_terminal():
         threading.Thread(target=watch, daemon=True).start()
 
 
+def _code_stamp():
+    """When this dashboard's own code last changed on disk (an update installs new files under it)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        return max(os.path.getmtime(os.path.join(d, f)) for d, _, fs in os.walk(here) for f in fs
+                   if f.endswith((".py", ".js", ".css", ".html")))
+    except ValueError:
+        return 0
+
+
+def _restart_on_update(srv, every=3):
+    """An update replaces the code under a running dashboard, which would keep serving pages from the old code. Once
+    the new files have stopped changing, start again from them in the same process: same port, same terminal."""
+    started, last = _code_stamp(), None
+    while True:
+        time.sleep(every)
+        now = _code_stamp()
+        if now <= started:
+            continue
+        if now != last:  # still being written: wait until it settles
+            last = now
+            continue
+        print("LFG updated: restarting the dashboard on the new code")
+        srv.restart = True
+        srv.shutdown()  # serve() starts again once the server has stopped
+        return
+
+
 def serve(port, open_browser=True):
     Handler.port = port
     try:
@@ -811,6 +840,7 @@ def serve(port, open_browser=True):
     _exit_with_terminal()
     # tool/MCP checks take a few seconds; warm them so the first overview shows every integration
     threading.Thread(target=dash.tools, daemon=True).start()
+    threading.Thread(target=_restart_on_update, args=(srv,), daemon=True).start()
     print("LFG dashboard: http://127.0.0.1:%d  (Ctrl-C to stop)" % port)
     if open_browser:
         threading.Timer(0.5, open_editor, (port,)).start()
@@ -818,3 +848,7 @@ def serve(port, open_browser=True):
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    if getattr(srv, "restart", False):
+        srv.server_close()
+        argv = getattr(sys, "orig_argv", None) or [sys.executable] + sys.argv  # keeps python's own flags (3.10+)
+        os.execv(sys.executable, argv + ([] if "--no-open" in argv else ["--no-open"]))
