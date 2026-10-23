@@ -1775,6 +1775,54 @@ def progress(repo, number, lines=8, j=None):
     return dict(j, steps=steps[-lines:])
 
 
+def score_stats(only=None):
+    """How PRs score, per PR, per author and per repo. A PR's first score is its first review's (the code as it was
+    first handed in); later reviews usually score higher after fixes, so they're shown apart: the latest score, the
+    change, and how many reviews it took before you approved it. Full reviews and re-reviews are averaged apart."""
+    names = github_names(only) if only else set()
+    prs = []
+    for r in all_records():
+        if names and r["repo"].lower() not in names:
+            continue
+        ps = [p for p in r.get("passes") or [] if p.get("score") is not None]
+        if not ps:
+            continue
+        approved = next((p["n"] for p in r["passes"] if (p.get("posted") or {}).get("event") == "APPROVE"), None)
+        prs.append({"repo": r["repo"], "number": r["number"], "title": r.get("title") or "", "author": r.get("author")
+                    or "?", "first": ps[0]["score"], "latest": ps[-1]["score"], "reviews": len(r["passes"]),
+                    "approved_after": approved, "verdict": verdict_of(r["passes"][-1]), "scores": scores(r),
+                    "updated": r.get("updated") or ps[-1].get("ts")})
+
+    def avg(xs):
+        xs = [x for x in xs if x is not None]
+        return round(sum(xs) / len(xs), 1) if xs else None
+
+    def group(key):
+        out = {}
+        for x in prs:
+            out.setdefault(x[key], []).append(x)
+        rows = []
+        for k, xs in out.items():
+            ok = [x["approved_after"] for x in xs if x["approved_after"]]
+            rows.append({"name": k, "prs": len(xs), "first": avg(x["first"] for x in xs),
+                         "latest": avg(x["latest"] for x in xs), "gain": avg(x["latest"] - x["first"] for x in xs),
+                         "approved": len(ok), "to_approval": avg(ok),
+                         "first_time": sum(1 for a in ok if a == 1)})
+        return sorted(rows, key=lambda r: (-r["prs"], r["name"]))
+    kinds = {}
+    for r in all_records():
+        if names and r["repo"].lower() not in names:
+            continue
+        for p in r.get("passes") or []:
+            if p.get("score") is not None:
+                kinds.setdefault("re-review" if (p.get("kind") or "first") == "re-review" else "full", []).append(
+                    p["score"])
+    return {"prs": sorted(prs, key=lambda x: x["updated"] or "", reverse=True), "authors": group("author"),
+            "repos": group("repo"), "kinds": {k: {"reviews": len(v), "avg": avg(v)} for k, v in kinds.items()},
+            "overall": {"prs": len(prs), "first": avg(x["first"] for x in prs), "latest": avg(x["latest"] for x in prs),
+                        "to_approval": avg(x["approved_after"] for x in prs if x["approved_after"])}}
+
+
 def dashboard(fresh=False, only=None):
     """Everything the Reviews page shows: the request queue, your own open PRs, saved reviews, and running jobs.
     `only`: a main checkout; keeps the PRs in its GitHub repos (all of them when it has no GitHub remote, with

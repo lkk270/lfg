@@ -3037,6 +3037,25 @@ class ReviewTest(unittest.TestCase):
         rec = {"passes": [{"n": 1, "score": 60}, {"n": 2, "score": None}, {"n": 3, "score": 80, "kind": "full"}]}
         self.assertEqual(R.scores(rec), [{"n": 1, "score": 60, "kind": "first"}, {"n": 3, "score": 80, "kind": "full"}])
 
+    def test_scores_per_person_and_repo_keep_first_reviews_apart_from_later_ones(self):
+        def rec(repo, n, author, passes):
+            return {"repo": repo, "number": n, "author": author, "title": "t", "updated": "2026-10-2%d" % n,
+                    "passes": [dict({"n": i + 1, "findings": []}, **p) for i, p in enumerate(passes)]}
+        recs = [rec("o/api", 1, "ann", [{"score": 60}, {"score": 80, "kind": "re-review",
+                                                      "posted": {"event": "APPROVE"}}]),
+                rec("o/api", 2, "ann", [{"score": 90, "posted": {"event": "APPROVE"}}]),
+                rec("o/web", 3, "bob", [{"score": 70}, {"score": None}, {"score": 75, "kind": "full"}])]
+        with mock.patch.object(R, "all_records", return_value=recs):
+            d = R.score_stats()
+        ann = next(x for x in d["authors"] if x["name"] == "ann")
+        self.assertEqual((ann["prs"], ann["first"], ann["latest"], ann["gain"]), (2, 75.0, 85.0, 10.0))
+        self.assertEqual((ann["approved"], ann["to_approval"], ann["first_time"]), (2, 1.5, 1))
+        bob = next(x for x in d["authors"] if x["name"] == "bob")
+        self.assertIsNone(bob["to_approval"])
+        self.assertEqual(d["kinds"], {"full": {"reviews": 4, "avg": 73.8}, "re-review": {"reviews": 1, "avg": 80.0}})
+        self.assertEqual([x["name"] for x in d["repos"]], ["o/api", "o/web"])
+        self.assertEqual(d["overall"]["to_approval"], 1.5)
+
     def test_a_review_says_whether_it_can_merge_and_talking_can_change_that(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "score": 70, "verdict": "almost", "verdict_why": "one minor left",
