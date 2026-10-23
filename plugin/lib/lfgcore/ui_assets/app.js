@@ -554,9 +554,18 @@ function decorateRules(root) {
     t.replaceWith(frag);
   }
 }
+/* A status dot in running text needs a space after it; in a flex or grid row the row's gap already spaces it. */
+function spaceDots(node) {
+  if (!node || node.nodeType !== 1) return;
+  [...(node.matches(".dot") ? [node] : []), ...node.querySelectorAll(".dot")].forEach(d => {
+    const parent = d.parentElement;
+    d.classList.toggle("in-text", !!parent && !/flex|grid/.test(getComputedStyle(parent).display));
+  });
+}
 function mountRuleTips() {
-  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(decorateRules))).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { decorateRules(n); spaceDots(n); }))).observe(document.body, { childList: true, subtree: true });
   decorateRules(document.body);
+  spaceDots(document.body);
   const tip = document.createElement("div");
   tip.id = "tip"; tip.hidden = true; document.body.append(tip);
   document.addEventListener("mouseover", e => {

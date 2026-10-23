@@ -150,6 +150,7 @@ ul.attn li:hover .go { opacity: 1; }
 
 /* status words: a tinted label with a dot, Notion-status style */
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); flex: none; display: inline-block; }
+.dot.in-text { margin-right: 7px; vertical-align: 1px; }  /* set by spaceDots() */
 .dot.ok { background: var(--green); } .dot.warn { background: var(--yellow); } .dot.bad { background: var(--red); } .dot.on { background: var(--blue-dot); }
 .st { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px 0 7px; border-radius: 11px; font-size: 13px;
   white-space: nowrap; background: var(--gray-bg); color: var(--gray-tx); line-height: 1; }
@@ -456,7 +457,6 @@ details.sess-old { margin: 0 0 8px 22px; } details.sess-old > summary { font-siz
 input.wide { width: 100%; }
 #update-banner { margin: 10px 14px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #update-banner details.inline { display: inline-block; margin: 0; }
-#update-banner .dot { margin-right: 6px; }  /* inside the message, so the banner's gap doesn't space it */
 #update-banner details.inline > summary { margin: 0; line-height: inherit; }
 #update-banner .btn { align-self: center; }
 #update-banner details.inline ul { margin: 6px 0 0 18px; }
