@@ -2296,7 +2296,7 @@ class PrefsTest(unittest.TestCase):
         P = self.P
         d = P.load()
         style = P.style_ids(d)
-        self.assertEqual(len(style), 15)
+        self.assertEqual(len(style), 18)
         on = {p for p in style if P.effective(None, d)[p] not in (False, "none")}
         self.assertEqual(on, {"style_paste_blocks", "style_ticket_titles"})
         text = P.render(P.effective(None, d), d)
@@ -2414,6 +2414,31 @@ class PrefsTest(unittest.TestCase):
         with open(self.md) as f:
             self.assertIn("--squash --delete-branch", f.read())
         self.assertIn("delete_merged", [p["id"] for p in ui.api("prefs", {})["catalog"]])
+
+    def test_a_talk_rule_can_be_reworded_and_put_back(self):
+        P = self.P
+        P.set_pref("style_pr_comments", True)
+        mine = "PR comments: two sentences at most, and always say which line."
+        P.set_text("style_pr_comments", mine)
+        with open(self.md) as f:
+            text = f.read()
+        self.assertIn(mine, text)
+        self.assertNotIn("hedge-speak", text)
+        p = next(x for x in P.catalog() if x["id"] == "style_pr_comments")
+        self.assertIn("hedge-speak", p["lfg_text"])  # LFG's wording is kept, to put back
+        P.set_text("style_pr_comments", "")
+        with open(self.md) as f:
+            self.assertIn("hedge-speak", f.read())
+        self.assertNotIn("lfg_text", next(x for x in P.catalog() if x["id"] == "style_pr_comments"))
+        with self.assertRaisesRegex(ValueError, "only the switches"):
+            P.set_text("commits", "anything")  # enforced rules aren't reworded
+        P.add_custom("talk-env-first", P.STYLE, "Say the environment first", "Name the environment first.")
+        P.set_text("talk-env-first", "Name the environment in the first sentence.")
+        self.assertEqual(next(x for x in P.catalog() if x["id"] == "talk-env-first")["text"],
+                         "Name the environment in the first sentence.")
+        self.assertIn("talk-env-first", P.style_ids())  # reminders carry your own talk rules too
+        with self.assertRaises(ST.Invalid):
+            ui.save("pref_text", {"id": "talk-env-first", "text": " "})
 
     def test_defaults_file_and_hard_rules(self):
         P = self.P
@@ -2584,6 +2609,23 @@ class SessionsTest(unittest.TestCase):
             ev.append({"type": "custom-title", "customTitle": title})
         with open(os.path.join(d, sid + ".jsonl"), "w") as f:
             f.write("\n".join(json.dumps(e) for e in ev) + "\n")
+
+    def test_a_session_started_in_the_main_checkout_shows_the_worktree_it_worked_in(self):
+        a, b = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2))
+        self.write(a, "/nowhere/app", "main", "build it")
+        self.write(b, "/nowhere/app", "main", "just a question")
+        uses = [{"type": "assistant", "cwd": "/nowhere/app", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "lfg worktree new feat-a"}}]}},
+            {"type": "assistant", "cwd": "/nowhere/app", "message": {"content": [
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "/nowhere/app.worktrees/feat-a/x.py"}}]}},
+            {"type": "assistant", "cwd": "/nowhere/app", "message": {"content": [
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "cd /nowhere/app.worktrees/feat-b && git status"}}]}}]
+        with open(os.path.join(self.dir, "-nowhere-app", a + ".jsonl"), "a") as f:
+            f.write("\n".join(json.dumps(e) for e in uses) + "\n")
+        rows = {r["id"]: r for r in self.SS.listing()["sessions"]}
+        self.assertEqual(rows[a]["worktree"], "feat-b")  # the last one it used
+        self.assertEqual(rows[b]["worktree"], "")
 
     def test_finds_every_folder_names_and_groups_by_ticket(self):
         a, b, c = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2, 3))
@@ -2887,6 +2929,174 @@ class ReviewTest(unittest.TestCase):
             stdout.write("\n".join(json.dumps(e) for e in events))
             return subprocess.CompletedProcess(cmd, 0)
         return run
+
+    def saved(self, *findings, author="dev"):
+        with mock.patch.object(R, "pr_meta", return_value=dict(self.META, author=author)):
+            return R.save("o/r", 7, {"summary": "s", "findings": list(findings) or [self.finding()]})
+
+    def test_a_snippet_shows_the_diff_around_the_line_like_github(self):
+        patch = "@@ -1,4 +1,5 @@\n a\n-b\n+B\n+new\n c\n d\n@@ -40,2 +41,2 @@\n x\n y"
+        rows = R.hunk_rows(patch, 3, around=2)
+        self.assertEqual([(r["old"], r["new"], r["kind"], r["text"], r["at"]) for r in rows],
+                         [(2, None, "-", "b", False), (None, 2, "+", "B", False), (None, 3, "+", "new", True),
+                          (3, 4, " ", "c", False), (4, 5, " ", "d", False)])
+        self.assertEqual(R.hunk_rows(patch, 20), [])  # not in the diff: the file is shown instead
+        self.assertEqual([r["new"] for r in R.hunk_rows(patch, 5)], [None, 2, 3, 4, 5])  # stops at the hunk's end
+        rows = R.file_rows("l1\nl2\nl3\nl4\nl5\nl6\n", 2, around=2)
+        self.assertEqual([(r["new"], r["at"]) for r in rows], [(1, False), (2, True), (3, False), (4, False)])
+
+    def test_a_snippet_is_fetched_once_then_read_from_the_cache(self):
+        self.saved()
+        calls = []
+
+        def gh(args, timeout=60):
+            calls.append(args)
+            return {"files": [{"filename": "app.py", "patch": "@@ -1,2 +1,3 @@\n a\n+b\n c"}]}
+        with mock.patch.object(R, "gh_json", side_effect=gh):
+            first = R.snippet("o/r", 7, "1.1")
+            again = R.snippet("o/r", 7, "1.1")
+        self.assertEqual(first, again)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r["text"] for r in first["rows"] if r["at"]], ["c"])
+        self.saved(self.finding(file="", line=None))
+        self.assertIsNone(R.snippet("o/r", 7, "2.1"))  # a finding about the PR as a whole has no code
+
+    def test_discussing_a_finding_keeps_the_conversation_on_it(self):
+        self.saved()
+        asked = []
+
+        def claude(cmd, **kw):
+            asked.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "Yes, `load` can return None."}), "")
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "snippet", return_value=None), mock.patch("subprocess.run", side_effect=claude):
+            out = R.discuss("o/r", 7, "1.1", "is this reachable?")
+            R.discuss("o/r", 7, "1.1", "and the fix?")
+        self.assertEqual(out["a"], "Yes, `load` can return None.")
+        self.assertEqual([x["q"] for x in R.load("o/r", 7)["passes"][0]["findings"][0]["chat"]],
+                         ["is this reachable?", "and the fix?"])
+        self.assertIn("is this reachable?", asked[1][2])  # the second question sees the first
+        self.assertIn("This breaks on empty input.", asked[0][2])
+        with self.assertRaises(R.ReviewError):
+            R.discuss("o/r", 7, "1.1", " ")
+
+    def test_fix_is_only_for_your_own_pr_once_every_finding_is_decided(self):
+        self.saved(self.finding(), self.finding(line=9), author="me")
+        with mock.patch.object(R, "me", return_value="me"):
+            with self.assertRaisesRegex(R.ReviewError, "decide fix or pass"):
+                R.fix_start("o/r", 7)
+            R.mark("o/r", 7, ["1.1", "1.2"], status="drop")
+            with self.assertRaisesRegex(R.ReviewError, "nothing is marked fix"):
+                R.fix_start("o/r", 7)
+        with mock.patch.object(R, "me", return_value="someone-else"):
+            R.mark("o/r", 7, ["1.1"], status="keep")
+            with self.assertRaisesRegex(R.ReviewError, "own PR"):
+                R.fix_start("o/r", 7)
+
+    def test_a_fix_run_records_the_commit_on_each_fixed_finding(self):
+        self.saved(self.finding(), self.finding(line=9), self.finding(line=12), author="me")
+        R.mark("o/r", 7, ["1.1", "1.2"], status="keep")
+        R.mark("o/r", 7, ["1.3"], status="drop")
+        sha = "b" * 40
+        result = {"fixed": ["1.1"], "skipped": [{"id": "1.2", "why": "the caller already checks"}], "commits": [sha],
+                  "note": "one commit"}
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1", "result": "```json\n%s\n```" % json.dumps(result)}]
+        seen = {}
+
+        def run(cmd, cwd=None, stdout=None, **kw):
+            seen.update(cmd=cmd, cwd=cwd)
+            return self.fake_claude(events)(cmd, cwd=cwd, stdout=stdout)
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "fix_checkout", return_value="/tmp/wt") as co, \
+                mock.patch("subprocess.run", side_effect=run):
+            j = R.fix_run("o/r", 7)
+        self.assertEqual(j["status"], "done", j.get("why"))
+        co.assert_called_once_with("o/r", "dev/x")
+        self.assertEqual(seen["cwd"], "/tmp/wt")
+        prompt = seen["cmd"][2]
+        self.assertIn("1.1", prompt)
+        self.assertIn("1.2", prompt)
+        self.assertNotIn("1.3", prompt)  # passed on
+        self.assertIn("Bash(git push --force*)", seen["cmd"][seen["cmd"].index("--disallowedTools") + 1])
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual(p["findings"][0]["fixed"]["commit"], sha)
+        self.assertNotIn("fixed", p["findings"][1])
+        self.assertEqual((p["fix"]["commits"], p["fix"]["skipped"][0]["id"]), ([sha], "1.2"))
+        self.assertEqual([f["id"] for f in R.to_fix(R.load("o/r", 7))], ["1.2"])  # the skipped one can be tried again
+
+    def test_a_fix_that_cannot_get_a_clean_checkout_says_why(self):
+        self.saved(author="me")
+        R.mark("o/r", 7, ["1.1"], status="keep")
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "fix_checkout", side_effect=R.ReviewError("x has uncommitted changes")):
+            j = R.fix_run("o/r", 7)
+        self.assertEqual((j["status"], j["why"]), ("failed", "x has uncommitted changes"))
+        self.assertEqual(R.fix_job("o/r", 7)["status"], "failed")
+
+    def test_github_status_counts_files_and_lines_changed(self):
+        pr = {"state": "OPEN", "reviews": [], "statusCheckRollup": [], "additions": 340, "deletions": 58,
+              "changedFiles": 12}
+        with mock.patch.object(R, "gh_json", return_value=pr), mock.patch.object(R, "me", return_value="me"):
+            g = R.gh_status("o/r", 99, max_age=0)
+        self.assertEqual((g["files"], g["additions"], g["deletions"]), (12, 340, 58))
+
+    def test_a_re_review_checks_unposted_findings_and_leaves_dropped_ones_settled(self):
+        """Your own PR: nothing is posted, so kept findings are checked without a thread and dropped ones stay down."""
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(), f(line=9), f(line=12), f(line=20)]})
+        R.mark("o/r", 7, ["1.1", "1.4"], status="keep")
+        R.mark("o/r", 7, ["1.2"], status="drop")
+        R.mark("o/r", 7, ["1.3"], status="drop")
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["fixed"] = {"commit": "c" * 40}
+        R.store(rec)
+        new_head = dict(self.META, head_sha="d" * 40)
+        with mock.patch.object(R, "pr_meta", return_value=new_head), \
+                mock.patch.object(R, "_threads", return_value=[]), \
+                mock.patch.object(R, "gh_json", return_value={"files": [{"filename": "app.py"}]}):
+            t = R.threads("o/r", 7)
+        self.assertEqual(t["posted"], [])
+        self.assertEqual([(x["id"], x["fixed_in"], x["file_changed"]) for x in t["unposted"]],
+                         [("1.1", "c" * 40, True), ("1.4", None, True)])
+        self.assertEqual([x["id"] for x in t["settled"]], ["1.2", "1.3"])
+        with mock.patch.object(R, "pr_meta", return_value=new_head):  # a re-review found 1.1 fixed
+            R.save("o/r", 7, {"summary": "s", "findings": [], "prior": [{"id": "1.1", "state": "fixed"}]})
+        with mock.patch.object(R, "pr_meta", return_value=new_head), mock.patch.object(R, "_threads", return_value=[]):
+            self.assertEqual([x["id"] for x in R.threads("o/r", 7)["unposted"]], ["1.4"])
+
+    def test_a_finished_review_leaves_a_notice_and_macos_shows_it_only_with_no_dashboard_open(self):
+        shown = []
+        run = lambda cmd, **kw: shown.append(cmd) or subprocess.CompletedProcess(cmd, 0)  # noqa: E731
+        with mock.patch.object(R.C, "which", return_value="/usr/bin/osascript"), mock.patch("subprocess.run", run):
+            self.assertEqual(R.notices(0), {"last": 0, "items": []})  # a dashboard tab starts watching
+            R.notify("o/r#7", "Review done: Add thing", "o/r#7 · 2 findings · score 88")
+            self.assertEqual(shown, [])  # the tab shows it
+            got = R.notices(0)
+            self.assertEqual((got["last"], got["items"]), (1, []))  # starting fresh: nothing old pops up
+            R.notify("o/r#8", "Review failed: Other", "the review stopped", ok=False)
+            items = R.notices(1)["items"]
+            self.assertEqual([(x["n"], x["pr"], x["ok"]) for x in items], [(2, "o/r#8", False)])
+            d = C.read_json(R.notices_path())
+            C.write_json(R.notices_path(), dict(d, seen=0))  # no tab has asked lately
+            R.notify("o/r#9", "Review done: Third", "o/r#9 · 0 findings")
+        self.assertEqual(len(shown), 1)
+        self.assertEqual(shown[0][0], "osascript")
+        self.assertIn("LFG: Review done: Third", shown[0][2])
+
+    def test_a_new_full_review_is_recorded_as_one_not_as_a_re_review(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1",
+                   "result": "```json\n%s\n```" % json.dumps({"summary": "s", "findings": [self.finding()]})}]
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=self.fake_claude(events)):
+            R.run("o/r", 7)
+            R.run("o/r", 7, fresh=True)
+            R.run("o/r", 7)
+        self.assertEqual([p["kind"] for p in R.load("o/r", 7)["passes"]], ["first", "full", "re-review"])
 
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
