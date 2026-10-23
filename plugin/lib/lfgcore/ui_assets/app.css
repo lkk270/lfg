@@ -777,4 +777,8 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 /* big monitors: the regular pages get a little more room too */
 @media (min-width: 1600px) { .view { max-width: 1240px; } .view.wide { max-width: 1760px; } }
 .rv-divider { font-size: 12px; color: var(--muted); padding: 14px 0 6px; border-top: 1px solid var(--line); }
-
+.diffstat { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.diffstat b { font-weight: 600; } .diffstat b.add { color: var(--green); } .diffstat b.del { color: var(--red); }
+.diffstat .bar { display: inline-flex; gap: 1px; margin-left: 2px; }
+.diffstat .bar i { width: 8px; height: 8px; border-radius: 1px; background: var(--line-2); }
+.diffstat .bar i.add { background: var(--green); } .diffstat .bar i.del { background: var(--red); }

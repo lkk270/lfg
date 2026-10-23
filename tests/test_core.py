@@ -2888,6 +2888,13 @@ class ReviewTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
         return run
 
+    def test_github_status_counts_files_and_lines_changed(self):
+        pr = {"state": "OPEN", "reviews": [], "statusCheckRollup": [], "additions": 340, "deletions": 58,
+              "changedFiles": 12}
+        with mock.patch.object(R, "gh_json", return_value=pr), mock.patch.object(R, "me", return_value="me"):
+            g = R.gh_status("o/r", 99, max_age=0)
+        self.assertEqual((g["files"], g["additions"], g["deletions"]), (12, 340, 58))
+
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
         both = {"reviews": [{"pr": "o/api#7", "summary": "backend", "findings": [self.finding()]},

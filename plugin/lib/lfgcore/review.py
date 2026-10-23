@@ -83,7 +83,7 @@ def gh_status(repo, number, max_age=300):
     try:
         j = gh_json(["pr", "view", str(number), "-R", repo, "--json",
                      "state,isDraft,reviewDecision,mergeable,reviews,reviewRequests,statusCheckRollup,headRefOid,"
-                     "headRefName"])
+                     "headRefName,additions,deletions,changedFiles"])
     except ReviewError as e:
         return {"available": False, "why": str(e)}
     latest = {}
@@ -97,6 +97,8 @@ def gh_status(repo, number, max_age=300):
         checks[k] = checks.get(k, 0) + 1
     out = {"available": True, "state": j.get("state"), "draft": j.get("isDraft"),
            "decision": j.get("reviewDecision") or "", "mergeable": j.get("mergeable"),
+           "additions": j.get("additions") or 0, "deletions": j.get("deletions") or 0,
+           "files": j.get("changedFiles") or 0,
            "reviewers": sorted(latest.values(), key=lambda r: r["at"] or ""),
            "waiting_on": [(r.get("login") or r.get("name") or "") for r in j.get("reviewRequests") or []],
            "checks": checks, "head_sha": j.get("headRefOid"), "branch": j.get("headRefName") or "", "me": me()}
