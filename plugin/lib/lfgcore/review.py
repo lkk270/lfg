@@ -925,14 +925,15 @@ def notices_path():
     return os.path.join(reviews_dir(), "notices.json")
 
 
-def notify(pr, title, body, ok=True):
+def notify(pr, title, body, ok=True, place="findings"):
     """Tell you a review (or a fix) finished. Every open dashboard tab shows it as a desktop notification that opens
     the review; with no tab open, macOS shows a plain one instead."""
     import subprocess
     d = C.read_json(notices_path(), {}) or {}
     items = (d.get("items") or [])[-(NOTICES_KEEP - 1):]
     n = max([x["n"] for x in items] or [0]) + 1
-    items.append({"n": n, "pr": pr, "title": title[:200], "body": str(body)[:400], "ok": bool(ok), "at": C.now_iso()})
+    items.append({"n": n, "pr": pr, "title": title[:200], "body": str(body)[:400], "ok": bool(ok), "at": C.now_iso(),
+                  "place": place})
     C.write_json(notices_path(), dict(d, items=items))
     if time.time() - float(d.get("seen") or 0) > SEEN_FOR and C.which("osascript"):
         script = "display notification %s with title %s" % (json.dumps(str(body)[:200]),
@@ -1391,7 +1392,7 @@ def fix_run(repo, number):
     n = sum(1 for f in need(repo, number)["passes"][-1]["findings"] if (f.get("fixed") or {}).get("commit"))
     notify(ref(repo, number), "Fix %s: %s" % ("pushed" if done else "failed", rec.get("title") or ref(repo, number)),
            "%d finding%s fixed and pushed" % (n, "" if n == 1 else "s") if done else j.get("why") or "see the log",
-           ok=done)
+           ok=done, place="fix")
     return j
 
 
