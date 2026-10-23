@@ -2967,7 +2967,7 @@ async function loadBranches() {
   const opt = (v, label) => `<option value="${esc(v)}" ${v === state.branch ? "selected" : ""}>${esc(label)}</option>`;
   sel.innerHTML = opt("", "All branches") + B.branches.map(b => opt(b.name, b.name + (b.state === "current" ? " (checked out)" : b.state === "deleted" ? " (deleted)" : ""))).join("") + (B.unrecorded ? opt("-", "Older runs (branch unknown)") : "");
   sel.disabled = !state.repo;
-  sel.hidden = !B.branches.length && !B.unrecorded;
+  sel.hidden = !B.branches.some(b => b.runs) && !B.unrecorded;  // nothing to filter: no LFG runs on any branch yet
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
 /* "Update ready": newer LFG in your fork or the original project. Checked on load, every minute and when the tab
