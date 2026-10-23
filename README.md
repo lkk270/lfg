@@ -2,7 +2,7 @@
 
 **An engineering pipeline for Claude Code.** LFG takes an idea or a Linear issue to a change that is tested, security-checked, reviewed and ready for **you** to commit. It works from knowledge graphs of your code, picks a lane so small changes stay fast, and never commits, pushes or deploys on its own.
 
-[![CI](https://github.com/varun-singhh/lfg/actions/workflows/ci.yml/badge.svg)](https://github.com/varun-singhh/lfg/actions/workflows/ci.yml)
+[![CI](https://github.com/lkk270/lfg/actions/workflows/ci.yml/badge.svg)](https://github.com/lkk270/lfg/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
