@@ -2512,6 +2512,7 @@ function wirePrs(root) {
   $$("[data-pr-import]", root).forEach(b => b.onclick = e => { e.stopPropagation(); const [pr, path] = JSON.parse(b.dataset.prImport); prImport(pr, path, b); });
   $$("[data-pr-mark]", root).forEach(b => b.onclick = async () => {
     const [pr, id, status] = JSON.parse(b.dataset.prMark);
+    if (b.classList.contains("primary")) return;  // already this status: nothing to save
     b.disabled = true;
     const d = await save("review_mark", { pr, ids: [id], status });
     if (!d.ok) { b.disabled = false; b.title = d.why || ""; alertMsg(b, d); return; }
