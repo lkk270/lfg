@@ -2266,14 +2266,30 @@ function pickBar() {
   };
 }
 /* Another PR's review from the same session, on this PR's page: its summary and findings, decided here like this PR's. */
-function togetherSection(t, unlocked) {
+function togetherSection(t, unlocked, me) {
   const q = t.pass, link = `<a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`;
-  if (!q) return section(`Findings on ${t.pr}`, `<p class="muted small">No review saved for ${link} from this session.</p>`);
+  if (!q) return section(`Findings on ${t.pr}`, `<p class="muted small">No review was saved for ${link} from this session.</p>`);
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
   const fs = [...q.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
+  const stale = !t.live && !q.posted ? `<p class="muted small">${link} has a newer review; post that one from its page.</p>` : "";
   return section(`Findings on ${t.pr}`, `${t.title ? `<p class="muted small">${esc(t.title)}</p>` : ""}${q.summary ? `<p>${txt(q.summary)}</p>` : ""}
     ${fs.length ? fs.map(f => prFinding(f, t.pr, unlocked, t.live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
-    <p class="muted small">${q.posted ? `Posted ${ago(q.posted.ts)}.` : `Post it from ${link}.`}</p>`, `${plural(q.findings.length, "finding")}`);
+    ${stale || postBar(t.pr, q, t.live, !!(t.author && me && t.author === me), unlocked)}`, prTally(q));
+}
+/* "3 findings · 1 kept · 2 to decide · score 91" for one PR's review */
+function prTally(p) {
+  const kept = p.findings.filter(f => f.status === "keep").length, pending = p.findings.filter(f => f.status === "pending").length;
+  return `${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
+}
+/* Post one PR's review to GitHub. Every PR on a reviewed-together page gets its own, whichever repo is picked. */
+function postBar(pr, p, live, own, unlocked) {
+  if (p.posted) return `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`;
+  if (!live) return `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
+  const pending = p.findings.filter(f => f.status === "pending").length, kept = p.findings.filter(f => f.status === "keep").length;
+  return `<div class="panel"><div class="k" style="margin-top:0">Post to GitHub: <span class="mono">${esc(pr)}</span></div>
+      <textarea class="editor small" data-pr-postbody="${esc(pr)}" placeholder="Optional: a note above the comments"></textarea>
+      <div class="row mt">${(own ? [["comment", "Comment only"]] : [["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]]).map(([e, l]) => `<button class="btn${e === "request-changes" || own ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
+      <span class="muted small">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}${own ? " This is your own PR, so GitHub only takes a comment." : ""}</span></div></div>`;
 }
 function prFinding(f, pr, unlocked, live) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
@@ -2331,15 +2347,8 @@ async function prDetail(arg) {
   const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
   const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
-  const pending = p.findings.filter(f => f.status === "pending").length;
-  const kept = p.findings.filter(f => f.status === "keep").length;
   const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
-  const postBar = live ? `<div class="panel"><div class="k" style="margin-top:0">Post to GitHub</div>
-      <textarea class="editor small" id="pr-post-body" placeholder="Optional: a note above the comments"></textarea>
-      <div class="row mt">${(own ? [["comment", "Comment only"]] : [["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]]).map(([e, l]) => `<button class="btn${e === "request-changes" || own ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
-      <span class="muted small" id="pr-post-hint">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}${own ? " This is your own PR, so GitHub only takes a comment." : ""}</span></div></div>`
-    : p.posted ? `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`
-    : `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
+  const together = p.together || [];
   const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
   return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
     ${ghPanel(d.gh)}
@@ -2347,7 +2356,7 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-pass-body">
-      <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
+      <div class="panel"><div class="row"><b>${esc(label(p))}</b><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.score != null && !together.length ? ` · score ${esc(p.score)}` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
@@ -2355,10 +2364,10 @@ async function prDetail(arg) {
           <div class="row"><input type="text" class="grow" data-pr-chat placeholder="e.g. why is 1.2 a blocker? did you check the caller in billing.py?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-chatgo='${esc(JSON.stringify([pr, p.n]))}' ${unlocked ? "" : "disabled"}>Ask</button></div></div>` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
       ${prior}
-      ${(p.together || []).length ? `<div class="callout">This review covered ${plural(p.together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${p.together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Their findings are below this PR's; post each PR from its own page.</div>` : ""}
-      ${section((p.together || []).length ? `Findings on ${pr}` : "Findings", fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on."), `<span id="pr-tally">${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide</span>`)}
-      ${postBar}
-      ${(p.together || []).map(t => togetherSection(t, unlocked)).join("")}
+      ${together.length ? `<div class="callout">This review covered ${plural(together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Each PR has its own findings, score and post box below.</div>` : ""}
+      ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked) : ""), prTally(p))}
+      ${together.length ? "" : postBar(pr, p, live, own, unlocked)}
+      ${together.map(t => togetherSection(t, unlocked, d.gh && d.gh.me)).join("")}
     </div>
     ${sess}`;
 }
@@ -2503,6 +2512,7 @@ function wirePrs(root) {
   $$("[data-pr-import]", root).forEach(b => b.onclick = e => { e.stopPropagation(); const [pr, path] = JSON.parse(b.dataset.prImport); prImport(pr, path, b); });
   $$("[data-pr-mark]", root).forEach(b => b.onclick = async () => {
     const [pr, id, status] = JSON.parse(b.dataset.prMark);
+    if (b.classList.contains("primary")) return;  // already this status: nothing to save
     b.disabled = true;
     const d = await save("review_mark", { pr, ids: [id], status });
     if (!d.ok) { b.disabled = false; b.title = d.why || ""; alertMsg(b, d); return; }
@@ -2554,7 +2564,7 @@ function wirePrs(root) {
     saidMsg($(".save-msg", box), d, "");
   });
   $$("[data-pr-preview]", root).forEach(b => b.onclick = async () => {
-    const [pr, event] = JSON.parse(b.dataset.prPreview), body = ($("#pr-post-body") || {}).value || "";
+    const [pr, event] = JSON.parse(b.dataset.prPreview), body = ($(`[data-pr-postbody="${pr}"]`, root) || {}).value || "";
     const d = await save("review_post", { pr, event, body, dry_run: true });
     if (!d.ok) return alertMsg(b, d);
     const verb = { APPROVE: "Approve", REQUEST_CHANGES: "Request changes", COMMENT: "Comment" }[d.event];
@@ -2823,7 +2833,7 @@ async function checkUpdate(fresh) {
         <span class="muted small">Paste it into a new Claude Code session and decide there; it adds your decision to FORK.md so the next update follows it. Then press Update.</span></div></div>`
       : F && F.status === "failed" && F.branch === H.branch ? `<span class="muted small pre-wrap">The last try ${ago(F.ended)} stopped: ${esc(F.why || "")}</span>` : "";
     const unlocked = await isUnlocked();
-    box.innerHTML = `${dot("bad")}<span><b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
+    box.innerHTML = `<span>${dot("bad")}<b>LFG update stopped:</b> ${what}. Nothing changed on main and nothing was installed; it's on <code>${esc(H.branch)}</code> in <code>${esc(H.worktree)}</code>.</span>
       ${H.files.length ? `<details class="more inline"><summary>${H.state === "conflict" ? "Conflicting files" : "Changed files"}</summary><ul>${H.files.map(f => `<li class="mono small">${esc(f)}</li>`).join("")}</ul></details>` : ""}
       ${H.output ? `<details class="more inline"><summary>Test output</summary><pre class="raw mono small">${esc(H.output)}</pre></details>` : ""}
       ${tried}
@@ -2848,14 +2858,14 @@ async function checkUpdate(fresh) {
   if (j && j.status === "done" && !seen && !(d.available && d.ready) && Date.now() - Date.parse(j.ended) < 15 * 60e3) {
     box.hidden = false;
     box.className = "callout ok";
-    box.innerHTML = `${dot("ok")}<span><b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
+    box.innerHTML = `<span>${dot("ok")}<b>LFG updated ${ago(j.ended)}</b>: tests passed and it's installed${(j.changes || []).length ? `, ${plural(j.changes.length, "change")}: ${esc(j.changes.map(c => c.replace(/^\S+ /, "")).slice(0, 3).join("; "))}${j.changes.length > 3 ? "…" : ""}` : ""}. This page runs the new version. <b>Start a new Claude Code session</b> for new or changed skills; sessions already open keep the old ones.</span> <button class="btn small" id="update-ok">OK</button>`;
     $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }
   if (j && j.status === "failed" && !seen && !(d.available && d.ready && Date.parse(j.ended) < Date.now() - 60e3)) {
     box.hidden = false;
     box.className = "callout bad";
-    box.innerHTML = `${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span> <button class="btn small" id="update-ok">OK</button>`;
+    box.innerHTML = `<span>${dot("bad")}The update didn't go through: <span class="pre-wrap">${esc(j.why || "")}</span></span> <button class="btn small" id="update-ok">OK</button>`;
     $("#update-ok").onclick = () => { localStorage.setItem("lfg.update.seen", j.ended); box.hidden = true; };
     return;
   }

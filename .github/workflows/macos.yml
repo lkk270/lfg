@@ -27,8 +27,19 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Omnigraph CLI (the Knowledge pack's; the knowledge-sync tests run it against a throwaway store)
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"; fi
-          brew install ModernRelay/tap/omnigraph && omnigraph version
+          # Pinned: LFG speaks Omnigraph 0.13. 0.14 dropped --store and moves the cluster's storage on upgrade.
+          set -euo pipefail
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) asset=omnigraph-linux-x86_64 ;; macOS-ARM64) asset=omnigraph-macos-arm64 ;;
+            *) echo "no Omnigraph 0.13 build for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          base=https://github.com/ModernRelay/omnigraph/releases/download/v0.13.0
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o "$asset.tar.gz" "$base/$asset.tar.gz" && curl -fsSL -o "$asset.sha256" "$base/$asset.sha256"
+          [ "$(awk '{print $1}' "$asset.sha256")" = "$(shasum -a 256 "$asset.tar.gz" | awk '{print $1}')" ]
+          mkdir -p og && tar -xzf "$asset.tar.gz" -C og
+          bin="$RUNNER_TEMP/$(find og -type f -name omnigraph | head -1)" && chmod +x "$bin" && dirname "$bin" >> "$GITHUB_PATH"
+          "$bin" version
       - name: Unit and install-flow tests (sandboxed HOME, fake claude)
         run: python -m unittest discover -s tests -v
       - name: Installer dry run changes nothing
