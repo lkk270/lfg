@@ -2888,6 +2888,31 @@ class ReviewTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
         return run
 
+    def test_a_re_review_checks_unposted_findings_and_leaves_dropped_ones_settled(self):
+        """Your own PR: nothing is posted, so kept findings are checked without a thread and dropped ones stay down."""
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(), f(line=9), f(line=12), f(line=20)]})
+        R.mark("o/r", 7, ["1.1", "1.4"], status="keep")
+        R.mark("o/r", 7, ["1.2"], status="drop")
+        R.mark("o/r", 7, ["1.3"], status="drop")
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["fixed"] = {"commit": "c" * 40}
+        R.store(rec)
+        new_head = dict(self.META, head_sha="d" * 40)
+        with mock.patch.object(R, "pr_meta", return_value=new_head), \
+                mock.patch.object(R, "_threads", return_value=[]), \
+                mock.patch.object(R, "gh_json", return_value={"files": [{"filename": "app.py"}]}):
+            t = R.threads("o/r", 7)
+        self.assertEqual(t["posted"], [])
+        self.assertEqual([(x["id"], x["fixed_in"], x["file_changed"]) for x in t["unposted"]],
+                         [("1.1", "c" * 40, True), ("1.4", None, True)])
+        self.assertEqual([x["id"] for x in t["settled"]], ["1.2", "1.3"])
+        with mock.patch.object(R, "pr_meta", return_value=new_head):  # a re-review found 1.1 fixed
+            R.save("o/r", 7, {"summary": "s", "findings": [], "prior": [{"id": "1.1", "state": "fixed"}]})
+        with mock.patch.object(R, "pr_meta", return_value=new_head), mock.patch.object(R, "_threads", return_value=[]):
+            self.assertEqual([x["id"] for x in R.threads("o/r", 7)["unposted"]], ["1.4"])
+
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
         both = {"reviews": [{"pr": "o/api#7", "summary": "backend", "findings": [self.finding()]},

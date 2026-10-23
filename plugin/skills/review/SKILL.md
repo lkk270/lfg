@@ -46,11 +46,16 @@ preflight: graphs
      `fixed` (the problem is gone, verified in the code), `replied` (the author answered and the issue is still
      open: say whether the answer holds up), `withdrawn` (their answer is right, or you were wrong),
      `resolved-unchanged` (thread resolved but the problem is still there), `ignored` (no change, no reply) or
-     `open`. `file_changed` and `outdated` are hints only; the code decides.
+     `open`. `file_changed` and `outdated` are hints only; the code decides. Do the same for each row in
+     `threads.unposted` (kept but never posted, as on the user's own PR; `fixed_in` is the commit LFG's Fix made):
+     `fixed`, `ignored` or `open`, with no thread to read. Both go in `prior`.
+   - **Settled.** `threads.settled` lists findings the user dropped. They decided; never raise one again in any pass,
+     in other words or at another line. Only if later commits made that exact problem worse, file it with
+     `since: "new"` and say in `body` what changed since it was dropped.
    - **New commits.** Review `last_reviewed_sha...head_sha` only (`gh api repos/<repo>/compare/<a>...<b>`).
      Findings get `since: "new"`.
    - **Missed.** One more pass over the whole PR for what earlier passes missed. Findings get `since: "missed"`.
-     Never re-file an earlier finding: track it in `prior` instead.
+     Never re-file an earlier finding: track it in `prior` instead, and never re-raise a settled one.
 8. **Other reviewers.** `lfg review others <pr>`: what people and bots (CodeRabbit, Sonar, other agents) already
    said, inline (with `file` and `line`) or in the conversation. For each finding someone already raised, at the same
    spot or the same idea in other words, list them in `echoes` and say so in `body`: agree with them by name and add

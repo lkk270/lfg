@@ -491,13 +491,23 @@ def threads(repo, number):
                 changed[p["n"]] = {f["filename"] for f in j.get("files") or []}
             except ReviewError:
                 changed[p["n"]] = None      # force-pushed away: the old commit is gone
-    rows = []
+    rows, unposted, settled = [], [], []
+    last_state = {x["id"]: x["state"] for p in rec["passes"] for x in p.get("prior") or []}  # later passes win
     for p in rec["passes"]:
         for f in p["findings"]:
-            if f["status"] != "keep" or not f.get("comment_url"):
+            files = changed.get(p["n"], set())
+            where = {"id": f["id"], "title": f["title"], "file": f["file"], "line": f["line"]}
+            if f["status"] == "drop":  # you decided against it: never raised again unless it got worse
+                settled.append(where)
+                continue
+            if f["status"] != "keep" or last_state.get(f["id"]) in ("fixed", "withdrawn"):
+                continue
+            if not f.get("comment_url"):  # kept but never posted (your own PR): check it like a posted one
+                unposted.append(dict(where, fixed_in=(f.get("fixed") or {}).get("commit") or None,
+                                     file_changed=None if files is None else (
+                                         f["file"] in files if f["file"] else None)))
                 continue
             t = by_comment.get(f["comment_id"]) if f["comment_id"] else None
-            files = changed.get(p["n"], set())
             replies = [{"by": (c.get("author") or {}).get("login", ""), "body": c["body"][:1500], "at": c["createdAt"]}
                        for c in (t["comments"]["nodes"][1:] if t else [])]
             rows.append({"id": f["id"], "title": f["title"], "file": f["file"], "line": f["line"],
@@ -505,7 +515,8 @@ def threads(repo, number):
                          "outdated": bool(t and t["isOutdated"]), "replies": replies,
                          "file_changed": None if files is None else (f["file"] in files if f["file"] else None)})
     return {"repo": repo, "number": number, "head_sha": meta["head_sha"], "last_reviewed_sha": last["head_sha"],
-            "new_commits": meta["head_sha"] != last["head_sha"], "posted": rows}
+            "new_commits": meta["head_sha"] != last["head_sha"], "posted": rows, "unposted": unposted,
+            "settled": settled}
 
 
 # ---------------------------------------------------------------- what the review reads
