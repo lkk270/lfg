@@ -2296,7 +2296,7 @@ class PrefsTest(unittest.TestCase):
         P = self.P
         d = P.load()
         style = P.style_ids(d)
-        self.assertEqual(len(style), 15)
+        self.assertEqual(len(style), 18)
         on = {p for p in style if P.effective(None, d)[p] not in (False, "none")}
         self.assertEqual(on, {"style_paste_blocks", "style_ticket_titles"})
         text = P.render(P.effective(None, d), d)
@@ -2414,6 +2414,31 @@ class PrefsTest(unittest.TestCase):
         with open(self.md) as f:
             self.assertIn("--squash --delete-branch", f.read())
         self.assertIn("delete_merged", [p["id"] for p in ui.api("prefs", {})["catalog"]])
+
+    def test_a_talk_rule_can_be_reworded_and_put_back(self):
+        P = self.P
+        P.set_pref("style_pr_comments", True)
+        mine = "PR comments: two sentences at most, and always say which line."
+        P.set_text("style_pr_comments", mine)
+        with open(self.md) as f:
+            text = f.read()
+        self.assertIn(mine, text)
+        self.assertNotIn("hedge-speak", text)
+        p = next(x for x in P.catalog() if x["id"] == "style_pr_comments")
+        self.assertIn("hedge-speak", p["lfg_text"])  # LFG's wording is kept, to put back
+        P.set_text("style_pr_comments", "")
+        with open(self.md) as f:
+            self.assertIn("hedge-speak", f.read())
+        self.assertNotIn("lfg_text", next(x for x in P.catalog() if x["id"] == "style_pr_comments"))
+        with self.assertRaisesRegex(ValueError, "only the switches"):
+            P.set_text("commits", "anything")  # enforced rules aren't reworded
+        P.add_custom("talk-env-first", P.STYLE, "Say the environment first", "Name the environment first.")
+        P.set_text("talk-env-first", "Name the environment in the first sentence.")
+        self.assertEqual(next(x for x in P.catalog() if x["id"] == "talk-env-first")["text"],
+                         "Name the environment in the first sentence.")
+        self.assertIn("talk-env-first", P.style_ids())  # reminders carry your own talk rules too
+        with self.assertRaises(ST.Invalid):
+            ui.save("pref_text", {"id": "talk-env-first", "text": " "})
 
     def test_defaults_file_and_hard_rules(self):
         P = self.P

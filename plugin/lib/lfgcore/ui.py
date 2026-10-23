@@ -333,7 +333,7 @@ def save(what, body):
         return run_checks(_rid({"repo": [str(body.get("repo") or "")]}), body.get("run"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
-    if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove", "pref_remind"):
+    if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove", "pref_remind", "pref_text"):
         from . import prefs as P
         try:
             if what == "pref_set":
@@ -343,6 +343,8 @@ def save(what, body):
             if what == "pref_add":
                 return P.add_custom(body.get("id"), body.get("group"), body.get("title"), body.get("text") or "",
                                     body.get("off_text") or "", bool(body.get("default", True)))
+            if what == "pref_text":
+                return P.set_text(body.get("id"), body.get("text"))
             if what == "pref_remove":
                 return P.remove_custom(body.get("id"))
             if what == "pref_remind":

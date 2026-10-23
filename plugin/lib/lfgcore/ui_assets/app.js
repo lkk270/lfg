@@ -1158,7 +1158,7 @@ async function offerTours() {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["prefs", "Preferences"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["integrations", "Integrations"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1597,13 +1597,56 @@ PAGES.prefs = async () => {
     ${banner}
     ${on ? `<div class="callout ok">${dot("ok")}<span><b>Changes apply to sessions already open, no restart needed.</b> Enforced rules are checked on the very next command; open sessions are told about any change with your next message to them.</span></div>` : ""}
     ${unlocked ? "" : lockedNote("change your rules here")}
-    ${prefControls(P, P.defaults, P.defaults, null, unlocked)}
+    ${prefControls({ ...P, catalog: P.catalog.filter(p => p.group !== TALK) }, P.defaults, P.defaults, null, unlocked)}
+    ${section(TALK, `<p class="muted">Its rules have their own page: <a href="#talk">How Claude talks</a>.</p>`)}
     <div class="box pad mt"><div class="k" style="margin-top:0">When a change takes effect</div>
       <ul class="small"><li><b>Enforced rules</b> apply at once, in every session, open or new: the next command is checked against them.</li>
       <li><b>Instructions</b> reach new sessions when they start, and sessions already open with your next message in them. Nothing to restart.</li>
       <li>Claude can make a session stricter, never looser. Loosening is yours: here, or <code>! lfg prefs set &lt;id&gt; &lt;value&gt; --by-user</code> in Claude Code.</li></ul>
       <p class="muted small">Your defaults are written to <code>${esc(P.file)}</code>, which your CLAUDE.md reads.</p></div>`;
 };
+const TALK = "How Claude talks to you";
+/* How Claude talks to you: each rule on its own, on or off, in the exact words Claude gets, which you can change. */
+PAGES.talk = async () => {
+  const [P, unlocked] = await Promise.all([api("prefs"), isUnlocked()]);
+  const rules = P.catalog.filter(p => p.group === TALK), dis = unlocked ? "" : "disabled";
+  const card = p => {
+    const v = P.defaults[p.id];
+    return `<div class="box pad pref talk-rule" data-talk="${esc(p.id)}"><div class="row"><b class="grow">${esc(p.title)}</b>${p.custom ? '<span class="tag">yours</span>' : p.lfg_text ? '<span class="tag warn">your wording</span>' : ""}<label class="row"><input type="checkbox" data-pref='${esc(JSON.stringify([p.id, ""]))}' ${v ? "checked" : ""} ${dis}> <span>${v ? "On" : "Off"}</span></label></div>
+      ${p.about ? `<p class="small muted">${esc(p.about)}</p>` : ""}
+      <div class="k">What Claude is told when it's on</div>
+      <textarea class="editor small" data-talk-text ${dis}>${esc(p.text || "")}</textarea>
+      <div class="set-actions"><button class="btn small primary" data-talk-save ${dis}>Save wording</button>${p.lfg_text ? `<button class="btn small" data-talk-reset ${dis} title="${esc(p.lfg_text)}">Put back LFG's wording</button>` : ""}${p.custom ? `<a href="#" class="small" data-pref-rm="${esc(p.id)}">Remove</a>` : ""}<span class="save-msg"></span></div></div>`;
+  };
+  return `${head("How Claude talks", "How Claude writes to you: answers, explanations, things to paste, PR comments. Each rule is on or off for every new session, in the exact words Claude gets, and you can change those words. Sessions → Rules turns one off for a single session.")}
+    ${unlocked ? "" : lockedNote("change these here")}
+    <div class="pref-grid talk-grid">${rules.filter(p => p.kind === "switch").map(card).join("")}</div>
+    ${prefControls({ ...P, catalog: rules.filter(p => p.kind !== "switch") }, P.defaults, P.defaults, null, unlocked)}
+    ${section("Add a rule of your own", unlocked ? `<div class="box pad"><input type="text" id="talk-title" class="wide" placeholder="A short name, e.g. Say which environment first"><textarea class="editor small mt" id="talk-text" placeholder="What Claude is told, e.g. When a reply is about a deploy, name the environment in its first sentence."></textarea><div class="set-actions"><button class="btn small primary" id="talk-add">Add rule</button><span class="save-msg" id="talk-msg"></span></div></div>` : lockedNote("add rules here"))}
+    <p class="muted small">These rules go into <code>${esc(P.file)}</code> with your other preferences, which your CLAUDE.md reads.</p>`;
+};
+function wireTalk(root) {
+  wirePrefs(root, softRoute);
+  $$("[data-talk]", root).forEach(c => {
+    const id = c.dataset.talk, msg = $(".save-msg", c), put = async text => {
+      const r = await save("pref_text", { id, text });
+      saidMsg(msg, r, text ? "Saved. New sessions get it; open ones with your next message." : "LFG's wording is back.");
+      if (r.ok) setTimeout(softRoute, 700);
+    };
+    const s = $("[data-talk-save]", c), r = $("[data-talk-reset]", c);
+    if (s) s.onclick = () => put($("[data-talk-text]", c).value);
+    if (r) r.onclick = () => put("");
+  });
+  const add = $("#talk-add", root);
+  if (add) add.onclick = async () => {
+    const title = $("#talk-title").value.trim(), text = $("#talk-text").value.trim();
+    if (!title || !text) return saidMsg($("#talk-msg"), { ok: false, why: "give it a name and what Claude is told" });
+    const id = "talk-" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+    const r = await save("pref_add", { id, group: TALK, title, text });
+    saidMsg($("#talk-msg"), r, "Added.");
+    if (r.ok) setTimeout(softRoute, 600);
+  };
+}
 function wirePrefsPage(root) {
   const b = $("#prefs-install", root);
   if (b) b.onclick = async () => { b.disabled = true; const r = await save("prefs_install", {}); if (!r.ok) { b.disabled = false; return alertMsg(b, r); } softRoute(); };
@@ -2625,13 +2668,14 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["prefs", "usage", "skills", "integrations", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "usage", "skills", "integrations", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
   sessions: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
   environment: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   prefs: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
+  talk: "M4 5h16v10H9l-5 4zM8 9h8M8 12h5",
   runs: "M5 4l14 8-14 8z",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
@@ -2729,6 +2773,7 @@ async function route(opts) {
   if (key === "sessions") wireSessions(view);
   if (key === "knowledge") wireKnowledge(view);
   if (key === "prefs") wirePrefsPage(view);
+  if (key === "talk") wireTalk(view);
   if (key === "environment") wireEnvironment(view);
   if (key === "checks") { $$('[data-tabs="checks"] .tab', view).forEach(t => t.addEventListener("click", () => setTimeout(() => wireSonar(view), 0))); wireSonar(view); }
   if (key === "usage") { wireUsage(view); loadHeadroom(); }

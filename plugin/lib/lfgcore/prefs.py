@@ -166,6 +166,27 @@ BUILTIN = [
          "timeout), never the ID alone. Look the title up if you don't have it."),
         ("style_us_spelling", "Use US spelling", "US spelling in replies and in code.",
          "Use US spelling, in code and prose."),
+        ("style_shortest", "Shortest version that is still exact",
+         "Replies use the fewest words that stay exact: no hedging, restating or background you already have, and no "
+         "qualifying what needs no qualifier.",
+         "Use the fewest words that keep full clarity and zero ambiguity; never trade precision for word count. Cut "
+         "hedging, restatement, background I already have and reasoning I didn't ask for. Don't qualify a claim that "
+         "needs no qualifier."),
+        ("style_command_labels", "Label every command and link",
+         "Each command or link to open says in its PASTE START line where it runs, the strongest thing it does (read "
+         "only, writes files, GitHub, installs, a cloud environment) and one plain sentence of what changes.",
+         "Every command and link I'm handed carries, in its PASTE START line, where it runs (\"Terminal: <folder>\" or "
+         "\"any folder\", \"Browser: <site>\"), the strongest thing it does (READ ONLY, WRITES, DELETES, GITHUB, "
+         "INSTALLS, or the cloud and environment it changes), and one plain sentence of at most 20 words saying what "
+         "changes for me. Say when it can't be undone."),
+        ("style_pr_comments", "Write PR comments in my voice",
+         "Review comments Claude drafts for someone else's PR sound like you: one or two short sentences, a question "
+         "when the author has to answer, hedged only when truly unsure, no exclamation marks or corporate phrasing.",
+         "Draft PR review comments in my voice: one or two short sentences, no preamble or sign-off; lowercase "
+         "sentence starts are fine. Ask a question when the author has to answer (\"what about using X here?\"), not a "
+         "demand. Hedge only real uncertainty (\"prob\", \"i think\", \"just calling it out\"); verify what can be "
+         "checked instead of hedging. Prefix small or subjective ones with `nitpick:`. Backtick identifiers and "
+         "files. Say when the same issue is elsewhere too. No exclamation marks, emoji or corporate hedge-speak."),
         ("style_tables", "Use tables only to compare",
          "A table only when several things are compared across the same points.",
          "Use a table only to compare several things across the same dimensions; never for two items or one "
@@ -290,7 +311,8 @@ def _migrate(vals):
 
 def load():
     d = C.read_json(_state_path(), {}) or {}
-    return {"catalog": list(d.get("catalog") or []), "defaults": _migrate(dict(d.get("defaults") or {})),
+    return {"catalog": list(d.get("catalog") or []), "texts": dict(d.get("texts") or {}),
+            "defaults": _migrate(dict(d.get("defaults") or {})),
             "sessions": {k: _migrate(dict(v)) for k, v in (d.get("sessions") or {}).items()}}
 
 
@@ -300,8 +322,39 @@ def _save(d):
 
 
 def catalog(d=None):
+    """Every rule. A built-in instruction you reworded carries your wording, with LFG's kept as `lfg_text`."""
     d = d or load()
-    return BUILTIN + [p for p in d["catalog"] if p.get("id") not in {b["id"] for b in BUILTIN}]
+    texts = d.get("texts") or {}
+    own = [dict(p, text=texts[p["id"]], lfg_text=p["text"]) if p["id"] in texts else p for p in BUILTIN]
+    return own + [p for p in d["catalog"] if p.get("id") not in {b["id"] for b in BUILTIN}]
+
+
+def set_text(pid, text):
+    """Your wording for a "How Claude talks to you" rule: what Claude is told when it's on. Empty puts LFG's back.
+    Your own rules are reworded in place."""
+    p = _pref(pid)
+    if p["group"] != STYLE or p["kind"] != "switch":
+        raise ValueError("only the switches under \"%s\" can be reworded" % STYLE)
+    text = str(text or "").strip()
+    if len(text) > 4000:
+        raise ValueError("keep a rule under 4000 characters")
+    d = load()
+    if p.get("custom"):
+        if not text:
+            raise ValueError("a rule of your own needs some wording")
+        for x in d["catalog"]:
+            if x.get("id") == pid:
+                x["text"] = text
+    else:
+        texts = dict(d.get("texts") or {})
+        if text and text != next(b["text"] for b in BUILTIN if b["id"] == pid):
+            texts[pid] = text
+        else:
+            texts.pop(pid, None)
+        d["texts"] = texts
+    _save(d)
+    write_defaults_file(d)
+    return {"id": pid, "text": text}
 
 
 def _pref(pid, d=None):
