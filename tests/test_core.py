@@ -2573,6 +2573,31 @@ class GuardPrefsTest(unittest.TestCase):
         self.assertIsNotNone(self.check(cmd))
         self.assertIn("Never open a pull request", self.P.session_note(self.SID))
 
+    def test_editing_the_title_and_description_of_your_own_open_pr(self):
+        cmd = "gh pr edit 3 --title 'Fix the export timeout'"
+        self.assertEqual(self.P.effective()["edit_pr"], False)
+        self.assertEqual(self.check(cmd)[0], "2")
+        with self.assertRaises(PermissionError):
+            self.P.set_pref("edit_pr", True, by_agent=True)
+        self.P.set_pref("edit_pr", True)
+        with mock.patch.object(guard, "_own_open_pr", return_value=True) as own:
+            for ok in (cmd, "gh pr edit --body 'new text'", "gh pr edit 3 -t x -b y", "gh pr edit 3 --body-file b.md",
+                       "gh pr edit --title=x -R o/r", "cd sub && gh pr edit 3 -F b.md"):
+                self.assertIsNone(self.check(ok), ok)
+            self.assertEqual(own.call_args_list[0][0], ("3", []))
+            self.assertEqual(own.call_args_list[4][0], (None, ["-R", "o/r"]))  # this branch's PR, in that repo
+            for other in ("gh pr edit 3 --add-reviewer bob", "gh pr edit 3 --title x --base main",
+                          "gh pr edit 3 --add-label bug", "gh pr edit 3 --title x --remove-label bug",
+                          "gh pr edit 3 --milestone v2", "gh pr edit 3", "gh pr edit 3 --title", "gh pr edit 3 4 -t x",
+                          "gh pr comment 3 -b x", "gh pr close 3"):
+                self.assertIsNotNone(self.check(other), other)
+        with mock.patch.object(guard, "_own_open_pr", return_value=False):  # someone else's, or closed
+            self.assertIsNotNone(self.check(cmd))
+        line = "You may change the title and description of an open pull request I opened"
+        self.assertIn(line, self.P.render(self.P.effective(), self.P.load()))  # the line in lfg-preferences.md
+        self.P.set_pref("edit_pr", False, session=self.SID, by_agent=True)  # stricter is fine
+        self.assertNotIn(line, self.P.render(self.P.effective(self.SID), self.P.load()))
+
     def test_the_hook_reads_your_preferences_for_this_session(self):
         from lfgcore import hooks as H
         data = {"session_id": self.SID, "tool_name": "Bash", "tool_input": {"command": "git reset --hard"}}
@@ -2587,7 +2612,7 @@ class GuardPrefsTest(unittest.TestCase):
     def test_the_preferences_page_and_list_show_them(self):
         page = ui.api("prefs", {})
         ids = [p["id"] for p in page["catalog"]]
-        for pid in ("git_ff_sync", "gh_default_branch", "rule_1", "rule_4", "rule_13", "style_answer_first",
+        for pid in ("git_ff_sync", "gh_default_branch", "edit_pr", "rule_1", "rule_4", "rule_13", "style_answer_first",
                     "style_point_words"):
             self.assertIn(pid, ids)
         self.assertTrue(all(p["enforce"] for p in page["catalog"] if p["id"].startswith("rule_")))

@@ -532,6 +532,10 @@ def _gh(argv):
         return
     if (top, sub) == ("pr", "create") and _CTX["values"].get("open_pr") in ("ask", "auto"):
         return
+    if (top, sub) == ("pr", "edit") and _pref_on("edit_pr"):
+        target = _pr_edit_text_only(args[2:])
+        if target is not False and _own_open_pr(*target):
+            return
     if (top, sub) in GH_ALLOW or (top, None) in GH_ALLOW:
         return
     if (top, sub) == ("repo", "edit") and _pref_on("gh_default_branch"):
@@ -539,6 +543,46 @@ def _gh(argv):
         if repo is not False and _own_repo(repo):
             return
     _block("2", "`gh %s%s` is not on the read-only allowlist" % (top, " " + sub if sub else ""))
+
+
+PR_EDIT_TEXT = {"-t", "--title", "-b", "--body", "-F", "--body-file"}
+
+
+def _pr_edit_text_only(rest):
+    """(PR selector or None, ["-R", repo] or []) if `gh pr edit` changes only the title or description, else False."""
+    sel, repo, edits, i = None, [], 0, 0
+    while i < len(rest):
+        a = rest[i]
+        flag, eq, val = a.partition("=")
+        if flag in PR_EDIT_TEXT or flag in ("-R", "--repo"):
+            if not eq:
+                if i + 1 >= len(rest):
+                    return False
+                val, i = rest[i + 1], i + 1
+            if flag in ("-R", "--repo"):
+                repo = ["-R", val]
+            else:
+                edits += 1
+        elif a.startswith("-") or sel is not None:
+            return False  # any other flag (reviewers, base, labels, ...) or a second PR
+        else:
+            sel = a
+        i += 1
+    return (sel, repo) if edits else False
+
+
+def _own_open_pr(sel, repo):
+    """True if the PR is open and your gh login opened it (asked of GitHub). Only runs when edit_pr is on."""
+    import json
+    import subprocess
+    try:
+        run = lambda *a: subprocess.run(["gh", *a], cwd=_CTX["cwd"] or None, capture_output=True,  # noqa: E731
+                                        text=True, timeout=20).stdout.strip()
+        pr = json.loads(run("pr", "view", *([sel] if sel else []), *repo, "--json", "state,author") or "{}")
+        me = run("api", "user", "-q", ".login")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return pr.get("state") == "OPEN" and bool(me) and (pr.get("author") or {}).get("login") == me
 
 
 def _default_branch_only(rest):
@@ -1004,6 +1048,7 @@ SELFTEST = [
     ("Bash", {"command": "lfg review run 12"}, True),
     ("Bash", {"command": "lfg sessions skill 0000 /lfg:secure"}, True),
     ("Bash", {"command": "lfg sessions list --find x"}, False),
+    ("Bash", {"command": "gh pr edit 12 --title x"}, True),
     ("Bash", {"command": "lfg update apply"}, True),
     ("Bash", {"command": "lfg update fix"}, True),
     ("Bash", {"command": "lfg update check --json"}, False),
