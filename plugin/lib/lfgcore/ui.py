@@ -482,6 +482,10 @@ def review_action(what, body):
             return R.link_session(R.ref(repo, number), body.get("id"), on=body.get("on", True) is not False)
         if what == "review_discard":
             return R.discard(repo, number, int(body.get("pass") or 0))
+        if what == "review_answer":
+            return R.answer(repo, number, body.get("pass"), str(body.get("id") or ""), body.get("answer"))
+        if what == "review_reply":
+            return R.post_reply(repo, number, str(body.get("id") or ""), body.get("body"))
         if what == "review_ask":
             return R.ask(repo, number, body.get("pass"), body.get("question"))
         if what == "review_fix":

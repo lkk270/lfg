@@ -993,8 +993,8 @@ ASK = ("Lee is talking to you about the review you did, from the LFG dashboard. 
        "conversation settles a change to the review (Lee asks for one, or you agree a finding is wrong, mis-rated or "
        "badly worded), end your reply with one ```json block {\"changes\": [{\"pr\": \"owner/repo#n\", \"id\": "
        "\"1.2\", and only the fields that change: \"title\", \"severity\", \"issue\", \"fix\", \"body\", \"reply\", "
-       "\"status\" (\"keep\" or \"drop\")}], \"summary\": \"only if the summary changes\"}. LFG applies it. Never save, "
-       "post or run anything that writes.\n\nThe review as it stands: %s\n\n%s")
+       "\"status\" (\"keep\" or \"drop\")}], \"summary\": \"only if the summary changes\"}. LFG applies it. "
+       "Never save, post or run anything that writes.\n\nThe review as it stands: %s\n\n%s")
 
 
 CHANGE_FIELDS = {"title": 200, "issue": 1000, "fix": 1000, "body": MAX_BODY, "reply": 4000}

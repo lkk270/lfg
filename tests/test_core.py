@@ -2930,6 +2930,74 @@ class ReviewTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
         return run
 
+    def claude_says(self, text, asked=None):
+        def run(cmd, **kw):
+            if asked is not None:
+                asked.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": text}), "")
+        return run
+
+    def test_talking_to_the_review_changes_it_and_says_what_changed(self):
+        self.saved(self.finding(), self.finding(line=9))
+        reply = ("You're right, the caller checks it.\n\n```json\n%s\n```" % json.dumps(
+            {"changes": [{"id": "1.2", "status": "drop"}, {"id": "1.1", "severity": "minor", "body": "softer"},
+                         {"id": "9.9", "body": "no such finding"}], "summary": "Fine to merge."}))
+        asked = []
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=self.claude_says(reply, asked)):
+            out = R.ask("o/r", 7, 1, "1.2 is handled in the caller")
+        self.assertEqual(out["a"], "You're right, the caller checks it.")  # the change block isn't shown
+        self.assertEqual(out["changed"], ["1.2: dropped", "1.1: comment, severity", "summary"])
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["findings"][0]["severity"], p["findings"][0]["body"], p["findings"][1]["status"]),
+                         ("minor", "softer", "drop"))
+        self.assertEqual((p["summary"], p["chat"][0]["changed"][0]), ("Fine to merge.", "1.2: dropped"))
+        self.assertIn('"id": "1.1"', asked[0][2])  # Claude sees the review as it stands
+        self.assertIn("--tools", asked[0])  # an imported review has no session: no tools
+
+    def test_a_posted_comment_is_never_changed_by_talking(self):
+        self.saved()
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["comment_id"] = 5
+        R.store(rec)
+        self.assertEqual(R.apply_changes("o/r", 7, 1, {"changes": [{"id": "1.1", "body": "new"}]}), [])
+
+    def test_an_answered_question_goes_to_the_conversation(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()],
+                              "questions": [{"ask": "is the old endpoint still used?", "why": "1.1 depends on it"}]})
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["questions"][0]["id"], "q1")
+        asked = []
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=self.claude_says("Then 1.1 stands.", asked)):
+            R.answer("o/r", 7, 1, "q1", "yes, by the mobile app")
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual(p["questions"][0]["answer"], "yes, by the mobile app")
+        self.assertIn("My answer: yes, by the mobile app", asked[0][2])
+        with self.assertRaises(R.ReviewError):
+            R.answer("o/r", 7, 1, "q9", "x")
+
+    def test_someone_elses_comment_on_your_pr_becomes_a_finding_with_a_reply(self):
+        rb = {"who": "coderabbitai", "url": "https://github.com/o/r/pull/7#discussion_r9", "comment_id": 9,
+              "kind": "inline", "bot": True}
+        self.saved(self.finding(raised_by=rb, worth="skip", reply="handled in the caller"), author="me")
+        f = R.load("o/r", 7)["passes"][0]["findings"][0]
+        self.assertEqual((f["raised_by"]["who"], f["worth"], f["reply"]),
+                         ("coderabbitai", "skip", "handled in the caller"))
+        with self.assertRaises(R.ReviewError):
+            self.saved(self.finding(raised_by=rb, worth="always"))
+        posted = []
+
+        def gh(args, **kw):
+            posted.append(args)
+            return {"html_url": "https://github.com/o/r/pull/7#discussion_r10"}
+        with mock.patch.object(R, "gh_json", side_effect=gh):
+            R.post_reply("o/r", 7, "1.1", "handled in `load`, see line 40")
+        self.assertIn("repos/o/r/pulls/7/comments/9/replies", posted[0])  # in its thread
+        self.assertIn("body=handled in `load`, see line 40", posted[0])
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["findings"][0]["replied"]["url"],
+                         "https://github.com/o/r/pull/7#discussion_r10")
+
     def saved(self, *findings, author="dev"):
         with mock.patch.object(R, "pr_meta", return_value=dict(self.META, author=author)):
             return R.save("o/r", 7, {"summary": "s", "findings": list(findings) or [self.finding()]})
@@ -3161,8 +3229,13 @@ class ReviewTest(unittest.TestCase):
             f.write(json.dumps({"type": "system", "subtype": "init", "session_id": sid}))
         C.write_json(R.job_path("o/r", 7), {"status": "done", "started": "2000-01-01T00:00:00", "cwd": "/w",
                                              "log": log})
-        with self.assertRaises(R.ReviewError):
-            R.ask("o/r", 7, 1, "why?")  # nothing to ask yet
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=self.claude_says("From the review alone.")) as run:
+            R.ask("o/r", 7, 1, "why?")  # no session found yet: Claude answers from the review, with no tools
+        self.assertNotIn("--resume", run.call_args[0][0])
+        R.discard("o/r", 7, 1)
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
         p = R.backfill("o/r", 7)["passes"][-1]
         self.assertEqual((p["run"]["session_id"], p["run"]["cwd"]), (sid, "/w"))
         answer = subprocess.CompletedProcess([], 0, stdout=json.dumps({"result": "Because the caller passes None."}))
