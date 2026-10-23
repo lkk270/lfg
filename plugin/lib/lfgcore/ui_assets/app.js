@@ -2209,6 +2209,7 @@ PAGES.prs = async arg => {
   state.prMethod = d.method;
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
   state.prPick = state.prPick || new Set();
+  state.prReviewed = new Set([...(d.queue || []), ...(d.mine || []), ...(d.reviews || []), ...(d.ticket_more || [])].filter(x => x.passes).map(prRef));
   state.prTicket = Object.fromEntries([...(d.queue || []), ...(d.mine || []), ...(d.reviews || [])].filter(x => x.ticket).map(x => [prRef(x), x.ticket]));
   state.ticketTitles = d.ticket_titles || {};
   const qcols = [
@@ -2297,7 +2298,7 @@ function ticketSection(d, unlocked) {
   }
   const groups = [...by].sort((a, b) => b[1].length - a[1].length || b[0].localeCompare(a[0])).map(([t, prs]) => `<details class="item" ${prs.length > 1 ? "open" : ""}><summary><span class="grow"><b class="mono">${esc(t)}</b> ${esc((state.ticketTitles || {})[t] || "")} <span class="muted small">${plural(prs.length, "open PR")}</span></span>${prs.some(x => x.passes) ? `<a class="small" href="#prs/ticket/${encodeURIComponent(t)}" title="Every review of this ticket's PRs on one page">Open reviews</a>` : ""}</summary>
     <ul class="list">${prs.map(x => `<li><input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} aria-label="Pick ${esc(prRef(x))}"><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.passes ? ` · ${plural(x.passes, "review")}` : ""}</div>${x.job ? `<div class="meta">${jobLine(x.job)}</div>` : ""}</div><a class="small" href="${esc(prHash(x))}">Open</a></li>`).join("")}</ul>
-    <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button><button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div></details>`).join("");
+    <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button>${anyReviewed(prs.map(prRef)) ? `<button class="btn small" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' data-fresh="1" ${unlocked ? "" : "disabled"} title="${FULL_TITLE}">${prs.length > 1 ? "Full review of all" : "Full review"}</button>` : ""}<button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div></details>`).join("");
   return section("By Linear ticket", `${groups ? `<div class="box">${groups}</div>` : ""}
     <div class="row mt"><input type="text" id="tk-id" class="mono" placeholder="ATO-4223" ${unlocked ? "" : "disabled"}><button class="btn small" id="tk-go" ${unlocked ? "" : "disabled"}>Find the ticket's PRs</button></div>`,
     "open PRs whose branch, title or description names a Linear ticket, from every repo");
@@ -2325,6 +2326,10 @@ async function ticketFind(t) {
   };
 }
 /* Pick several PRs on the list (checkboxes) and review them together in one session. */
+/* Reviewing several PRs together: a PR reviewed before gets a re-review, unless you ask for a full one. The full option
+   shows only when one of them has been reviewed. */
+const FULL_TITLE = "Review every PR again from scratch, ignoring earlier reviews";
+const anyReviewed = refs => refs.some(r => (state.prReviewed || new Set()).has(r));
 function pickBar() {
   const bar = $("#pr-pickbar");
   if (!bar) return;
@@ -2332,17 +2337,19 @@ function pickBar() {
   bar.hidden = picked.length < 1;
   bar.innerHTML = `<span><b>${plural(picked.length, "PR")} picked:</b> <span class="mono small">${esc(picked.join(", "))}</span></span>
     <button class="btn small primary" id="pr-together" ${picked.length < 2 ? "disabled" : ""} title="One Claude session reviews them as one change: each gets its own review, and it checks they agree with each other">Review together</button>
-    <button class="btn small" id="pr-picklink" ${picked.length < 2 ? "disabled" : ""} title="Link their reviews without running anything">Link them</button>
+    ${anyReviewed(picked) ? `<button class="btn small" id="pr-together-full" ${picked.length < 2 ? "disabled" : ""} title="${FULL_TITLE}">Full review together</button>` : ""} <button class="btn small" id="pr-picklink" ${picked.length < 2 ? "disabled" : ""} title="Link their reviews without running anything">Link them</button>
     <button class="btn small" id="pr-pickclear">Clear</button>`;
   $("#pr-pickclear").onclick = () => { state.prPick.clear(); $$("[data-pr-pick]").forEach(c => (c.checked = false)); pickBar(); };
-  $("#pr-together").onclick = async e => {
-    const b = e.target, [first, ...rest] = picked;
+  const together = async e => {
+    const b = e.target, [first, ...rest] = picked, fresh = b.id === "pr-together-full";
     b.disabled = true; b.textContent = "Starting…";
     const ts = [...new Set(picked.map(x => (state.prTicket || {})[x]))];
-    const r = await save("review_run", { pr: first, with: rest, ticket: ts.length === 1 && ts[0] ? ts[0] : undefined });
+    const r = await save("review_run", { pr: first, with: rest, fresh, ticket: ts.length === 1 && ts[0] ? ts[0] : undefined });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     state.prPick.clear(); setTimeout(softRoute, 1000);
   };
+  $("#pr-together").onclick = together;
+  if ($("#pr-together-full")) $("#pr-together-full").onclick = together;
   $("#pr-picklink").onclick = async e => {
     const [first, ...rest] = picked;
     for (const x of rest) { const r = await save("review_link", { pr: first, other: x }); if (!r.ok) return alertMsg(e.target, r); }
@@ -2530,7 +2537,7 @@ async function prDetail(arg) {
   const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
   const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
-    <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">Review together with linked PRs</button>` : ""}</div>`, "reviewed together, or linked by you; they can be in any repo");
+    <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">Review together with linked PRs</button>${rec || d.linked.some(x => x.reviewed) ? `<button class="btn small" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' data-fresh="1" ${can ? "" : "disabled"} title="${FULL_TITLE}">Full review together</button>` : ""}` : ""}</div>`, "reviewed together, or linked by you; they can be in any repo");
   if (!rec) return `${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${jobBox}${actions}${linkedBox}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
@@ -2665,7 +2672,7 @@ function wirePrs(root) {
   $$("[data-ticket-run]", root).forEach(b => b.onclick = async () => {
     const [t, refs] = JSON.parse(b.dataset.ticketRun);
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t });
+    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t, fresh: b.dataset.fresh === "1" });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     setTimeout(softRoute, 1000);
   });
@@ -2676,7 +2683,7 @@ function wirePrs(root) {
   $$("[data-pr-together]", root).forEach(b => b.onclick = async () => {
     const [pr, others] = JSON.parse(b.dataset.prTogether);
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr, with: others });
+    const r = await save("review_run", { pr, with: others, fresh: b.dataset.fresh === "1" });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     setTimeout(softRoute, 1000);
   });
