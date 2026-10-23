@@ -70,6 +70,7 @@ code { font-size: .86em; background: var(--code-bg); border-radius: 4px; padding
 .brand:hover { background: var(--hover); }
 .switch { position: relative; display: flex; align-items: center; min-width: 0; flex: 1; border-radius: 6px; }
 .switch:hover { background: var(--hover); }
+.switch[hidden] { display: none; }
 .switch select { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; font: inherit; color: var(--text);
   background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%239b9a97' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") right 6px center / 12px no-repeat;
   border: 0; box-shadow: none; padding: 4px 24px 4px 6px; cursor: pointer; text-overflow: ellipsis; max-width: none; height: auto; }

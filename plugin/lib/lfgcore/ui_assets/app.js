@@ -3038,7 +3038,13 @@ async function init() {
   state.repos = r.repos || [];
   if (!state.repos.some(x => x.id === state.repo)) state.repo = state.repos[0] ? state.repos[0].id : "";
   $("#repo").innerHTML = state.repos.map(x => `<option value="${esc(x.id)}" title="${esc(x.root || x.id)}" ${x.id === state.repo ? "selected" : ""}>${esc(x.name || x.id)}</option>`).join("") || "<option>no projects yet</option>";
-  $("#repo").onchange = async () => { state.repo = $("#repo").value; localStorage.setItem("lfg.repo", state.repo); await loadBranches(); refresh(); };
+  $("#repo").onchange = async () => {
+    state.repo = $("#repo").value; localStorage.setItem("lfg.repo", state.repo);
+    await loadBranches();
+    // a page about one thing in the old repo (a PR, a run, a doc) goes to that section's list in the new one
+    const [page, ...rest] = location.hash.slice(1).split("/");
+    if (rest.length && rest.join("")) location.hash = "#" + page; else refresh();
+  };
   $("#refresh").onclick = refresh;
   checkUpdate();
   $("#branch").onchange = () => { state.branch = $("#branch").value; localStorage.setItem(branchPref(), state.branch); refresh(); };
@@ -3118,7 +3124,10 @@ async function loadBranches() {
   const opt = (v, label) => `<option value="${esc(v)}" ${v === state.branch ? "selected" : ""}>${esc(label)}</option>`;
   sel.innerHTML = opt("", "All branches") + B.branches.map(b => opt(b.name, b.name + (b.state === "current" ? " (checked out)" : b.state === "deleted" ? " (deleted)" : ""))).join("") + (B.unrecorded ? opt("-", "Older runs (branch unknown)") : "");
   sel.disabled = !state.repo;
-  sel.hidden = !B.branches.some(b => b.runs) && !B.unrecorded;  // nothing to filter: no LFG runs on any branch yet
+  // a filter needs two things to choose between: hide it (icon too) until runs exist on two branches
+  const choices = B.branches.filter(b => b.runs).length + (B.unrecorded ? 1 : 0);
+  sel.closest("label").hidden = choices < 2;
+  if (choices < 2 && state.branch) { state.branch = ""; localStorage.removeItem(branchPref()); }
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
 /* "Update ready": newer LFG in your fork or the original project. Checked on load, every minute and when the tab
