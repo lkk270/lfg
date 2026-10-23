@@ -2642,16 +2642,16 @@ const typing = () => '<div class="msg claude"><div class="who">Claude</div><div 
 function changedChips(changed, pr) {
   if (!(changed || []).length) return "";
   const word = { mergeable: "Mergeable", almost: "Almost mergeable", not: "Not mergeable" };
-  return `<div class="msg-changes"><span class="small muted">Claude changed:</span>${changed.map(c => {
+  return `<div class="msg-changes"><span class="small muted" title="What Claude's reply changed in the review. Findings open on the page when clicked">Claude changed:</span>${changed.map(c => {
     const m = /^(?:\S+#\d+ )?(\d+\.\d+): (.*)$/.exec(c);
     if (m && pr) {
       const what = m[2] === "dropped" ? "dropped: not needed" : m[2] === "kept" ? "kept" : `${m[2]} reworded`;
-      return `<a href="#" class="chip" data-chat-goto='${esc(JSON.stringify([pr, m[1]]))}' title="Show finding ${esc(m[1])}">${esc(m[1])} ${esc(what)}</a>`;
+      return `<a href="#" class="chip chip-link" data-chat-goto='${esc(JSON.stringify([pr, m[1]]))}' title="Click to show finding ${esc(m[1])} on the page">${esc(m[1])} ${esc(what)}<span class="chip-go" aria-hidden="true">↗</span></a>`;
     }
     const v = /^verdict (\w+)$/.exec(c), sc = /^score (\d+)$/.exec(c);
     const label = v ? `Now ${word[v[1]] || v[1]}` : sc ? `Score now ${sc[1]}` : c === "verdict" ? "Verdict" : c === "summary" ? "Summary updated" : c;
     const tone = v ? { mergeable: "c-green", almost: "c-orange", not: "c-red" }[v[1]] || "" : "";
-    return `<span class="chip ${tone}">${esc(label)}</span>`;
+    return `<span class="chip chip-fact ${tone}" title="What this reply changed in the review">${esc(label)}</span>`;
   }).join("")}</div>`;
 }
 /* Passing on someone else's comment on your PR: the reply Claude drafted, to edit and post in their thread. */
