@@ -821,7 +821,17 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .diffstat .bar { display: inline-flex; gap: 1px; margin-left: 2px; }
 .diffstat .bar i { width: 8px; height: 8px; border-radius: 1px; background: var(--line-2); }
 .diffstat .bar i.add { background: var(--green); } .diffstat .bar i.del { background: var(--red); }
-#notices { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; max-width: 380px; }
+#notices { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: 380px; max-width: calc(100vw - 32px); }
+#notices:empty { display: none; }
+.notices-h { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 12px; border-radius: 10px; background: var(--page);
+  border: 1px solid var(--line-2); box-shadow: 0 4px 16px rgba(0, 0, 0, .18); font-size: 13px; }
+.notices-list { display: flex; flex-direction: column; gap: 8px; }
+.notices-list.open { max-height: 60vh; overflow-y: auto; padding-right: 2px; }
+.notices-more { font: inherit; font-size: 12.5px; color: var(--blue); background: var(--page); border: 1px solid var(--line-2);
+  border-radius: 8px; padding: 6px 10px; cursor: pointer; box-shadow: 0 4px 16px rgba(0, 0, 0, .12); }
+.notices-more:hover { background: var(--hover); }
+.notices-ask { align-self: flex-end; }
+.notice .faint { color: var(--faint); margin-top: 2px; }
 .notice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 8px; background: var(--page);
   border: 1px solid var(--line-2); box-shadow: 0 4px 16px rgba(0, 0, 0, .18); }
 .notice .dot { margin-top: 6px; }
@@ -972,7 +982,8 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 #drawer .run-form select { width: 100%; max-width: none; }
 #run-about { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin-top: 6px; }
 .run-form [hidden] { display: none; }
-.merge-cell { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap; }
+.merge-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; max-width: 220px; }
+.merge-cell > * { white-space: nowrap; }
 .merge-cell .score-mini, .merge-cell .trend { margin-left: 0; }
 .approved-anyway { display: flex; align-items: center; gap: 8px; margin: -6px 0 14px; font-weight: 500; }
 /* PR reviews: Pull requests | Scores */
@@ -1008,3 +1019,4 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
   padding: 8px 10px; font-size: 12.5px; box-shadow: var(--shadow); z-index: 5; max-width: 320px; color: var(--text); }
 .chart-tip .ic-t { font-weight: 600; margin-bottom: 3px; }
 .chart-tip[hidden] { display: none; }
+.done-toggle { gap: 6px; margin: 0 0 8px; color: var(--muted); cursor: pointer; width: fit-content; }
