@@ -456,6 +456,7 @@ details.sess-old { margin: 0 0 8px 22px; } details.sess-old > summary { font-siz
 input.wide { width: 100%; }
 #update-banner { margin: 10px 14px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #update-banner details.inline { display: inline-block; margin: 0; }
+#update-banner .dot { margin-right: 6px; }  /* inside the message, so the banner's gap doesn't space it */
 #update-banner details.inline > summary { margin: 0; line-height: inherit; }
 #update-banner .btn { align-self: center; }
 #update-banner details.inline ul { margin: 6px 0 0 18px; }
