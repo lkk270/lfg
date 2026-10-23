@@ -1097,6 +1097,13 @@ def forget(key):
         _CACHE.pop(key, None)
 
 
+def stale(key):
+    """Mark a cached in_background value out of date: the next read starts a fresh run but still gets this one."""
+    with _CLOCK:
+        if key in _CACHE:
+            _CACHE[key] = (0, _CACHE[key][1])
+
+
 def remember(key, val):
     """Put a value just worked out into the in_background cache, so the next read shows it at once."""
     with _CLOCK:
