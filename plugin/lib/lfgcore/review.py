@@ -1242,6 +1242,11 @@ def fix_run(repo, number):
         j.update(status="failed", ended=C.now_iso(), why=str(e))
     C.write_json(jp, j)
     C.audit("review_fix", {"pr": ref(repo, number), "status": j["status"]})
+    done = j["status"] == "done"
+    n = sum(1 for f in need(repo, number)["passes"][-1]["findings"] if (f.get("fixed") or {}).get("commit"))
+    notify(ref(repo, number), "Fix %s: %s" % ("pushed" if done else "failed", rec.get("title") or ref(repo, number)),
+           "%d finding%s fixed and pushed" % (n, "" if n == 1 else "s") if done else j.get("why") or "see the log",
+           ok=done)
     return j
 
 

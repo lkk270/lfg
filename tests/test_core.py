@@ -3005,7 +3005,8 @@ class ReviewTest(unittest.TestCase):
         seen = {}
 
         def run(cmd, cwd=None, stdout=None, **kw):
-            seen.update(cmd=cmd, cwd=cwd)
+            if cmd[0] == "claude":  # not the notification that follows
+                seen.update(cmd=cmd, cwd=cwd)
             return self.fake_claude(events)(cmd, cwd=cwd, stdout=stdout)
         with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
                 mock.patch.object(R, "fix_checkout", return_value="/tmp/wt") as co, \
@@ -3024,6 +3025,8 @@ class ReviewTest(unittest.TestCase):
         self.assertNotIn("fixed", p["findings"][1])
         self.assertEqual((p["fix"]["commits"], p["fix"]["skipped"][0]["id"]), ([sha], "1.2"))
         self.assertEqual([f["id"] for f in R.to_fix(R.load("o/r", 7))], ["1.2"])  # the skipped one can be tried again
+        last = C.read_json(R.notices_path())["items"][-1]
+        self.assertEqual((last["title"], last["body"]), ("Fix pushed: Add thing", "1 finding fixed and pushed"))
 
     def test_a_fix_that_cannot_get_a_clean_checkout_says_why(self):
         self.saved(author="me")
