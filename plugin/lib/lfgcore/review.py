@@ -7,6 +7,7 @@ so a re-review can tell which ones were fixed, answered or ignored.
 
 Posting (`lfg review post`) writes to GitHub, so the guard keeps it for the user (terminal or dashboard)."""
 import glob
+import hashlib
 import json
 import os
 import re
@@ -936,6 +937,258 @@ def ask(repo, number, n, question):
     return {"q": q, "a": text}
 
 
+def discuss(repo, number, fid, question):
+    """Talk one finding through before deciding on it: resumes the session that did the review when there is one, else
+    asks Claude with the finding and its code. The conversation is kept on the finding."""
+    import subprocess
+    if not str(question or "").strip():
+        raise ReviewError("say something about it, e.g. \"is this really reachable?\"")
+    if not C.which("claude"):
+        raise ReviewError("Claude Code (`claude`) is not on PATH")
+    rec = need(repo, number)
+    f = find(rec, fid)
+    p = next(x for x in rec["passes"] if f in x["findings"])
+    run_ = p.get("run") or {}
+    q = _text(question, "question", 4000)
+    said = "".join("\n\nEarlier, Lee: %s\nYou: %s" % (x["q"], x["a"]) for x in f.get("chat") or [])
+    about = DISCUSS % (fid, f.get("title") or f.get("issue") or "", f.get("file") or "the PR as a whole",
+                       f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", f.get("body") or "", said, q)
+    if run_.get("session_id"):
+        cmd = ["claude", "-p", ASK % about, "--resume", run_["session_id"], "--allowedTools",
+               ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
+    else:
+        snip = snippet(repo, number, fid)
+        code = "\n".join("%s %s" % (r["new"] or r["old"] or "", r["text"]) for r in (snip or {}).get("rows") or [])
+        cmd = ["claude", "-p", ASK % (about + ("\n\nThe code:\n" + code if code else "")), "--tools", ""]
+    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"],
+                        cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
+                        stdin=subprocess.DEVNULL)
+    try:
+        text = (json.loads(cp.stdout).get("result") or "").strip()
+    except ValueError:
+        text = ""
+    if not text:
+        raise ReviewError("Claude didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
+    rec = need(repo, number)  # read again: the answer took a while and the page may have saved meanwhile
+    find(rec, fid).setdefault("chat", []).append({"q": q, "a": text, "at": C.now_iso()})
+    store(rec)
+    return {"q": q, "a": text}
+
+
+DISCUSS = ("This is about one finding, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\nThe comment drafted "
+           "for the author: %s%s\n\nLee says: %s")
+
+
+# ---------------------------------------------------------------- code snippets
+
+SNIP_AROUND = 4
+
+
+def snippet(repo, number, fid):
+    """The code a finding points at, like GitHub shows it: the diff hunk around the line when the PR changed it (old
+    and new line numbers, added and removed lines), else the file at the reviewed commit. None for a finding with no
+    file or line. Cached per file, commit and line, so a page shows it without asking GitHub again."""
+    rec = need(repo, number)
+    f = find(rec, fid)
+    if not f.get("file") or not f.get("line"):
+        return None
+    p = next(x for x in rec["passes"] if f in x["findings"])
+    key = hashlib.sha1(("%s|%s|%s|%s|%s" % (repo, rec.get("base"), p["head_sha"], f["file"], f["line"])).encode()
+                       ).hexdigest()
+    cache = os.path.join(reviews_dir(), "snippets", key + ".json")
+    hit = C.read_json(cache)
+    if hit:
+        return hit
+    rows = None
+    try:
+        files = gh_json(["api", "repos/%s/compare/%s...%s" % (repo, rec["base"], p["head_sha"])], timeout=120)
+        patch = next((x.get("patch") for x in files.get("files") or [] if x.get("filename") == f["file"]), None)
+        rows = hunk_rows(patch or "", f["line"])
+        if not rows:
+            raw = _gh(["api", "-H", "Accept: application/vnd.github.raw",
+                       "repos/%s/contents/%s?ref=%s" % (repo, f["file"], p["head_sha"])], timeout=60)
+            if raw.returncode == 0:
+                rows = file_rows(raw.stdout, f["line"])
+    except ReviewError:
+        rows = None
+    if not rows:
+        return None
+    out = {"file": f["file"], "line": f["line"], "rows": rows}
+    C.write_json(cache, out)
+    return out
+
+
+def hunk_rows(patch, line, around=SNIP_AROUND):
+    """Rows of the diff around new-file line `line`: {old, new, kind: " "|"+"|"-", text}. [] if no hunk shows it."""
+    rows, old, new = [], 0, 0
+    for ln in patch.splitlines():
+        m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", ln)
+        if m:
+            old, new = int(m.group(1)), int(m.group(2))
+            rows.append(None)  # a gap between hunks
+            continue
+        if ln.startswith("\\"):
+            continue
+        kind = ln[:1] if ln[:1] in "+-" else " "
+        rows.append({"old": old if kind != "+" else None, "new": new if kind != "-" else None, "kind": kind,
+                     "text": ln[1:]})
+        old += kind != "+"
+        new += kind != "-"
+    at = next((i for i, r in enumerate(rows) if r and r["new"] == line), None)
+    if at is None:
+        return []
+    lo, hi = at, at
+    while lo > 0 and rows[lo - 1] and at - lo < around:
+        lo -= 1
+    while hi < len(rows) - 1 and rows[hi + 1] and hi - at < around:
+        hi += 1
+    return [dict(r, at=r["new"] == line) for r in rows[lo:hi + 1]]
+
+
+def file_rows(text, line, around=SNIP_AROUND):
+    lines = text.splitlines()
+    lo, hi = max(1, line - around), min(len(lines), line + around)
+    return [{"old": n, "new": n, "kind": " ", "text": lines[n - 1], "at": n == line} for n in range(lo, hi + 1)]
+
+
+# ---------------------------------------------------------------- fixing your own PR
+
+FIX_ALLOW = ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
+FIX_DENY = RUN_DENY[:-3] + ["Bash(gh pr merge *)", "Bash(git push --force*)", "Bash(git push -f*)",
+                            "Bash(git commit --amend*)", "Bash(git rebase *)", "Bash(git reset --hard*)"]
+FIX = ("You are fixing findings from a review of %s (%s), Lee's own PR, in this checkout of its branch %s. Lee read "
+       "each finding and chose these to fix:\n\n%s\n\nFix every one. Read AGENTS.md and CLAUDE.md first and follow "
+       "the repo's conventions. Keep each fix to what the finding asks; no unrelated changes. Run the tests, lint and "
+       "type checks that cover what you changed, and fix what you broke. Then commit: one commit for all of them, "
+       "unless that would be too large to review as one (roughly 400 changed lines, or fixes that are clearly separate "
+       "changes): then one commit per logical change, and say why in the note. Commit messages say what changed for a "
+       "person; no Co-Authored-By line. Then `git push origin %s`. Never force-push, amend, rebase or merge. If a "
+       "finding turns out to be wrong or can't be fixed safely, skip it and say why. You are running unattended: "
+       "nobody can answer questions. End your last message with one ```json block: {\"fixed\": [ids], \"skipped\": "
+       "[{\"id\": id, \"why\": text}], \"commits\": [full sha], \"note\": text}.")
+
+
+def fix_job_path(repo, number):
+    return job_path(repo, number)[:-5] + ".fix.json"
+
+
+def fix_job(repo, number):
+    j = C.read_json(fix_job_path(repo, number))
+    if j and j.get("status") == "running" and not _alive(j.get("pid")):
+        j["status"] = "failed"
+        j["why"] = "the fix stopped without finishing"
+    return j
+
+
+def to_fix(rec):
+    p = rec["passes"][-1]
+    return [f for f in p["findings"] if f["status"] == "keep" and not (f.get("fixed") or {}).get("commit")]
+
+
+def fix_start(repo, number):
+    """Start `lfg review fix` detached (the Fix button on your own PR)."""
+    import subprocess
+    import sys
+    rec = need(repo, number)
+    if rec.get("author") and rec["author"] != me():
+        raise ReviewError("only your own PR can be fixed from here; on someone else's, post the comments")
+    p = rec["passes"][-1]
+    pending = [f["id"] for f in p["findings"] if f["status"] == "pending"]
+    if pending:
+        raise ReviewError("decide fix or pass first: %s" % ", ".join(pending))
+    if not to_fix(rec):
+        raise ReviewError("nothing is marked fix")
+    if (fix_job(repo, number) or {}).get("status") == "running":
+        return {"started": False, "note": "A fix of %s is already running." % ref(repo, number)}
+    args = [sys.executable, os.path.join(C.PLUGIN_ROOT, "bin", "lfg"), "review", "fix", ref(repo, number)]
+    with open(os.devnull, "wb") as dn:
+        subprocess.Popen(args, stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True,
+                         close_fds=True)
+    return {"started": True}
+
+
+def fix_checkout(repo, branch):
+    """A clean checkout of the PR's branch, up to date with GitHub: the worktree that already has it, else a new LFG
+    worktree. Never the checkout you work in when it has changes."""
+    from . import worktree as W
+    root = local_checkout(repo)
+    if not root:
+        raise ReviewError("no checkout of %s on this machine to fix it in" % repo)
+    git = lambda *a, cwd=root: C.run(["git", *a], cwd=cwd, timeout=300)  # noqa: E731
+    if git("fetch", "origin", branch).returncode:
+        raise ReviewError("couldn't fetch %s from GitHub" % branch)
+    path = None
+    for blk in git("worktree", "list", "--porcelain").stdout.split("\n\n"):
+        if "branch refs/heads/%s\n" % branch in blk + "\n":
+            path = blk.split("\n")[0][len("worktree "):]
+    if path is None:
+        if git("show-ref", "--verify", "--quiet", "refs/heads/" + branch).returncode:
+            git("branch", "--track", branch, "origin/" + branch)
+        try:
+            path = W.new(root, branch)["path"]
+        except (ValueError, RuntimeError) as e:
+            raise ReviewError("couldn't check out %s: %s" % (branch, e)) from e
+    if git("status", "--porcelain", cwd=path).stdout.strip():
+        raise ReviewError("%s has uncommitted changes; commit or stash them first" % path)
+    if git("merge", "--ff-only", "origin/" + branch, cwd=path).returncode:
+        raise ReviewError("%s has commits GitHub doesn't, and GitHub has ones it doesn't; push or pull first" % path)
+    return path
+
+
+def fix_run(repo, number):
+    """Fix the findings marked fix on your own PR with Claude Code, in a checkout of its branch: one commit (more only
+    when one would be too big), pushed. Each fixed finding remembers the commit."""
+    import subprocess
+    rec = need(repo, number)
+    p, todo = rec["passes"][-1], to_fix(rec)
+    jp = fix_job_path(repo, number)
+    log = jp[:-5] + ".log"
+    j = {"repo": repo, "number": number, "status": "running", "pid": os.getpid(), "started": C.now_iso(), "log": log,
+         "ids": [f["id"] for f in todo]}
+    C.write_json(jp, j)
+    try:
+        if not todo:
+            raise ReviewError("nothing is marked fix")
+        if not C.which("claude"):
+            raise ReviewError("Claude Code (`claude`) is not on PATH")
+        cwd = fix_checkout(repo, rec["branch"])
+        j["cwd"] = cwd
+        C.write_json(jp, j)
+        listing = "\n\n".join("%s (%s) %s%s\nIssue: %s\nFix: %s" % (
+            f["id"], f["severity"], f.get("title") or "",
+            " at %s:%s" % (f["file"], f.get("line") or "") if f.get("file") else "",
+            f.get("issue") or "", f.get("fix") or "") for f in todo)
+        prompt = FIX % (ref(repo, number), rec.get("title") or "", rec["branch"], listing, rec["branch"])
+        fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            cp = subprocess.run(["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format",
+                                 "stream-json", "--verbose", "--allowedTools", ",".join(FIX_ALLOW),
+                                 "--disallowedTools", ",".join(FIX_DENY)],
+                                cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        out = json_from_session(log, "fixed") or {}
+        commits = [c for c in out.get("commits") or [] if isinstance(c, str) and re.match(r"^[0-9a-f]{7,40}$", c)]
+        rec = need(repo, number)
+        for fid in out.get("fixed") or []:
+            try:
+                find(rec, fid)["fixed"] = {"commit": commits[-1] if commits else "", "at": C.now_iso()}
+            except ReviewError:
+                continue
+        p = rec["passes"][-1]
+        p["fix"] = {"ended": C.now_iso(), "commits": commits, "note": str(out.get("note") or "")[:4000],
+                    "skipped": [x for x in out.get("skipped") or [] if isinstance(x, dict)],
+                    "session_id": session_id(log), "cwd": cwd}
+        store(rec)
+        ok = bool(out.get("fixed")) and bool(commits)
+        j.update(status="done" if ok else "failed", exit=cp.returncode, ended=C.now_iso(),
+                 why="" if ok else "Claude finished without committing a fix: %s" % (
+                     out.get("note") or "see the log")[:300])
+    except ReviewError as e:
+        j.update(status="failed", ended=C.now_iso(), why=str(e))
+    C.write_json(jp, j)
+    C.audit("review_fix", {"pr": ref(repo, number), "status": j["status"]})
+    return j
+
+
 def activity(path, limit=400):
     """What a review run did, in order, from its log: what it said and each tool it used."""
     out = []
@@ -1172,9 +1425,9 @@ def import_session(repo, number, path, ticket=None, convert=True):
     return rec
 
 
-def progress(repo, number, lines=8):
-    """The last few things a running review did, in words, from its stream-json log."""
-    j = job(repo, number)
+def progress(repo, number, lines=8, j=None):
+    """The last few things a running review (or fix: pass its job) did, in words, from its stream-json log."""
+    j = j or job(repo, number)
     if not j:
         return None
     steps = []

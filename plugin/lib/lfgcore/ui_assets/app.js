@@ -2282,17 +2282,32 @@ function togetherSection(t, unlocked, me) {
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
   const fs = [...q.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
   const stale = !t.live && !q.posted ? `<p class="muted small">${link} has a newer review; post that one from its page.</p>` : "";
+  const own = !!(t.author && me && t.author === me);
   return section(`Findings on ${t.pr}`, `${t.title ? `<p class="muted small">${esc(t.title)}</p>` : ""}${q.summary ? `<p>${txt(q.summary)}</p>` : ""}
-    ${fs.length ? fs.map(f => prFinding(f, t.pr, unlocked, t.live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
-    ${stale || postBar(t.pr, q, t.live, !!(t.author && me && t.author === me), unlocked)}`, prTally(q));
+    ${fs.length ? fs.map(f => prFinding(f, t.pr, unlocked, t.live, own)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
+    ${stale || postBar(t.pr, q, t.live, own, unlocked)}`, prTally(q, own));
 }
 /* "3 findings · 1 kept · 2 to decide · score 91" for one PR's review */
-function prTally(p) {
+function prTally(p, own) {
   const kept = p.findings.filter(f => f.status === "keep").length, pending = p.findings.filter(f => f.status === "pending").length;
-  return `${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
+  return `${plural(p.findings.length, "finding")} · ${kept} ${own ? "to fix" : "kept"} · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
+}
+/* On your own PR: Claude fixes the findings marked Fix, in one commit unless that would be too big, and pushes. */
+function fixBar(pr, p, live, unlocked, fj) {
+  const steps = j => (j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  if (fj && fj.status === "running") return `<div class="callout">${dot("on")}<b>Fixing ${plural((fj.ids || []).length, "finding")}</b>, started ${ago(fj.started)}${fj.cwd ? ` in <span class="mono">${esc(fj.cwd)}</span>` : ""}. This updates by itself.${steps(fj)}</div>`;
+  const done = p.fix ? `<div class="callout ${(p.fix.commits || []).length ? "ok" : "warn"}">${dot((p.fix.commits || []).length ? "ok" : "warn")}${(p.fix.commits || []).length ? `Fixed and pushed ${ago(p.fix.ended)} in ${(p.fix.commits || []).map(c => `<span class="mono">${esc(c.slice(0, 8))}</span>`).join(", ")}.` : "The last fix didn't commit anything."}${p.fix.note ? ` <span class="pre-wrap">${txt(p.fix.note)}</span>` : ""}${(p.fix.skipped || []).length ? `<ul>${p.fix.skipped.map(x => `<li><b class="mono">${esc(x.id)}</b> skipped: ${txt(x.why || "")}</li>`).join("")}</ul>` : ""}</div>` : "";
+  const failed = fj && fj.status === "failed" ? `<div class="callout bad">${dot("bad")}The fix didn't go through: ${esc(fj.why || "")}${steps(fj)}</div>` : "";
+  if (!live) return done || `<p class="muted small">An older review. Only the newest one can be fixed.</p>`;
+  const pending = p.findings.filter(f => f.status === "pending").length;
+  const todo = p.findings.filter(f => f.status === "keep" && !(f.fixed || {}).commit).length;
+  return `${done}${failed}<div class="panel"><div class="k" style="margin-top:0">Fix your PR: <span class="mono">${esc(pr)}</span></div>
+      <div class="row"><button class="btn primary" data-pr-fix="${esc(pr)}" ${unlocked && !pending && todo ? "" : "disabled"}>Fix ${plural(todo, "finding")}</button>
+      <span class="muted small">${pending ? `Choose Fix or Pass on ${plural(pending, "more finding")} first.` : todo ? "Claude fixes them in a checkout of the PR's branch, runs the tests, and pushes one commit (more only if one would be too big to review)." : "Nothing marked Fix."}</span></div></div>`;
 }
 /* Post one PR's review to GitHub. Every PR on a reviewed-together page gets its own, whichever repo is picked. */
-function postBar(pr, p, live, own, unlocked) {
+function postBar(pr, p, live, own, unlocked, fj) {
+  if (own && !p.posted) return fixBar(pr, p, live, unlocked, fj);
   if (p.posted) return `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`;
   if (!live) return `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
   const pending = p.findings.filter(f => f.status === "pending").length, kept = p.findings.filter(f => f.status === "keep").length;
@@ -2301,25 +2316,36 @@ function postBar(pr, p, live, own, unlocked) {
       <div class="row mt">${(own ? [["comment", "Comment only"]] : [["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]]).map(([e, l]) => `<button class="btn${e === "request-changes" || own ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
       <span class="muted small">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}${own ? " This is your own PR, so GitHub only takes a comment." : ""}</span></div></div>`;
 }
-function prFinding(f, pr, unlocked, live) {
+function prFinding(f, pr, unlocked, live, own) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
   const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("")
-    + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("");
+    + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("")
+    + ((f.fixed || {}).commit ? `<span class="tag ok">Fixed in ${esc(f.fixed.commit.slice(0, 8))}</span>` : "");
   const posted = f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">Posted ↗</a>` : "";
-  const can = unlocked && live && !f.comment_id;
+  const can = unlocked && live && !f.comment_id && !(f.fixed || {}).commit;
   const btn = (status, text) => `<button class="btn small${f.status === status ? " primary" : ""}" data-pr-mark='${esc(JSON.stringify([pr, f.id, status]))}' ${can ? "" : "disabled"}>${text}</button>`;
+  const chat = f.chat || [];
+  const ref = esc(JSON.stringify([pr, f.id]));
+  const code = f.file && f.line ? `<div class="pr-snip" data-pr-snip='${ref}'><div class="pr-snip-h mono">${esc(where)}</div><div class="muted small pad">Loading the code…</div></div>` : `<div class="muted small mono">${esc(where)}</div>`;
   return `<div class="card pr-finding ${esc(f.status)}" id="f-${esc(f.id)}"><div class="row">${st(f.severity === "nitpick" ? "nit" : f.severity)}${tags}<span class="grow"></span><span class="muted small mono">${esc(f.id)}</span></div>
     <div class="title">${txt(f.title || f.issue)}</div>
     ${f.issue && f.title ? `<p>${txt(f.issue)}</p>` : ""}${f.fix ? `<p><b>Fix:</b> ${txt(f.fix)}</p>` : ""}
-    <div class="muted small mono">${esc(where)}</div>
+    ${code}
     ${f.detail ? `<details class="more"><summary>What the review checked</summary><div class="md">${md(f.detail)}</div></details>` : ""}
-    <div class="k">Comment the author will read</div>
+    ${own ? "" : `<div class="k">Comment the author will read</div>
     <div class="pr-body md" data-pr-body="${esc(f.id)}">${md(f.body)}</div>
     <div class="pr-edit" data-pr-editbox="${esc(f.id)}" hidden>
-      <div class="row"><input type="text" class="grow" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"><button class="btn small" data-pr-askgo='${esc(JSON.stringify([pr, f.id]))}'>Ask Claude</button></div>
+      <div class="row"><input type="text" class="grow" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"><button class="btn small" data-pr-askgo='${ref}'>Ask Claude</button></div>
       <textarea class="editor small">${esc(f.body)}</textarea>
-      <div class="set-actions"><button class="btn small primary" data-pr-editsave='${esc(JSON.stringify([pr, f.id]))}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>
-    <div class="row mt">${posted || `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}</div></div>`;
+      <div class="set-actions"><button class="btn small primary" data-pr-editsave='${ref}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>`}
+    <div class="pr-discuss" ${chat.length ? "" : "hidden"}><div class="k">Discussion</div><div class="pr-thread">${chat.map(x => `<div class="pr-q"><b>You:</b> ${txt(x.q)}</div><div class="pr-a md">${md(x.a)}</div>`).join("")}</div>
+      <div class="row"><input type="text" class="grow" data-pr-discussq placeholder="e.g. is this reachable? would the other fix be simpler?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-discussgo='${ref}' ${unlocked ? "" : "disabled"}>Send</button></div></div>
+    <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss ${chat.length ? "hidden" : ""}>Discuss</button></div></div>`;
+}
+/* The code a finding points at, like GitHub shows it: file name on top, old and new line numbers, added and removed lines. */
+function snipHtml(sn) {
+  const rows = sn.rows.map(r => `<tr class="${r.kind === "+" ? "add" : r.kind === "-" ? "del" : ""}${r.at ? " at" : ""}"><td class="ln">${r.kind === "+" ? "" : esc(r.old ?? "")}</td><td class="ln">${r.kind === "-" ? "" : esc(r.new ?? "")}</td><td class="sg">${r.kind === " " ? "" : esc(r.kind)}</td><td class="tx">${esc(r.text)}</td></tr>`).join("");
+  return `<div class="pr-snip-h mono">${esc(sn.file)}</div><div class="pr-snip-b"><table>${rows}</table></div>`;
 }
 /* Every reviewed PR on one Linear ticket, on one page: each with its newest review, score and post box. */
 async function prTicket(t) {
@@ -2340,8 +2366,8 @@ async function prTicket(t) {
     const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
     const link = `<a class="mono" href="#prs/${esc(pr.replace("#", "/"))}">${esc(pr)}</a>`;
     return section(`Findings on ${pr}`, `<p class="muted small">${esc(rec.title || "")} · by ${esc(rec.author || "")} · ${link}${rec.passes.length > 1 ? `, review ${p.n} of ${rec.passes.length}` : ""} · ${ago(p.ts)}</p>${ghPanel(x.gh)}${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
-      ${fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
-      ${postBar(pr, p, live, own, unlocked)}`, prTally(p));
+      ${fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
+      ${postBar(pr, p, live, own, unlocked, x.fix_job)}`, prTally(p, own));
   }).join("");
   return `${head(`${t}${title ? ": " + title : ""}`, `The newest review of each of this ticket's ${plural(refs.length, "reviewed PR")}. Each PR is posted on its own.`, back)}${parts}`;
 }
@@ -2354,7 +2380,8 @@ async function prDetail(arg) {
   const rec = d.record, j = d.job;
   crumbs("prs", pr);
   const running = j && j.status === "running";
-  if (running) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
+  const fixing = d.fix_job && d.fix_job.status === "running";
+  if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const kindOf = j && (j.fresh ? "new review" : j.re_review ? "re-review" : "review");
   const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
@@ -2399,8 +2426,8 @@ async function prDetail(arg) {
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
       ${prior}
       ${together.length ? `<div class="callout">This review covered ${plural(together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Each PR has its own findings, score and post box below.</div>` : ""}
-      ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked) : ""), prTally(p))}
-      ${together.length ? "" : postBar(pr, p, live, own, unlocked)}
+      ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked, d.fix_job) : ""), prTally(p, own))}
+      ${together.length ? "" : postBar(pr, p, live, own, unlocked, d.fix_job)}
       ${together.map(t => togetherSection(t, unlocked, d.gh && d.gh.me)).join("")}
     </div>
     ${sess}`;
@@ -2553,6 +2580,36 @@ function wirePrs(root) {
     softRoute();
   });
   // finding ids repeat across PRs on one page (1.1 on each), so look inside the finding's own card
+  $$("[data-pr-snip]", root).forEach(async el => {
+    const [pr, id] = JSON.parse(el.dataset.prSnip);
+    const d = await api("prsnippet", { pr, id }).catch(() => ({}));
+    if (d.snippet) el.innerHTML = snipHtml(d.snippet);
+    else $(".pad", el).textContent = "Couldn't get this code from GitHub.";
+  });
+  $$("[data-pr-discuss]", root).forEach(b => b.onclick = () => {
+    const box = $(".pr-discuss", b.closest(".pr-finding"));
+    box.hidden = false; b.hidden = true; $("[data-pr-discussq]", box).focus();
+  });
+  $$("[data-pr-discussgo]", root).forEach(b => {
+    const [pr, id] = JSON.parse(b.dataset.prDiscussgo), box = b.closest(".pr-discuss"), input = $("[data-pr-discussq]", box);
+    const go = async () => {
+      if (!input.value.trim()) return input.focus();
+      b.disabled = true; b.textContent = "Thinking…";
+      const d = await save("review_discuss", { pr, id, question: input.value });
+      b.disabled = false; b.textContent = "Send";
+      if (!d.ok) return alertMsg(b, d);
+      $(".pr-thread", box).insertAdjacentHTML("beforeend", `<div class="pr-q"><b>You:</b> ${txt(d.q)}</div><div class="pr-a md">${md(d.a)}</div>`);
+      input.value = "";
+    };
+    b.onclick = go;
+    input.onkeydown = e => { if (e.key === "Enter") go(); };
+  });
+  $$("[data-pr-fix]", root).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Starting…";
+    const d = await save("review_fix", { pr: b.dataset.prFix });
+    if (!d.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, d); }
+    softRoute();
+  });
   $$("[data-pr-edit]", root).forEach(b => b.onclick = () => {
     const card = b.closest(".pr-finding");
     $(`[data-pr-editbox="${b.dataset.prEdit}"]`, card).hidden = false;

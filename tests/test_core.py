@@ -2888,6 +2888,110 @@ class ReviewTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
         return run
 
+    def saved(self, *findings, author="dev"):
+        with mock.patch.object(R, "pr_meta", return_value=dict(self.META, author=author)):
+            return R.save("o/r", 7, {"summary": "s", "findings": list(findings) or [self.finding()]})
+
+    def test_a_snippet_shows_the_diff_around_the_line_like_github(self):
+        patch = "@@ -1,4 +1,5 @@\n a\n-b\n+B\n+new\n c\n d\n@@ -40,2 +41,2 @@\n x\n y"
+        rows = R.hunk_rows(patch, 3, around=2)
+        self.assertEqual([(r["old"], r["new"], r["kind"], r["text"], r["at"]) for r in rows],
+                         [(2, None, "-", "b", False), (None, 2, "+", "B", False), (None, 3, "+", "new", True),
+                          (3, 4, " ", "c", False), (4, 5, " ", "d", False)])
+        self.assertEqual(R.hunk_rows(patch, 20), [])  # not in the diff: the file is shown instead
+        self.assertEqual([r["new"] for r in R.hunk_rows(patch, 5)], [None, 2, 3, 4, 5])  # stops at the hunk's end
+        rows = R.file_rows("l1\nl2\nl3\nl4\nl5\nl6\n", 2, around=2)
+        self.assertEqual([(r["new"], r["at"]) for r in rows], [(1, False), (2, True), (3, False), (4, False)])
+
+    def test_a_snippet_is_fetched_once_then_read_from_the_cache(self):
+        self.saved()
+        calls = []
+
+        def gh(args, timeout=60):
+            calls.append(args)
+            return {"files": [{"filename": "app.py", "patch": "@@ -1,2 +1,3 @@\n a\n+b\n c"}]}
+        with mock.patch.object(R, "gh_json", side_effect=gh):
+            first = R.snippet("o/r", 7, "1.1")
+            again = R.snippet("o/r", 7, "1.1")
+        self.assertEqual(first, again)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r["text"] for r in first["rows"] if r["at"]], ["c"])
+        self.saved(self.finding(file="", line=None))
+        self.assertIsNone(R.snippet("o/r", 7, "2.1"))  # a finding about the PR as a whole has no code
+
+    def test_discussing_a_finding_keeps_the_conversation_on_it(self):
+        self.saved()
+        asked = []
+
+        def claude(cmd, **kw):
+            asked.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "Yes, `load` can return None."}), "")
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "snippet", return_value=None), mock.patch("subprocess.run", side_effect=claude):
+            out = R.discuss("o/r", 7, "1.1", "is this reachable?")
+            R.discuss("o/r", 7, "1.1", "and the fix?")
+        self.assertEqual(out["a"], "Yes, `load` can return None.")
+        self.assertEqual([x["q"] for x in R.load("o/r", 7)["passes"][0]["findings"][0]["chat"]],
+                         ["is this reachable?", "and the fix?"])
+        self.assertIn("is this reachable?", asked[1][2])  # the second question sees the first
+        self.assertIn("This breaks on empty input.", asked[0][2])
+        with self.assertRaises(R.ReviewError):
+            R.discuss("o/r", 7, "1.1", " ")
+
+    def test_fix_is_only_for_your_own_pr_once_every_finding_is_decided(self):
+        self.saved(self.finding(), self.finding(line=9), author="me")
+        with mock.patch.object(R, "me", return_value="me"):
+            with self.assertRaisesRegex(R.ReviewError, "decide fix or pass"):
+                R.fix_start("o/r", 7)
+            R.mark("o/r", 7, ["1.1", "1.2"], status="drop")
+            with self.assertRaisesRegex(R.ReviewError, "nothing is marked fix"):
+                R.fix_start("o/r", 7)
+        with mock.patch.object(R, "me", return_value="someone-else"):
+            R.mark("o/r", 7, ["1.1"], status="keep")
+            with self.assertRaisesRegex(R.ReviewError, "own PR"):
+                R.fix_start("o/r", 7)
+
+    def test_a_fix_run_records_the_commit_on_each_fixed_finding(self):
+        self.saved(self.finding(), self.finding(line=9), self.finding(line=12), author="me")
+        R.mark("o/r", 7, ["1.1", "1.2"], status="keep")
+        R.mark("o/r", 7, ["1.3"], status="drop")
+        sha = "b" * 40
+        result = {"fixed": ["1.1"], "skipped": [{"id": "1.2", "why": "the caller already checks"}], "commits": [sha],
+                  "note": "one commit"}
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1", "result": "```json\n%s\n```" % json.dumps(result)}]
+        seen = {}
+
+        def run(cmd, cwd=None, stdout=None, **kw):
+            seen.update(cmd=cmd, cwd=cwd)
+            return self.fake_claude(events)(cmd, cwd=cwd, stdout=stdout)
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "fix_checkout", return_value="/tmp/wt") as co, \
+                mock.patch("subprocess.run", side_effect=run):
+            j = R.fix_run("o/r", 7)
+        self.assertEqual(j["status"], "done", j.get("why"))
+        co.assert_called_once_with("o/r", "dev/x")
+        self.assertEqual(seen["cwd"], "/tmp/wt")
+        prompt = seen["cmd"][2]
+        self.assertIn("1.1", prompt)
+        self.assertIn("1.2", prompt)
+        self.assertNotIn("1.3", prompt)  # passed on
+        self.assertIn("Bash(git push --force*)", seen["cmd"][seen["cmd"].index("--disallowedTools") + 1])
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual(p["findings"][0]["fixed"]["commit"], sha)
+        self.assertNotIn("fixed", p["findings"][1])
+        self.assertEqual((p["fix"]["commits"], p["fix"]["skipped"][0]["id"]), ([sha], "1.2"))
+        self.assertEqual([f["id"] for f in R.to_fix(R.load("o/r", 7))], ["1.2"])  # the skipped one can be tried again
+
+    def test_a_fix_that_cannot_get_a_clean_checkout_says_why(self):
+        self.saved(author="me")
+        R.mark("o/r", 7, ["1.1"], status="keep")
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "fix_checkout", side_effect=R.ReviewError("x has uncommitted changes")):
+            j = R.fix_run("o/r", 7)
+        self.assertEqual((j["status"], j["why"]), ("failed", "x has uncommitted changes"))
+        self.assertEqual(R.fix_job("o/r", 7)["status"], "failed")
+
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
         both = {"reviews": [{"pr": "o/api#7", "summary": "backend", "findings": [self.finding()]},

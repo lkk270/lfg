@@ -240,7 +240,7 @@ def api(view, q):
                     "title": ticket_titles().get(_arg(q, "ticket").strip().upper(), "")}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
-    if view in ("prreviews", "prreview", "prreviewlog"):
+    if view in ("prreviews", "prreview", "prreviewlog", "prsnippet"):
         from . import review as R
         from . import sessions as SS
         if view == "prreviews":
@@ -249,6 +249,8 @@ def api(view, q):
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             pr = R.ref(repo, number)
+            if view == "prsnippet":
+                return {"snippet": R.snippet(repo, number, _arg(q, "id"))}
             if view == "prreviewlog":
                 rec = R.need(repo, number)
                 p = next((x for x in rec["passes"] if x["n"] == int(_arg(q, "n") or 0)), None)
@@ -258,7 +260,9 @@ def api(view, q):
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
                     p["together"] = R.together(p)
+            fj = R.fix_job(repo, number)
             return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
+                    "fix_job": R.progress(repo, number, j=fj) if fj else None,
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
                     "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],
@@ -472,6 +476,10 @@ def review_action(what, body):
             return R.discard(repo, number, int(body.get("pass") or 0))
         if what == "review_ask":
             return R.ask(repo, number, body.get("pass"), body.get("question"))
+        if what == "review_fix":
+            return R.fix_start(repo, number)
+        if what == "review_discuss":
+            return R.discuss(repo, number, str(body.get("id") or ""), body.get("question"))
         if what == "review_rewrite":
             return R.rewrite(repo, number, str(body.get("id") or ""), body.get("instruction"))
         if what == "review_sessions":
