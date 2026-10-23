@@ -1035,3 +1035,10 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .rubric-grid { display: grid; grid-template-columns: auto auto 1fr; gap: 6px 10px; align-items: center; }
 .rubric-grid b { font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
 .pr-q-copy { float: right; margin: 0 0 4px 10px; }
+/* In the chat: a finding Claude changed is a link to it; the rest are facts, not buttons */
+.chip-link { cursor: pointer; text-decoration: none; border: 1px solid var(--line-2); transition: background .12s, border-color .12s; }
+.chip-link:hover { border-color: var(--blue); background: var(--blue-bg); color: var(--blue-tx); filter: none; }
+.chip-link .chip-go { font-size: 10.5px; opacity: .6; margin-left: 1px; }
+.chip-fact { cursor: default; background: transparent; padding: 0 4px; color: var(--text-2); }
+.chip-fact:hover { filter: none; }
+.chip-fact.c-green, .chip-fact.c-orange, .chip-fact.c-red { box-shadow: none; }
