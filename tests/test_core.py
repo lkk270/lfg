@@ -3097,6 +3097,19 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((last["title"], last["body"]), ("Fix pushed: Add thing", "1 finding fixed and pushed"))
         self.assertEqual(last["place"], "fix")
 
+    def test_fix_takes_earlier_findings_the_re_review_found_still_open(self):
+        f = self.finding
+        self.saved(f(), f(line=9), f(line=12), author="me")
+        R.mark("o/r", 7, ["1.1", "1.2", "1.3"], status="keep")
+        with mock.patch.object(R, "pr_meta", return_value=dict(self.META, author="me")):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(line=30)], "prior": [
+                {"id": "1.1", "state": "fixed"}, {"id": "1.2", "state": "open"}, {"id": "1.3", "state": "ignored"}]})
+        R.mark("o/r", 7, ["1.3"], status="drop")  # dropped from the re-review's earlier comments
+        R.mark("o/r", 7, ["2.1"], status="keep")
+        rec = R.load("o/r", 7)
+        self.assertEqual([x["id"] for x in R.carried(rec)], ["1.2", "1.3"])
+        self.assertEqual([x["id"] for x in R.to_fix(rec)], ["2.1", "1.2"])  # not the fixed one, not the dropped one
+
     def test_a_fix_that_cannot_get_a_clean_checkout_says_why(self):
         self.saved(author="me")
         R.mark("o/r", 7, ["1.1"], status="keep")

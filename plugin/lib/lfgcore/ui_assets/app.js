@@ -2368,21 +2368,21 @@ function prTally(p, own) {
   return `${plural(p.findings.length, "finding")} · ${kept} ${own ? "to fix" : "kept"} · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
 }
 /* On your own PR: Claude fixes the findings marked Fix, in one commit unless that would be too big, and pushes. */
-function fixBar(pr, p, live, unlocked, fj) {
+function fixBar(pr, p, live, unlocked, fj, carry) {
   const steps = j => (j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
   if (fj && fj.status === "running") return `<div class="callout">${dot("on")}<b>Fixing ${plural((fj.ids || []).length, "finding")}</b>, started ${ago(fj.started)}${fj.cwd ? ` in <span class="mono">${esc(fj.cwd)}</span>` : ""}. This updates by itself.${steps(fj)}</div>`;
   const done = p.fix ? `<div class="callout ${(p.fix.commits || []).length ? "ok" : "warn"}">${dot((p.fix.commits || []).length ? "ok" : "warn")}${(p.fix.commits || []).length ? `Fixed and pushed ${ago(p.fix.ended)} in ${(p.fix.commits || []).map(c => `<span class="mono">${esc(c.slice(0, 8))}</span>`).join(", ")}.` : "The last fix didn't commit anything."}${p.fix.note ? ` <span class="pre-wrap">${txt(p.fix.note)}</span>` : ""}${(p.fix.skipped || []).length ? `<ul>${p.fix.skipped.map(x => `<li><b class="mono">${esc(x.id)}</b> skipped: ${txt(x.why || "")}</li>`).join("")}</ul>` : ""}</div>` : "";
   const failed = fj && fj.status === "failed" ? `<div class="callout bad">${dot("bad")}The fix didn't go through: ${esc(fj.why || "")}${steps(fj)}</div>` : "";
   if (!live) return done || `<p class="muted small">An older review. Only the newest one can be fixed.</p>`;
   const pending = p.findings.filter(f => f.status === "pending").length;
-  const todo = p.findings.filter(f => f.status === "keep" && !(f.fixed || {}).commit).length;
+  const todo = [...p.findings, ...(carry || [])].filter(f => f.status === "keep" && !(f.fixed || {}).commit).length;
   return `<div class="pr-fixbar">${done}${failed}<div class="panel"><div class="k" style="margin-top:0">Fix your PR: <span class="mono">${esc(pr)}</span></div>
       <div class="row"><button class="btn primary" data-pr-fix="${esc(pr)}" ${unlocked && !pending && todo ? "" : "disabled"}>Fix ${plural(todo, "finding")}</button>
       <span class="muted small">${pending ? `Choose Fix or Pass on ${plural(pending, "more finding")} first.` : todo ? "Claude fixes them in a checkout of the PR's branch, runs the tests, and pushes one commit (more only if one would be too big to review)." : "Nothing marked Fix."}</span></div></div></div>`;
 }
 /* Post one PR's review to GitHub. Every PR on a reviewed-together page gets its own, whichever repo is picked. */
-function postBar(pr, p, live, own, unlocked, fj) {
-  if (own && !p.posted) return fixBar(pr, p, live, unlocked, fj);
+function postBar(pr, p, live, own, unlocked, fj, carry) {
+  if (own && !p.posted) return fixBar(pr, p, live, unlocked, fj, carry);
   if (p.posted) return `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`;
   if (!live) return `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
   const pending = p.findings.filter(f => f.status === "pending").length, kept = p.findings.filter(f => f.status === "keep").length;
@@ -2398,7 +2398,7 @@ function prFinding(f, pr, unlocked, live, own) {
     + ((f.fixed || {}).commit ? `<span class="tag ok">Fixed in ${esc(f.fixed.commit.slice(0, 8))}</span>` : "")
     + (f.raised_by ? `<a class="tag" ${f.raised_by.url ? `href="${esc(f.raised_by.url)}" target="_blank" rel="noopener noreferrer"` : ""}>From ${f.raised_by.bot ? "" : "@"}${esc(f.raised_by.who)}${f.raised_by.url ? " ↗" : ""}</a>${WORTH[f.worth] ? `<span class="tag ${WORTH[f.worth][1]}">${WORTH[f.worth][0]}</span>` : ""}` : "");
   const posted = f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">Posted ↗</a>` : "";
-  const can = unlocked && live && !f.comment_id && !(f.fixed || {}).commit;
+  const can = unlocked && !f.comment_id && !(f.fixed || {}).commit;  // a decision is yours in any review; only posting is the newest's
   const btn = (status, text) => `<button class="btn small${f.status === status ? " primary" : ""}" data-pr-mark='${esc(JSON.stringify([pr, f.id, status]))}' ${can ? "" : "disabled"}>${text}</button>`;
   const chat = f.chat || [];
   const ref = esc(JSON.stringify([pr, f.id]));
@@ -2522,7 +2522,7 @@ async function prDetail(arg) {
   const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
     <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">Review together with linked PRs</button>` : ""}</div>`, "reviewed together, or linked by you; they can be in any repo");
-  if (!rec) return `${head(pr, "Not reviewed yet.", back)}${ghPanel(d.gh)}${jobBox}${actions}${linkedBox}${sess}`;
+  if (!rec) return `${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${jobBox}${actions}${linkedBox}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
   let pick = Number(sessionStorage.getItem(key)) || last.n;
@@ -2535,10 +2535,15 @@ async function prDetail(arg) {
   const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
   const label = x => `Review ${x.n}${full(x) ? " · full review" : x.kind === "re-review" ? " · re-review" : ""}`;
   const passTabs = `<div class="tabs pr-passes">${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
-  const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}<div class="row">${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}<span class="grow"></span>${copyBtns(earlierForPerson(x, f, pr, t), earlierForAgent(x, f, pr, t))}</div></div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
+  const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
+  const passOf = Object.fromEntries(passes.flatMap(x => x.findings.map(f => [f.id, x.n])));
+  const prior = (p.prior || []).length ? section("Earlier comments", p.prior.map(x => {
+    const [t, tn] = PRIOR[x.state] || [x.state, ""], f = byId[x.id];
+    const from = passOf[x.id], head = `<div class="row prior-head">${dot(tn)}<b>${esc(t)}</b>${f && f.status === "drop" ? '<span class="tag">you dropped it</span>' : ""}<span class="grow"></span>${from && from !== p.n ? `<a href="#" class="small" data-pr-goto='${esc(JSON.stringify([pr, from, x.id]))}'>From review ${from} ↗</a>` : ""}${f ? copyBtns(earlierForPerson(x, f, pr, t), earlierForAgent(x, f, pr, t)) : ""}</div>${x.note ? `<p class="small">${txt(x.note)}</p>` : ""}`;
+    return `<div class="prior-item">${head}${f ? prFinding(f, pr, unlocked, true, own) : ""}</div>`;
+  }).join(""), "what happened to each earlier finding; decide, discuss or fix them here") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
   const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
-  const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
   const together = p.together || [];
   const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
   return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
@@ -2556,7 +2561,7 @@ async function prDetail(arg) {
       ${prior}
       ${together.length ? `<div class="callout">This review covered ${plural(together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Each PR has its own findings, score and post box below.</div>` : ""}
       ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked, d.fix_job) : ""), prTally(p, own))}
-      ${together.length ? "" : postBar(pr, p, live, own, unlocked, d.fix_job)}
+      ${together.length ? "" : postBar(pr, p, live, own, unlocked, d.fix_job, (p.prior || []).filter(x => !["fixed", "withdrawn"].includes(x.state)).map(x => byId[x.id]).filter(Boolean))}
       ${together.map(t => togetherSection(t, unlocked, d.gh && d.gh.me)).join("")}
     </div>${talkPane(pr, p, unlocked)}</div>
     ${sess}`;
@@ -2737,6 +2742,13 @@ function wirePrs(root) {
     if (d.snippet) cache[el.dataset.prSnip] = d.snippet;
     if (d.snippet) el.innerHTML = snipHtml(d.snippet);
     else $(".pad", el).textContent = "Couldn't get this code from GitHub.";
+  });
+  $$("[data-pr-goto]", root).forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const [pr, n, id] = JSON.parse(a.dataset.prGoto);
+    sessionStorage.setItem("lfg.prpass." + pr, n);
+    state.goto = "#f-" + CSS.escape(id);
+    softRoute();
   });
   $$("[data-pr-discuss]", root).forEach(b => b.onclick = () => {
     const box = $(".pr-discuss", b.closest(".pr-finding"));
