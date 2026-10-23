@@ -3172,6 +3172,24 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(shown[0][0], "osascript")
         self.assertIn("LFG: Review done: Third", shown[0][2])
 
+    def test_a_full_review_together_is_full_for_every_pr(self):
+        both = {"reviews": [{"pr": "o/api#7", "summary": "b", "findings": [self.finding()]},
+                            {"pr": "o/web#9", "summary": "f", "findings": []}]}
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1", "result": "```json\n%s\n```" % json.dumps(both)}]
+        meta = lambda repo, n: dict(self.META, url="https://github.com/%s/pull/%d" % (repo, n))  # noqa: E731
+        with mock.patch.object(R, "pr_meta", side_effect=meta), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=self.fake_claude(events)) as run:
+            R.run("o/api", 7, together=[("o/web", 9)])
+            R.run("o/api", 7, together=[("o/web", 9)], fresh=True)
+        prompt = [c[0][0][2] for c in run.call_args_list if c[0][0][0] == "claude"][-1]
+        self.assertIn("full first review", prompt)
+        self.assertEqual([p["kind"] for p in R.load("o/api", 7)["passes"]], ["first", "full"])
+        self.assertEqual([p["kind"] for p in R.load("o/web", 9)["passes"]], ["first", "full"])
+        self.assertFalse(R.job("o/web", 9)["re_review"])
+
     def test_a_new_full_review_is_recorded_as_one_not_as_a_re_review(self):
         events = [{"type": "system", "subtype": "init", "session_id": "s1"},
                   {"type": "result", "session_id": "s1",
