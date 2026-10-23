@@ -88,6 +88,27 @@ class GuardTest(unittest.TestCase):
 
 
 class CommonTest(unittest.TestCase):
+    def test_two_writes_of_one_file_at_once_both_land(self):
+        """The dashboard serves each request on its own thread, so two pages can save the same file together."""
+        import threading
+        path = os.path.join(tempfile.mkdtemp(), "same.json")
+        errors = []
+
+        def write(n):
+            try:
+                for i in range(200):
+                    C.write_json(path, {"n": n, "i": i})
+            except OSError as e:
+                errors.append(e)
+        threads = [threading.Thread(target=write, args=(n,)) for n in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(C.read_json(path)["i"], 199)
+        self.assertEqual(os.listdir(os.path.dirname(path)), ["same.json"])  # no temp files left behind
+
     def test_repo_id_format(self):
         d = tempfile.mkdtemp(prefix="my repo!")
         subprocess.run(["git", "init", "-q", d], check=True)
