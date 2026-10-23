@@ -592,7 +592,10 @@ async function isUnlocked() {
 }
 // The edit key is kept per address (host and port): a tab on another port, or on localhost instead of 127.0.0.1, or a
 // dashboard started with --no-open, has none. --unlock opens this port's dashboard with it.
-const lockedNote = what => `<div class="callout">Read-only in this tab. To ${what}, run <code>lfg ui --unlock --port ${esc(location.port || "80")}</code> in your terminal; it opens this dashboard again, unlocked.</div>`;
+// --unlock opens your default browser; another browser needs its name, so the note names the one you're in.
+const thisBrowser = () => { const u = navigator.userAgent; return /Edg\//.test(u) ? "Microsoft Edge" : /Arc\//.test(u) ? "Arc" : /Brave/.test(u) ? "Brave Browser" : /Chrome\//.test(u) ? "Google Chrome" : /Firefox\//.test(u) ? "Firefox" : /Safari\//.test(u) ? "Safari" : ""; };
+const unlockCmd = () => `lfg ui --unlock --port ${location.port || "80"}${thisBrowser() ? ` --browser "${thisBrowser()}"` : ""}`;
+const lockedNote = what => `<div class="callout">Read-only in this tab. To ${what}, run <code>lfg ui --unlock --port ${esc(location.port || "80")}${thisBrowser() ? ` --browser "${esc(thisBrowser())}"` : ""}</code> in your terminal; it opens this dashboard again, unlocked, in this browser.</div>`;
 async function save(what, body) {
   try {
     const r = await fetch(`/api/save/${what}`, { method: "POST", body: JSON.stringify(body),
@@ -1712,7 +1715,7 @@ PAGES.sessions = async () => {
   };
   const prTags = name => (GP[name] || []).map(pr => `<a class="tag mono" href="#prs/${esc(pr.replace("#", "/"))}" title="This group follows ${esc(pr)}: every session that mentions it joins">${esc(pr)}</a>`).join(" ");
   const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || !ss.length || ss.some(s => s.starred || Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b> ${repo === "Your groups" ? prTags(name) : ""}</span><span class="muted small nowrap">${ss.length ? `${plural(ss.length, "session")} · ${ago(ss[0].modified)}` : "no session mentions it yet"}</span>${repo !== "Your groups" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary>${listOf(ss)}</details>`).join(""), plural([...g.values()].flat().length, "session")));
-  const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>lfg ui --unlock</code> in your terminal to change them here. Copy works either way.</div>`;
+  const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>${esc(unlockCmd())}</code> in your terminal to change them here. Copy works either way.</div>`;
   return `${head("Sessions", `Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up. ${scopeLine("sessions")}`)}
     ${lock}
     <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span>${d.hidden_count ? `<label class="small"><input type="checkbox" id="sess-hidden" ${state.showHidden ? "checked" : ""}> Show ${plural(d.hidden_count, "hidden session")}</label>` : ""}</div>
@@ -2207,7 +2210,7 @@ PAGES.prs = async arg => {
   if (arg) return prDetail(arg);
   const [d, unlocked] = await Promise.all([api("prreviews", scopeArgs("prs")), isUnlocked()]);
   state.prMethod = d.method;
-  const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>lfg ui --unlock</code> in your terminal to review and post from here.</div>`;
+  const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>${esc(unlockCmd())}</code> in your terminal to review and post from here.</div>`;
   state.prPick = state.prPick || new Set();
   state.prReviewed = new Set([...(d.queue || []), ...(d.mine || []), ...(d.reviews || []), ...(d.ticket_more || [])].filter(x => x.passes).map(prRef));
   state.prTicket = Object.fromEntries([...(d.queue || []), ...(d.mine || []), ...(d.reviews || [])].filter(x => x.ticket).map(x => [prRef(x), x.ticket]));
@@ -2264,7 +2267,7 @@ function methodSection(m, unlocked) {
   return `<details class="more mt" id="review-method"><summary><b>Review method</b> <span class="muted small">${m.own ? `your own: ${plural(gs.length, "source")}` : "LFG's built-in method"}</span></summary>
     <div class="readable"><p class="muted small">What every review here reads, in order, to decide what to look for, how serious each finding is, the score and how comments are worded. Later ones win. The repo's AGENTS.md and CLAUDE.md files are read after these and win over them.</p>
     <ul class="items box">${rows}</ul>
-    ${unlocked ? `<div class="row mt"><input type="text" id="rm-new" class="grow mono" placeholder="A file or folder, e.g. ~/.claude/skills/review-pr/SKILL.md"><button class="btn" id="rm-add">Add</button>${m.own ? '<button class="btn" id="rm-reset" title="Go back to LFG\'s built-in review method">Use LFG\'s built-in method</button>' : ""}</div><span class="save-msg" id="rm-msg"></span>` : '<p class="muted small">Run <code>lfg ui --unlock</code> to change it here.</p>'}
+    ${unlocked ? `<div class="row mt"><input type="text" id="rm-new" class="grow mono" placeholder="A file or folder, e.g. ~/.claude/skills/review-pr/SKILL.md"><button class="btn" id="rm-add">Add</button>${m.own ? '<button class="btn" id="rm-reset" title="Go back to LFG\'s built-in review method">Use LFG\'s built-in method</button>' : ""}</div><span class="save-msg" id="rm-msg"></span>` : '<p class="muted small">Run <code>${esc(unlockCmd())}</code> to change it here.</p>'}
     <p class="muted small">Read last, after everything above: <span class="mono">${esc(m.overrides)}</span> (${m.override_files.length ? plural(m.override_files.length, "file") : "empty"}).</p></div></details>`;
 }
 function wireMethod(root) {
@@ -2756,6 +2759,7 @@ function wirePrs(root) {
     if (cache[el.dataset.prSnip]) return (el.innerHTML = snipHtml(cache[el.dataset.prSnip]));
     const d = await api("prsnippet", { pr, id }).catch(() => ({}));
     if (d.snippet) cache[el.dataset.prSnip] = d.snippet;
+    setTimeout(() => { if (state.pin && Date.now() < state.pin.until) state.pin.keep(); }, 0);
     if (d.snippet) el.innerHTML = snipHtml(d.snippet);
     else $(".pad", el).textContent = "Couldn't get this code from GitHub.";
   });
@@ -3121,7 +3125,12 @@ function applyGoto(view) {
   const el = $(state.goto, view);
   state.goto = null;
   if (!el) return;
-  el.scrollIntoView({ block: "start", behavior: "smooth" });
+  // code snippets above it load after this and push it down: keep it in place until they're in, or you scroll
+  const until = Date.now() + 4000, keep = () => el.isConnected && el.scrollIntoView({ block: "start" });
+  keep();
+  state.pin = { keep, until };
+  const stop = () => { state.pin = null; window.removeEventListener("wheel", stop); window.removeEventListener("keydown", stop); };
+  window.addEventListener("wheel", stop, { once: true }); window.addEventListener("keydown", stop, { once: true });
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 1800);
 }

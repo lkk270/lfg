@@ -1340,6 +1340,7 @@ def main(argv=None):
     u.add_argument("--port", type=int)
     u.add_argument("--no-open", action="store_true", help="don't open the browser (Settings stay locked)")
     u.add_argument("--unlock", action="store_true", help="open the running dashboard with editing unlocked")
+    u.add_argument("--browser", help="with --unlock: which browser app, e.g. \"Google Chrome\" (default: your default)")
     cm = sp.add_parser("claudemd", help="show ~/.claude/CLAUDE.md, or remove the block older LFG versions added")
     cm.add_argument("action", choices=["show", "remove-legacy"])
     fb = sp.add_parser("feedback")
@@ -1426,7 +1427,9 @@ def main(argv=None):
         from . import ui
         port = a.port or C.config()["ui"]["port"]
         if a.unlock:
-            return 0 if ui.open_editor(port) else 1
+            if ui.open_editor(port, a.browser):
+                return 0
+            C.die("couldn't open %s" % (a.browser or "the browser"), 1)
         ui.serve(port, open_browser=not a.no_open)
         return 0
     if a.cmd == "claudemd":
