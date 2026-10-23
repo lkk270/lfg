@@ -2183,10 +2183,27 @@ PAGES.prs = async arg => {
    one works whichever repo is picked. */
 const linkTags = prs => (prs || []).map(x => ` <a class="tag mono" href="#prs/${esc(x.replace("#", "/"))}" title="Linked: reviewed together, or linked by you">with ${esc(x)}</a>`).join("");
 /* Which files a review reads to decide what to look for, how to score and how to word comments. */
+/* Review sources next to each other from one skill's folder (its SKILL.md and the files it points at) are one entry:
+   the skill, with its parts under it, moved and removed together. */
+function methodGroups(sources) {
+  const groups = [];
+  sources.forEach((x, i) => {
+    const m = /^(.*\/skills\/([^/]+))(\/|$)/.exec(x.path), key = m ? m[1] : x.path, last = groups[groups.length - 1];
+    if (m && last && last.key === key) last.items.push(i);
+    else groups.push({ key, skill: m ? m[2] : "", items: [i] });
+  });
+  return groups;
+}
 function methodSection(m, unlocked) {
   if (!m) return "";
-  const rows = m.sources.map((x, i) => `<li><span class="grow"><span class="mono small">${esc(x.path)}</span> ${x.missing ? '<span class="tag bad">not found</span>' : `<span class="muted small">${plural(x.found, "file")}</span>`}</span>${m.own && unlocked ? `<button class="btn small" data-rm-move='${i},-1' ${i ? "" : "disabled"} aria-label="Read earlier">↑</button><button class="btn small" data-rm-move='${i},1' ${i < m.sources.length - 1 ? "" : "disabled"} aria-label="Read later">↓</button><button class="btn small" data-rm-del="${i}">Remove</button>` : ""}</li>`).join("");
-  return `<details class="more mt" id="review-method"><summary><b>Review method</b> <span class="muted small">${m.own ? `your own: ${plural(m.sources.length, "source")}` : "LFG's built-in method"}</span></summary>
+  const gs = methodGroups(m.sources);
+  const part = x => `<span class="mono small">${esc(x.path)}</span> ${x.missing ? '<span class="tag bad">not found</span>' : `<span class="muted small">${plural(x.found, "file")}</span>`}`;
+  const rows = gs.map((g, gi) => {
+    const xs = g.items.map(i => m.sources[i]);
+    const what = g.skill && xs.length > 1 ? `<b>${esc(g.skill)}</b> skill <span class="mono small muted">${esc(g.key)}</span><ul class="parts">${xs.map(x => `<li>${part({ ...x, path: x.path.slice(g.key.length + 1) || x.path })}</li>`).join("")}</ul>` : part(xs[0]);
+    return `<li><span class="grow">${what}</span>${m.own && unlocked ? `<button class="btn small" data-rm-move='${gi},-1' ${gi ? "" : "disabled"} aria-label="Read earlier">↑</button><button class="btn small" data-rm-move='${gi},1' ${gi < gs.length - 1 ? "" : "disabled"} aria-label="Read later">↓</button><button class="btn small" data-rm-del="${gi}">Remove</button>` : ""}</li>`;
+  }).join("");
+  return `<details class="more mt" id="review-method"><summary><b>Review method</b> <span class="muted small">${m.own ? `your own: ${plural(gs.length, "source")}` : "LFG's built-in method"}</span></summary>
     <div class="readable"><p class="muted small">What every review here reads, in order, to decide what to look for, how serious each finding is, the score and how comments are worded. Later ones win. The repo's AGENTS.md and CLAUDE.md files are read after these and win over them.</p>
     <ul class="items box">${rows}</ul>
     ${unlocked ? `<div class="row mt"><input type="text" id="rm-new" class="grow mono" placeholder="A file or folder, e.g. ~/.claude/skills/review-pr/SKILL.md"><button class="btn" id="rm-add">Add</button>${m.own ? '<button class="btn" id="rm-reset" title="Go back to LFG\'s built-in review method">Use LFG\'s built-in method</button>' : ""}</div><span class="save-msg" id="rm-msg"></span>` : '<p class="muted small">Run <code>lfg ui --unlock</code> to change it here.</p>'}
@@ -2201,8 +2218,9 @@ function wireMethod(root) {
     if (!r.ok) return saidMsg($("#rm-msg", box), r, "");
     state.prMethod = r; sessionStorage.setItem("lfg.methodOpen", "1"); softRoute();
   };
-  $$("[data-rm-del]", box).forEach(b => b.onclick = () => put(cur().filter((_, i) => i !== +b.dataset.rmDel)));
-  $$("[data-rm-move]", box).forEach(b => b.onclick = () => { const [i, d] = b.dataset.rmMove.split(",").map(Number), l = cur(); [l[i], l[i + d]] = [l[i + d], l[i]]; put(l); });
+  const blocks = () => methodGroups(state.prMethod.sources).map(g => g.items.map(i => cur()[i]));
+  $$("[data-rm-del]", box).forEach(b => b.onclick = () => put(blocks().filter((_, g) => g !== +b.dataset.rmDel).flat()));
+  $$("[data-rm-move]", box).forEach(b => b.onclick = () => { const [g, d] = b.dataset.rmMove.split(",").map(Number), l = blocks(); [l[g], l[g + d]] = [l[g + d], l[g]]; put(l.flat()); });
   const add = $("#rm-add", box), inp = $("#rm-new", box);
   if (add) add.onclick = () => { const v = inp.value.trim(); if (v) put([...cur(), v]); };
   if (inp) inp.onkeydown = e => { if (e.key === "Enter") add.onclick(); };
