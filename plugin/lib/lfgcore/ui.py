@@ -198,7 +198,7 @@ def api(view, q):
     if view == "update":
         from . import updates as U
         if _arg(q, "fresh") == "1":
-            dash.forget("update")
+            dash.stale("update")
         d = dash.in_background("update", 60, lambda: U.check(max_age=0), "checking for updates")  # one cache, not two
         j = U.job() or {}
         if j.get("ended") and str(d.get("checked_at") or "~") < j["ended"]:  # checked before the last install: stale

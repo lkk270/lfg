@@ -2769,6 +2769,17 @@ async function loadBranches() {
    comes back; the server caches for a minute, so a new merge shows within about two. */
 const UPDATE_FROM = { upstream: "the original LFG", origin: "your fork" };
 let updateRecheck = 0;
+/* What every tab shows while an update runs: the steps so far, the one running and how long it has been going. */
+const UPDATE_STEP_HINT = { "Running LFG's tests": "about a minute; if they fail, nothing changes" };
+function runningMsg(j) {
+  const steps = j.steps || [], now = steps.slice(-1)[0] || "Starting";
+  const done = steps.slice(0, -1).map(s => `<li>${dot("ok")}${esc(s)}</li>`).join("");
+  const hint = UPDATE_STEP_HINT[now] ? ` <span class="muted">(${esc(UPDATE_STEP_HINT[now])})</span>` : "";
+  return `${dot("on")}<span><b>Updating LFG:</b> ${esc(now)}…${hint} <span class="muted small">started ${ago(j.started)}. You can leave this page; every tab shows this.</span></span>${done ? `<details class="more inline"><summary>${plural(steps.length - 1, "step")} done</summary><ul class="small">${done}</ul></details>` : ""}`;
+}
+/* Tabs tell each other when an update starts or ends, so none keeps offering an Update button meanwhile. */
+const updateTabs = "BroadcastChannel" in window ? new BroadcastChannel("lfg-update") : null;
+if (updateTabs) updateTabs.onmessage = () => watchUpdate();
 async function checkUpdate(fresh) {
   const box = $("#update-banner");
   if (!box) return;
@@ -2783,8 +2794,8 @@ async function checkUpdate(fresh) {
   if (j && j.status === "running") {
     box.hidden = false;
     box.className = "callout";
-    box.innerHTML = `${dot("on")}Updating LFG… ${esc((j.steps || []).slice(-1)[0] || "")}`;
-    setTimeout(checkUpdate, 3000);
+    box.innerHTML = runningMsg(j);
+    watchUpdate();
     return;
   }
   const F = d.fix;
@@ -2827,6 +2838,8 @@ async function checkUpdate(fresh) {
       fx.disabled = true; fx.textContent = "Starting…";
       const r = await save("update_fix", {});
       if (!r.ok) { fx.disabled = false; fx.textContent = "Try again"; return alertMsg(fx, r); }
+      if (updateTabs) updateTabs.postMessage("started");
+      startedHere = true;
       watchUpdate();
     };
     return;
@@ -2848,7 +2861,7 @@ async function checkUpdate(fresh) {
   }
   const ver = $("#lfg-version");
   if (ver && d.available) ver.textContent = d.ready ? "Update ready" : "LFG up to date";
-  if (d.pending) { setTimeout(checkUpdate, 3000); return; }
+  if (d.pending) { if (ver) ver.textContent = "Checking for updates…"; setTimeout(checkUpdate, 3000); return; }
   const aside = (d.upstream || []).filter(c => c.verdict !== "keep");
   if (ver && d.available && !d.ready && aside.length) {
     ver.innerHTML = `LFG up to date · <a href="" id="show-aside">${plural(aside.length, "change")} set aside</a>`;
@@ -2890,6 +2903,10 @@ async function checkUpdate(fresh) {
     go.disabled = true; go.textContent = "Starting…";
     const r = await save("update_apply", {});
     if (!r.ok) { go.disabled = false; go.textContent = "Try again"; return alertMsg(go, r); }
+    box.className = "callout";
+    box.innerHTML = runningMsg({ steps: [], started: new Date().toISOString() });  /* at once, not at the next poll */
+    if (updateTabs) updateTabs.postMessage("started");
+    startedHere = true;
     watchUpdate();
   };
 }
@@ -2931,6 +2948,7 @@ function wirePicks(box) {
 }
 const fixingMsg = F => `${dot("on")}Claude is fixing the stopped update${F.branch ? ` on <code>${esc(F.branch)}</code>` : ""}, started ${ago(F.started)}. Once it has a fix, LFG commits it and runs the update again by itself.`;
 let watching = false;  /* one watcher at a time: the banner re-checks every minute and would start another */
+let startedHere = false;  /* only the tab that pressed Update restarts the dashboard; the others show "updated" */
 async function watchUpdate() {
   if (watching) return;
   watching = true;
@@ -2944,9 +2962,9 @@ async function watchLoop() {
     try { d = await api("update", { t: Date.now() }); } catch (e) { continue; }
     const j = d.job || {}, F = d.fix || {};
     box.hidden = false;
-    if (j.status === "running") { box.className = "callout"; box.innerHTML = `${dot("on")}Updating LFG… ${esc((j.steps || []).slice(-1)[0] || "")}`; continue; }
+    if (j.status === "running") { box.className = "callout"; box.innerHTML = runningMsg(j); continue; }
     if (F.status === "running") { box.className = "callout"; box.innerHTML = fixingMsg(F); continue; }
-    if (j.status === "done") {
+    if (j.status === "done" && startedHere) {
       box.innerHTML = `${dot("on")}Installed. Reloading the dashboard on the new version…`;
       await save("ui_restart", {});
       for (let i = 0; i < 40; i++) {

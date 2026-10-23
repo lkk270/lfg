@@ -1632,6 +1632,25 @@ class InBackgroundTest(unittest.TestCase):
         self.assertEqual(dash.in_background(key, 60, slow, "busy"), {"available": True, "v": 1})
         self.assertEqual(len(calls), 1)
 
+    def test_a_stale_value_is_still_shown_while_a_fresh_one_is_worked_out(self):
+        import threading
+        gate = threading.Event()
+        key = "test-stale-%d" % os.getpid()
+        self.addCleanup(dash.forget, key)
+        dash.remember(key, {"available": True, "v": 1})
+        dash.stale(key)  # Refresh, or a new tab after a minute
+
+        def slow():
+            gate.wait(5)
+            return {"available": True, "v": 2}
+        self.assertEqual(dash.in_background(key, 60, slow, "busy"), {"available": True, "v": 1})  # not "pending"
+        gate.set()
+        for _ in range(50):
+            if dash.in_background(key, 60, slow, "busy").get("v") == 2:
+                break
+            threading.Event().wait(0.05)
+        self.assertEqual(dash.in_background(key, 60, slow, "busy"), {"available": True, "v": 2})
+
 
 class RunSummaryTest(unittest.TestCase):
     def test_about_from_brief_then_review_summary(self):
