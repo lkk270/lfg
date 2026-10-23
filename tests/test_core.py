@@ -2888,6 +2888,25 @@ class ReviewTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
         return run
 
+    def test_a_finished_review_leaves_a_notice_and_macos_shows_it_only_with_no_dashboard_open(self):
+        shown = []
+        run = lambda cmd, **kw: shown.append(cmd) or subprocess.CompletedProcess(cmd, 0)  # noqa: E731
+        with mock.patch.object(R.C, "which", return_value="/usr/bin/osascript"), mock.patch("subprocess.run", run):
+            self.assertEqual(R.notices(0), {"last": 0, "items": []})  # a dashboard tab starts watching
+            R.notify("o/r#7", "Review done: Add thing", "o/r#7 · 2 findings · score 88")
+            self.assertEqual(shown, [])  # the tab shows it
+            got = R.notices(0)
+            self.assertEqual((got["last"], got["items"]), (1, []))  # starting fresh: nothing old pops up
+            R.notify("o/r#8", "Review failed: Other", "the review stopped", ok=False)
+            items = R.notices(1)["items"]
+            self.assertEqual([(x["n"], x["pr"], x["ok"]) for x in items], [(2, "o/r#8", False)])
+            d = C.read_json(R.notices_path())
+            C.write_json(R.notices_path(), dict(d, seen=0))  # no tab has asked lately
+            R.notify("o/r#9", "Review done: Third", "o/r#9 · 0 findings")
+        self.assertEqual(len(shown), 1)
+        self.assertEqual(shown[0][0], "osascript")
+        self.assertIn("LFG: Review done: Third", shown[0][2])
+
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
         both = {"reviews": [{"pr": "o/api#7", "summary": "backend", "findings": [self.finding()]},

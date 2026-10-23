@@ -240,6 +240,12 @@ def api(view, q):
                     "title": ticket_titles().get(_arg(q, "ticket").strip().upper(), "")}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
+    if view == "notices":
+        from . import review as R
+        try:
+            return R.notices(int(_arg(q, "since") or 0))
+        except ValueError:
+            return {"last": 0, "items": []}
     if view in ("prreviews", "prreview", "prreviewlog"):
         from . import review as R
         from . import sessions as SS

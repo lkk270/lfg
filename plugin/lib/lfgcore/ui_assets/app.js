@@ -2796,6 +2796,34 @@ async function init() {
   mapStatus();
   route();
   offerTours();
+  watchNotices();
+}
+/* A review finished: a desktop notification that opens it (once you allow them), and a note in the page either way. */
+async function watchNotices() {
+  let since = 0;
+  const tick = async () => {
+    const d = await api("notices", { since }).catch(() => null);
+    if (!d) return;
+    for (const x of d.items || []) noticeShow(x);
+    since = d.last || since;
+  };
+  await tick();
+  setInterval(tick, 15000);
+}
+function noticeShow(x) {
+  const href = `#prs/${x.pr.replace("#", "/")}`;
+  if ("Notification" in window && Notification.permission === "granted") {
+    const n = new Notification(x.title, { body: x.body, tag: `lfg-${x.n}` });
+    n.onclick = () => { window.focus(); location.hash = href; n.close(); };
+  }
+  const box = document.createElement("div");
+  box.className = `notice ${x.ok ? "ok" : "bad"}`;
+  box.innerHTML = `${dot(x.ok ? "ok" : "bad")}<div class="grow"><a href="${esc(href)}"><b>${esc(x.title)}</b></a><div class="small muted">${esc(x.body)}</div>${"Notification" in window && Notification.permission === "default" ? '<button class="btn tiny" data-notify-on>Also tell me on the desktop</button>' : ""}</div><button class="btn tiny" data-notice-x aria-label="Close">×</button>`;
+  $("[data-notice-x]", box).onclick = () => box.remove();
+  $("a", box).onclick = () => box.remove();
+  const on = $("[data-notify-on]", box);
+  if (on) on.onclick = async () => { await Notification.requestPermission(); on.remove(); };
+  ($("#notices") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "notices" }))).appendChild(box);
 }
 async function loadBranches() {
   /* runs and checks are tagged with the branch they ran on; the code map is one per project */

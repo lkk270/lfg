@@ -861,7 +861,48 @@ def run(repo, number, ticket=None, fresh=False, together=()):
     for i, x in enumerate(refs):
         for y in refs[i + 1:]:
             link(x, y)
+    rec = load(repo, number) or {}
+    p = (rec.get("passes") or [{}])[-1]
+    done = first["status"] == "done"
+    score = " · score %s" % p["score"] if p.get("score") is not None else ""
+    notify(ref(repo, number), "Review %s: %s" % ("done" if done else "failed", rec.get("title") or ref(repo, number)),
+           "%s · %d findings%s" % (", ".join(refs), len(p.get("findings") or []), score) if done
+           else first.get("why") or "see the log", ok=done)
     return first
+
+
+# ---------------------------------------------------------------- notices: a review finished
+
+NOTICES_KEEP = 50
+SEEN_FOR = 90  # seconds: a dashboard tab that asked this recently shows the notice itself
+
+
+def notices_path():
+    return os.path.join(reviews_dir(), "notices.json")
+
+
+def notify(pr, title, body, ok=True):
+    """Tell you a review (or a fix) finished. Every open dashboard tab shows it as a desktop notification that opens
+    the review; with no tab open, macOS shows a plain one instead."""
+    import subprocess
+    d = C.read_json(notices_path(), {}) or {}
+    items = (d.get("items") or [])[-(NOTICES_KEEP - 1):]
+    n = max([x["n"] for x in items] or [0]) + 1
+    items.append({"n": n, "pr": pr, "title": title[:200], "body": str(body)[:400], "ok": bool(ok), "at": C.now_iso()})
+    C.write_json(notices_path(), dict(d, items=items))
+    if time.time() - float(d.get("seen") or 0) > SEEN_FOR and C.which("osascript"):
+        script = "display notification %s with title %s" % (json.dumps(str(body)[:200]),
+                                                             json.dumps("LFG: " + title[:150]))
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+
+
+def notices(since):
+    """Notices after number `since` (0: none, just the latest number to start from), and note a dashboard is open."""
+    d = C.read_json(notices_path(), {}) or {}
+    items = d.get("items") or []
+    C.write_json(notices_path(), dict(d, seen=time.time()))
+    last = max([x["n"] for x in items] or [0])
+    return {"last": last, "items": [x for x in items if x["n"] > since] if since else []}
 
 
 def session_id(log):
