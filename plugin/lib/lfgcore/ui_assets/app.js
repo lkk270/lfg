@@ -2365,12 +2365,69 @@ async function prScores() {
     { k: "approved_after", label: "Approved", html: x => (x.approved_after ? `after ${plural(x.approved_after, "review")}` : '<span class="muted small">not by you</span>'), sort: x => x.approved_after ?? 99 },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
   ];
+  if (d.available === false) return `${head("PR reviews", "")}${prTabs("scores")}${unavailable(d)}`;
   return `${head("PR reviews", `How pull requests score. The first review scores the code as it was handed in; later reviews usually go up after fixes, so they're shown apart. ${scopeLine("prs")}`)}
     ${prTabs("scores")}
     ${(d.prs || []).length ? `${tiles}
+    ${section("Where each person starts and ends", startEnd(d.authors), "average score on the first review, and on the latest one")}
+    ${section("First reviews over time", overTime(d.prs, d.authors), "each dot is a PR's first review; hover for which")}
     ${section("By person", `<div class="box">${table(d.authors, gcols("Person"), { sort: "prs", filter: false })}</div>`, "average first-review score, then where they ended up")}
     ${section("By repo", `<div class="box">${table(d.repos, gcols("Repo"), { sort: "prs", filter: false })}</div>`)}
-    ${section("Every PR", `<div class="box">${table(d.prs, pcols, { sort: "updated", onRow: x => (location.hash = `#prs/${x.repo}/${x.number}`) })}</div>`)}` : empty("No scores yet", "Reviews give each PR a score out of 100. Run one from Pull requests.")}`;
+    ${section("Every PR", `<div class="box">${table(d.prs, pcols, { sort: "updated", onRow: x => (location.hash = `#prs/${x.repo}/${x.number}`) })}</div>`)}` : empty("No scores yet", allRepos("prs") ? "Reviews give each PR a score out of 100. Run one from Pull requests." : `No reviews in ${esc(repoName())} yet. Use “Show all repos” above to see every repo.`)}`;
+}
+/* Each person's average first-review score and latest score, as a dot each joined by a line: how far fixes took
+   them. Orange is the first review, blue the latest; both are labeled in the legend and the tooltip. */
+function startEnd(rows) {
+  rows = (rows || []).filter(r => r.first != null);
+  if (!rows.length) return "";
+  const W = 760, L = 150, R = 24, rowH = 34, H = rows.length * rowH + 30;
+  const lo = Math.max(0, Math.floor((Math.min(...rows.flatMap(r => [r.first, r.latest])) - 5) / 10) * 10), hi = 100;
+  const x = v => L + ((v - lo) / (hi - lo)) * (W - L - R);
+  const grid = [];
+  for (let v = lo; v <= hi; v += 10) grid.push(`<line class="axis" x1="${x(v)}" x2="${x(v)}" y1="4" y2="${H - 22}"/><text x="${x(v)}" y="${H - 6}" text-anchor="middle">${v}</text>`);
+  const marks = rows.map((r, i) => {
+    const y = 18 + i * rowH, tip = `${r.name} · ${plural(r.prs, "PR")}|First review: ${Math.round(r.first)}|Latest: ${Math.round(r.latest)}${r.to_approval != null ? `|Reviews to approval: ${r.to_approval}` : ""}`;
+    return `<g class="se-row" data-tip="${esc(tip)}"><rect x="0" y="${y - rowH / 2}" width="${W}" height="${rowH}" fill="transparent"/>
+      <text class="se-name" x="${L - 12}" y="${y + 4}" text-anchor="end">${esc(r.name.length > 20 ? r.name.slice(0, 19) + "…" : r.name)}</text>
+      <line x1="${x(r.first)}" x2="${x(r.latest)}" y1="${y}" y2="${y}" class="se-link"/>
+      <circle cx="${x(r.latest)}" cy="${y}" r="5" class="se-latest"/><circle cx="${x(r.first)}" cy="${y}" r="8" class="se-first"/></g>`;
+  }).join("");
+  return `<div class="box pad chart-box"><div class="legend"><span><i class="se-key first"></i>First review</span><span><i class="se-key latest"></i>Latest review</span></div><svg class="score-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Average first and latest review score per person">${grid.join("")}${marks}</svg><div class="chart-tip" hidden></div></div>`;
+}
+/* Every PR's first-review score by date, one dot each, with a person filter. The dashed line is the average of
+   what's shown. */
+function overTime(prs, authors) {
+  const pick = state.scoreWho || "";
+  const xs = (prs || []).filter(p => p.first_at && (!pick || p.author === pick)).sort((a, b) => a.first_at.localeCompare(b.first_at));
+  const filter = `<div class="row filters"><label class="model-pick">Person<select data-score-who><option value="">Everyone</option>${(authors || []).map(a => `<option ${a.name === pick ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select></label></div>`;
+  if (xs.length < 2) return `${filter}<div class="box pad muted small">Not enough reviews to draw yet: it needs at least two.</div>`;
+  const W = 760, L = 36, R = 16, H = 220, B = 24;
+  const t = s => new Date(s).getTime(), t0 = t(xs[0].first_at), t1 = Math.max(t(xs[xs.length - 1].first_at), t0 + 864e5);
+  const lo = Math.max(0, Math.floor((Math.min(...xs.map(p => p.first)) - 5) / 10) * 10);
+  const x = s => L + ((t(s) - t0) / (t1 - t0)) * (W - L - R), y = v => 8 + (1 - (v - lo) / (100 - lo)) * (H - B - 8);
+  const grid = [];
+  for (let v = lo; v <= 100; v += 10) grid.push(`<line class="axis" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`);
+  const day = s => new Date(s).toLocaleDateString([], { month: "short", day: "numeric" });
+  const ticks = [xs[0], xs[Math.floor(xs.length / 2)], xs[xs.length - 1]].map(p => `<text x="${x(p.first_at)}" y="${H - 6}" text-anchor="middle">${esc(day(p.first_at))}</text>`).join("");
+  const avg = xs.reduce((a, p) => a + p.first, 0) / xs.length;
+  const dots = xs.map(p => `<circle class="ot-dot" cx="${x(p.first_at)}" cy="${y(p.first)}" r="5" data-tip="${esc(`${p.title}|${p.repo}#${p.number} · ${p.author}|First review: ${p.first} · latest: ${p.latest}|${day(p.first_at)}`)}" data-href="#prs/${esc(p.repo)}/${esc(p.number)}"/>`).join("");
+  return `${filter}<div class="box pad chart-box"><svg class="score-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="First-review score of each PR over time">${grid.join("")}${ticks}<line class="ot-avg" x1="${L}" x2="${W - R}" y1="${y(avg)}" y2="${y(avg)}"/><text class="ot-avg-l" x="${L + 6}" y="${y(avg) + 14}">average ${Math.round(avg)}</text>${dots}</svg><div class="chart-tip" hidden></div></div>`;
+}
+/* Hover any [data-tip] mark in a chart: a tooltip beside it, one line per "|". */
+function wireScoreCharts(root) {
+  $$(".chart-box", root).forEach(box => {
+    const tip = $(".chart-tip", box);
+    const show = (el, ev) => {
+      const [t, ...rest] = el.dataset.tip.split("|");
+      tip.innerHTML = `<div class="ic-t">${esc(t)}</div>${rest.map(r => `<div>${esc(r)}</div>`).join("")}`;
+      const b = box.getBoundingClientRect();
+      tip.hidden = false;
+      tip.style.left = Math.min(ev.clientX - b.left + 14, b.width - tip.offsetWidth - 8) + "px";
+      tip.style.top = ev.clientY - b.top + 14 + "px";
+    };
+    $$("[data-tip]", box).forEach(el => { el.onmousemove = ev => show(el, ev); el.onmouseleave = () => (tip.hidden = true); });
+  });
+  $$("[data-score-who]", root).forEach(s => s.onchange = () => { state.scoreWho = s.value; softRoute(); });
 }
 /* Linked PRs as tags. They can be in another repo than the one picked top left, so each says its repo, and opening
    one works whichever repo is picked. */
@@ -2433,7 +2490,7 @@ function ticketSection(d, unlocked) {
   }
   const groups = [...by].sort((a, b) => b[1].length - a[1].length || b[0].localeCompare(a[0])).map(([t, prs]) => `<details class="item" ${prs.length > 1 ? "open" : ""}><summary><span class="grow"><b class="mono">${esc(t)}</b> ${esc((state.ticketTitles || {})[t] || "")} <span class="muted small">${plural(prs.length, "open PR")}</span></span>${prs.some(x => x.passes) ? `<a class="small" href="#prs/ticket/${encodeURIComponent(t)}" title="Every review of this ticket's PRs on one page">Open reviews</a>` : ""}</summary>
     <ul class="list">${prs.map(x => `<li><input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} aria-label="Pick ${esc(prRef(x))}"><div class="grow">${esc(x.title || "")}<div class="meta mono">${esc(prRef(x))} · by ${esc(x.author || "")}${x.passes ? ` · ${plural(x.passes, "review")}` : ""}</div>${x.job ? `<div class="meta">${jobLine(x.job)}</div>` : ""}</div><a class="small" href="${esc(prHash(x))}">Open</a></li>`).join("")}</ul>
-    <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button>${anyReviewed(prs.map(prRef)) ? `<button class="btn small" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' data-fresh="1" ${unlocked ? "" : "disabled"} title="${FULL_TITLE}">${prs.length > 1 ? "Full review of all" : "Full review"}</button>` : ""}<button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div></details>`).join("");
+    <div class="row mt"><button class="btn small primary" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' ${unlocked ? "" : "disabled"} title="One Claude session reviews them as one change, reading the ticket, and checks they agree with each other">${anyReviewed(prs.map(prRef)) ? (prs.length > 1 ? `Re-review all ${prs.length} together` : "Re-review") : prs.length > 1 ? `Review all ${prs.length} together` : "Review it"}</button>${anyReviewed(prs.map(prRef)) ? `<button class="btn small" data-ticket-run='${esc(JSON.stringify([t, prs.map(prRef)]))}' data-fresh="1" ${unlocked ? "" : "disabled"} title="${FULL_TITLE}">${prs.length > 1 ? `Review all ${prs.length} from scratch` : "Review from scratch"}</button>` : ""}<button class="btn small" data-ticket-find="${esc(t)}" ${unlocked ? "" : "disabled"} title="Ask GitHub for other open PRs that name ${esc(t)}, in any repo">Find more PRs on ${esc(t)}</button><span class="muted small">or tick some and use the bar above</span></div>${anyReviewed(prs.map(prRef)) ? AGAIN_HELP : ""}</details>`).join("");
   return section("By Linear ticket", `${groups ? `<div class="box">${groups}</div>` : ""}
     <div class="row mt"><input type="text" id="tk-id" class="mono" placeholder="ATO-4223" ${unlocked ? "" : "disabled"}><button class="btn small" id="tk-go" ${unlocked ? "" : "disabled"}>Find the ticket's PRs</button></div>`,
     "open PRs whose branch, title or description names a Linear ticket, from every repo");
@@ -2463,7 +2520,9 @@ async function ticketFind(t) {
 /* Pick several PRs on the list (checkboxes) and review them together in one session. */
 /* Reviewing several PRs together: a PR reviewed before gets a re-review, unless you ask for a full one. The full option
    shows only when one of them has been reviewed. */
-const FULL_TITLE = "Review every PR again from scratch, ignoring earlier reviews";
+const FULL_TITLE = "Read all the code again, as if new. Earlier findings still open are still checked";
+/* The two ways to review again, said the same way everywhere, under the buttons. */
+const AGAIN_HELP = '<div class="again-help"><span><b>Re-review</b> checks your earlier comments and reads only the commits since the last review. Use it after the author pushed fixes.</span><span><b>From scratch</b> reads all the code again, as if new, and still checks earlier findings that are open. Use it when the PR changed a lot.</span></div>';
 const anyReviewed = refs => refs.some(r => (state.prReviewed || new Set()).has(r));
 function pickBar() {
   const bar = $("#pr-pickbar");
@@ -2471,9 +2530,9 @@ function pickBar() {
   const picked = [...state.prPick];
   bar.hidden = picked.length < 1;
   bar.innerHTML = `<span><b>${plural(picked.length, "PR")} picked:</b> <span class="mono small">${esc(picked.join(", "))}</span></span>
-    <button class="btn small primary" id="pr-together" ${picked.length < 2 ? "disabled" : ""} title="One Claude session reviews them as one change: each gets its own review, and it checks they agree with each other">Review together</button>
-    ${anyReviewed(picked) ? `<button class="btn small" id="pr-together-full" ${picked.length < 2 ? "disabled" : ""} title="${FULL_TITLE}">Full review together</button>` : ""} <button class="btn small" id="pr-picklink" ${picked.length < 2 ? "disabled" : ""} title="Link their reviews without running anything">Link them</button>
-    <button class="btn small" id="pr-pickclear">Clear</button>`;
+    <button class="btn small primary" id="pr-together" ${picked.length < 2 ? "disabled" : ""} title="One Claude session reviews them as one change: each gets its own review, and it checks they agree with each other">${anyReviewed(picked) ? "Re-review together" : "Review together"}</button>
+    ${anyReviewed(picked) ? `<button class="btn small" id="pr-together-full" ${picked.length < 2 ? "disabled" : ""} title="${FULL_TITLE}">Review together from scratch</button>` : ""} <button class="btn small" id="pr-picklink" ${picked.length < 2 ? "disabled" : ""} title="Link their reviews without running anything">Link them</button>
+    <button class="btn small" id="pr-pickclear">Clear</button>${anyReviewed(picked) && picked.length > 1 ? AGAIN_HELP : ""}`;
   $("#pr-pickclear").onclick = () => { state.prPick.clear(); $$("[data-pr-pick]").forEach(c => (c.checked = false)); pickBar(); };
   const together = async e => {
     const b = e.target, [first, ...rest] = picked, fresh = b.id === "pr-together-full";
@@ -2748,17 +2807,17 @@ async function prDetail(arg) {
   const fixing = d.fix_job && d.fix_job.status === "running";
   if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
-  const kindOf = j && (j.fresh ? "new review" : j.re_review ? "re-review" : "review");
+  const kindOf = j && (j.fresh ? "review from scratch" : j.re_review ? "re-review" : "review");
   const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">New full review</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${modelPick(d, unlocked)}</div>`;
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
   const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
   const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
-    <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">Review together with linked PRs</button>${rec || d.linked.some(x => x.reviewed) ? `<button class="btn small" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' data-fresh="1" ${can ? "" : "disabled"} title="${FULL_TITLE}">Full review together</button>` : ""}` : ""}</div>`, "reviewed together, or linked by you; they can be in any repo");
+    <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">${rec || d.linked.some(x => x.reviewed) ? "Re-review" : "Review"} together with linked PRs</button>${rec || d.linked.some(x => x.reviewed) ? `<button class="btn small" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' data-fresh="1" ${can ? "" : "disabled"} title="${FULL_TITLE}">Review together from scratch</button>` : ""}` : ""}</div>${(d.linked || []).length && (rec || d.linked.some(x => x.reviewed)) ? AGAIN_HELP : ""}`, "reviewed together, or linked by you; they can be in any repo");
   if (!rec) return `${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${jobBox}${actions}${linkedBox}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
@@ -2770,7 +2829,7 @@ async function prDetail(arg) {
   const byId = Object.fromEntries(passes.flatMap(x => x.findings).map(f => [f.id, f]));
   // a full review saved before LFG recorded the kind: no earlier findings followed up, and every finding is new
   const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
-  const label = x => `Review ${x.n}${full(x) ? " · full review" : x.kind === "re-review" ? " · re-review" : ""}`;
+  const label = x => `Review ${x.n}${full(x) ? " · from scratch" : x.kind === "re-review" ? " · re-review" : ""}`;
   const passTabs = `<div class="tabs pr-passes" data-scroll-on>${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
   const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
   const passOf = Object.fromEntries(passes.flatMap(x => x.findings.map(f => [f.id, x.n])));
@@ -3288,7 +3347,7 @@ function wireView(key, view) {
   });
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
-  if (key === "prs") wirePrs(view);
+  if (key === "prs") { wirePrs(view); wireScoreCharts(view); }
   if (key === "sessions") wireSessions(view);
   if (key === "knowledge") wireKnowledge(view);
   if (key === "prefs") wirePrefsPage(view);

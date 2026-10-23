@@ -983,3 +983,28 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .stat-tile .k { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .stat-tile .v { display: flex; align-items: center; min-height: 64px; }
 .big-n { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+/* What Re-review and From scratch each do, under the buttons */
+.again-help { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; margin-top: 8px; font-size: 12.5px; color: var(--muted); line-height: 1.45; flex-basis: 100%; }
+.again-help b { color: var(--text-2); font-weight: 600; }
+@media (max-width: 800px) { .again-help { grid-template-columns: 1fr; } }
+/* Scores: where each person starts and ends, first reviews over time */
+.chart-box { position: relative; }
+.score-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.score-chart text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.score-chart .axis { stroke: var(--line); stroke-width: 1; }
+.score-chart .se-name { font-size: 12.5px; fill: var(--text-2); }
+.se-link { stroke: var(--line-2); stroke-width: 3; stroke-linecap: round; }
+.se-first { fill: none; stroke: var(--series-3); stroke-width: 3; }  /* a ring, so it shows around the latest when they match */
+.se-latest { fill: var(--series-1); stroke: var(--page); stroke-width: 2; }
+.se-row:hover rect { fill: var(--hover); }
+.se-key { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.se-key.first { background: none; box-shadow: inset 0 0 0 2.5px var(--series-3); } .se-key.latest { background: var(--series-1); }
+.chart-box .legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--text-2); margin-bottom: 8px; }
+.ot-dot { fill: var(--series-1); stroke: var(--page); stroke-width: 2; cursor: pointer; }
+.ot-dot:hover { r: 7; }
+.ot-avg { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+.score-chart .ot-avg-l { fill: var(--muted); font-size: 11px; }
+.chart-tip { position: absolute; pointer-events: none; background: var(--page); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 8px 10px; font-size: 12.5px; box-shadow: var(--shadow); z-index: 5; max-width: 320px; color: var(--text); }
+.chart-tip .ic-t { font-weight: 600; margin-bottom: 3px; }
+.chart-tip[hidden] { display: none; }
