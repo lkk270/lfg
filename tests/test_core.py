@@ -2585,6 +2585,23 @@ class SessionsTest(unittest.TestCase):
         with open(os.path.join(d, sid + ".jsonl"), "w") as f:
             f.write("\n".join(json.dumps(e) for e in ev) + "\n")
 
+    def test_a_session_started_in_the_main_checkout_shows_the_worktree_it_worked_in(self):
+        a, b = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2))
+        self.write(a, "/nowhere/app", "main", "build it")
+        self.write(b, "/nowhere/app", "main", "just a question")
+        uses = [{"type": "assistant", "cwd": "/nowhere/app", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "lfg worktree new feat-a"}}]}},
+            {"type": "assistant", "cwd": "/nowhere/app", "message": {"content": [
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "/nowhere/app.worktrees/feat-a/x.py"}}]}},
+            {"type": "assistant", "cwd": "/nowhere/app", "message": {"content": [
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "cd /nowhere/app.worktrees/feat-b && git status"}}]}}]
+        with open(os.path.join(self.dir, "-nowhere-app", a + ".jsonl"), "a") as f:
+            f.write("\n".join(json.dumps(e) for e in uses) + "\n")
+        rows = {r["id"]: r for r in self.SS.listing()["sessions"]}
+        self.assertEqual(rows[a]["worktree"], "feat-b")  # the last one it used
+        self.assertEqual(rows[b]["worktree"], "")
+
     def test_finds_every_folder_names_and_groups_by_ticket(self):
         a, b, c = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2, 3))
         self.write(a, "/nowhere/app", "lee/ato-12-fix-login", "fix the login bug")
