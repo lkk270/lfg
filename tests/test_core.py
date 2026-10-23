@@ -2394,6 +2394,48 @@ class PrefsTest(unittest.TestCase):
         self.assertIn("never allowed", P.check_command("cd %s && git commit --amend" % main, v, cwd=feat))
         self.assertIn("never allowed", P.check_command("git -C %s push -f" % main, v, cwd=feat))
 
+    def test_a_force_push_naming_a_feature_branch_checks_that_branch_not_the_checkouts(self):
+        """From the main checkout (on main), `git push --force-with-lease origin <feature>` force-pushes the feature
+        branch: the review-fix rule judges that branch and its own last commit, never main."""
+        P = self.P
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        origin, repo = tempfile.mkdtemp(), tempfile.mkdtemp()
+        for d in (origin, repo):
+            self.addCleanup(__import__("shutil").rmtree, d, True)
+        git = lambda *a: subprocess.run(["git", *a], cwd=repo, env=env, check=True, capture_output=True)  # noqa: E731
+        subprocess.run(["git", "init", "-q", "--bare", origin], check=True)
+        git("init", "-q", "-b", "main")
+        git("remote", "add", "origin", origin)
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        git("push", "-q", "origin", "main")
+        feat = "lee/ato-4223-queue-terraform-runs"
+        git("checkout", "-q", "-b", feat)
+        with open(os.path.join(repo, "a.txt"), "w") as f:
+            f.write("one\n")
+        git("add", "a.txt")
+        git("commit", "-q", "-m", "feature")
+        git("push", "-q", "origin", feat)
+        with open(os.path.join(repo, "a.txt"), "w") as f:
+            f.write("one, fixed\n")
+        git("commit", "-q", "-a", "--amend", "--no-edit")  # the small fix, folded in
+        git("checkout", "-q", "main")
+        v = dict(P.effective(), rewrite="review", rewrite_lines=100)
+        seen = []
+        with mock.patch.object(P, "_my_open_pr", side_effect=lambda cwd, b: seen.append(b) or b == feat):
+            for cmd in ("git push --force-with-lease origin %s" % feat, "git push -f origin %s:%s" % (feat, feat),
+                        "git push origin +%s" % feat):
+                self.assertIsNone(P.check_command(cmd, v, cwd=repo), cmd)
+            self.assertEqual(set(seen), {feat})  # asked about the feature branch, never main
+            for cmd in ("git push --force-with-lease origin main", "git push -f origin %s:main" % feat):
+                self.assertIn("never allowed", P.check_command(cmd, v, cwd=repo), cmd)
+            git("checkout", "-q", feat)
+            for i in range(3):  # two commits ahead of origin: more than an amended last commit
+                git("commit", "-q", "--allow-empty", "-m", "more %d" % i)
+            git("checkout", "-q", "main")
+            self.assertIn("more than the last commit",
+                          P.check_command("git push --force-with-lease origin %s" % feat, v, cwd=repo))
+
     def test_text_in_a_quoted_heredoc_is_not_a_command(self):
         v = self.P.effective()
         self.assertIsNone(self.P.check_command("python3 - <<'EOF'\nprint('use `gh pr merge 3`')\nEOF", v))
