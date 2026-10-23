@@ -94,7 +94,7 @@ def parse(path):
     st = os.stat(path)
     out = {"id": os.path.basename(path)[:-6], "path": path, "size": st.st_size, "mtime": st.st_mtime,
            "cwd": "", "branch": "", "title": "", "ai_title": "", "first": "", "last": "", "started": "", "ended": "",
-           "prompts": 0, "cost": None, "sidechain_only": True, "entrypoint": ""}
+           "prompts": 0, "cost": None, "sidechain_only": True, "entrypoint": "", "worked_in": ""}
     for chunk in _chunks(path, st.st_size):
         for ln in chunk.splitlines():
             if not ln.startswith(b"{"):
@@ -119,6 +119,12 @@ def parse(path):
             out["cwd"] = out["cwd"] or ev.get("cwd") or ""
             out["entrypoint"] = out["entrypoint"] or ev.get("entrypoint") or ""
             out["branch"] = ev.get("gitBranch") or out["branch"]
+            # a session started in the main checkout that works in a worktree: the last one it used
+            if t == "assistant":
+                for part in (ev.get("message") or {}).get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "tool_use":
+                        for m in WORKTREE_PATH.finditer(json.dumps(part.get("input") or {})):
+                            out["worked_in"] = m.group(1)
             ts = ev.get("timestamp") or ""
             out["started"] = out["started"] or ts
             out["ended"] = ts or out["ended"]
@@ -132,7 +138,7 @@ def parse(path):
 
 def _load_index():
     d = C.read_json(_index_path(), {}) or {}
-    return d if d.get("v") == 4 else {"v": 4, "sessions": {}}
+    return d if d.get("v") == 5 else {"v": 5, "sessions": {}}
 
 
 def scan():
@@ -155,7 +161,7 @@ def scan():
             continue
     if changed or len(new) != len(old):
         C.ensure_dir(os.path.dirname(_index_path()))
-        C.write_json(_index_path(), {"v": 4, "sessions": new})
+        C.write_json(_index_path(), {"v": 5, "sessions": new})
     return [s for s in new.values() if not s["sidechain_only"] and s["prompts"]]
 
 
@@ -170,6 +176,10 @@ def _ticket(branch, *texts):
             if m not in NOT_TICKETS:
                 return m
     return ""
+
+
+# <parent>/<repo>.worktrees/<name>, where `lfg worktree new` puts worktrees
+WORKTREE_PATH = re.compile(r"(/[^\s\"'`;|&]+?\.worktrees/[^/\s\"'`;|&]+)")
 
 
 def _where(cwd):
@@ -259,6 +269,10 @@ def listing(days=None, scripted=False, hidden=False, only=None):
                 (s["id"] in hid and not hidden):
             continue
         repo, root, wt = _where(s["cwd"])
+        if not wt and s.get("worked_in"):
+            _, w_root, wt = _where(s["worked_in"])
+            if root and w_root and os.path.realpath(w_root) != os.path.realpath(root):
+                wt = ""  # a worktree of another repo: not where this session's own work is
         if want and (not root or os.path.realpath(root) != want):
             continue
         r = dict(s, repo=repo, root=root, worktree=wt,

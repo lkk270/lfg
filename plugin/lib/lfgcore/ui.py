@@ -240,7 +240,13 @@ def api(view, q):
                     "title": ticket_titles().get(_arg(q, "ticket").strip().upper(), "")}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
-    if view in ("prreviews", "prreview", "prreviewlog"):
+    if view == "notices":
+        from . import review as R
+        try:
+            return R.notices(int(_arg(q, "since") or 0))
+        except ValueError:
+            return {"last": 0, "items": []}
+    if view in ("prreviews", "prreview", "prreviewlog", "prsnippet"):
         from . import review as R
         from . import sessions as SS
         if view == "prreviews":
@@ -249,6 +255,8 @@ def api(view, q):
         try:
             repo, number = R.parse_pr(_arg(q, "pr"))
             pr = R.ref(repo, number)
+            if view == "prsnippet":
+                return {"snippet": R.snippet(repo, number, _arg(q, "id"))}
             if view == "prreviewlog":
                 rec = R.need(repo, number)
                 p = next((x for x in rec["passes"] if x["n"] == int(_arg(q, "n") or 0)), None)
@@ -258,7 +266,9 @@ def api(view, q):
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
                     p["together"] = R.together(p)
+            fj = R.fix_job(repo, number)
             return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
+                    "fix_job": R.progress(repo, number, j=fj) if fj else None,
                     "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
                     "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],
@@ -333,7 +343,7 @@ def save(what, body):
         return run_checks(_rid({"repo": [str(body.get("repo") or "")]}), body.get("run"))
     if what == "graphs_build":
         return build_graphs(body.get("repo"), body.get("what"))
-    if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove", "pref_remind"):
+    if what in ("pref_set", "pref_clear", "prefs_install", "pref_add", "pref_remove", "pref_remind", "pref_text"):
         from . import prefs as P
         try:
             if what == "pref_set":
@@ -343,6 +353,8 @@ def save(what, body):
             if what == "pref_add":
                 return P.add_custom(body.get("id"), body.get("group"), body.get("title"), body.get("text") or "",
                                     body.get("off_text") or "", bool(body.get("default", True)))
+            if what == "pref_text":
+                return P.set_text(body.get("id"), body.get("text"))
             if what == "pref_remove":
                 return P.remove_custom(body.get("id"))
             if what == "pref_remind":
@@ -472,6 +484,10 @@ def review_action(what, body):
             return R.discard(repo, number, int(body.get("pass") or 0))
         if what == "review_ask":
             return R.ask(repo, number, body.get("pass"), body.get("question"))
+        if what == "review_fix":
+            return R.fix_start(repo, number)
+        if what == "review_discuss":
+            return R.discuss(repo, number, str(body.get("id") or ""), body.get("question"))
         if what == "review_rewrite":
             return R.rewrite(repo, number, str(body.get("id") or ""), body.get("instruction"))
         if what == "review_sessions":

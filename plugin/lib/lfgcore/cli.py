@@ -920,6 +920,11 @@ def _review(R, a):
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
                                                   j["log"]))
         return 0 if j["status"] == "done" else 1
+    elif a.action == "fix":
+        j = R.fix_run(repo, number)
+        print("fix of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j.get("why") else "",
+                                               j["log"]))
+        return 0 if j["status"] == "done" else 1
     elif a.action == "sessions":
         rows = R.sessions_for(repo, number)
         C.emit(rows, a.json, lambda rs: [print("%s  %s  %-50s %s" % (x["modified"][:16], "json" if x["has_json"]
@@ -1344,7 +1349,7 @@ def main(argv=None):
     fb.add_argument("--note")
     rv = sp.add_parser("review", help="PR reviews: context, save, show, list, mark, threads; post and run are yours")
     rv.add_argument("action", choices=["context", "save", "show", "list", "mark", "post", "threads", "others", "run",
-                                       "sessions", "import"])
+                                       "sessions", "import", "fix"])
     rv.add_argument("pr", nargs="?", help="PR number (repo from this checkout), owner/repo#12 or a PR URL")
     rv.add_argument("ids", nargs="*", help="mark: finding ids, e.g. 1.2 1.4")
     st = rv.add_mutually_exclusive_group()

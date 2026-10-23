@@ -1158,7 +1158,7 @@ async function offerTours() {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["prefs", "Preferences"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["integrations", "Integrations"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1597,13 +1597,56 @@ PAGES.prefs = async () => {
     ${banner}
     ${on ? `<div class="callout ok">${dot("ok")}<span><b>Changes apply to sessions already open, no restart needed.</b> Enforced rules are checked on the very next command; open sessions are told about any change with your next message to them.</span></div>` : ""}
     ${unlocked ? "" : lockedNote("change your rules here")}
-    ${prefControls(P, P.defaults, P.defaults, null, unlocked)}
+    ${prefControls({ ...P, catalog: P.catalog.filter(p => p.group !== TALK) }, P.defaults, P.defaults, null, unlocked)}
+    ${section(TALK, `<p class="muted">Its rules have their own page: <a href="#talk">How Claude talks</a>.</p>`)}
     <div class="box pad mt"><div class="k" style="margin-top:0">When a change takes effect</div>
       <ul class="small"><li><b>Enforced rules</b> apply at once, in every session, open or new: the next command is checked against them.</li>
       <li><b>Instructions</b> reach new sessions when they start, and sessions already open with your next message in them. Nothing to restart.</li>
       <li>Claude can make a session stricter, never looser. Loosening is yours: here, or <code>! lfg prefs set &lt;id&gt; &lt;value&gt; --by-user</code> in Claude Code.</li></ul>
       <p class="muted small">Your defaults are written to <code>${esc(P.file)}</code>, which your CLAUDE.md reads.</p></div>`;
 };
+const TALK = "How Claude talks to you";
+/* How Claude talks to you: each rule on its own, on or off, in the exact words Claude gets, which you can change. */
+PAGES.talk = async () => {
+  const [P, unlocked] = await Promise.all([api("prefs"), isUnlocked()]);
+  const rules = P.catalog.filter(p => p.group === TALK), dis = unlocked ? "" : "disabled";
+  const card = p => {
+    const v = P.defaults[p.id];
+    return `<div class="box pad pref talk-rule" data-talk="${esc(p.id)}"><div class="row"><b class="grow">${esc(p.title)}</b>${p.custom ? '<span class="tag">yours</span>' : p.lfg_text ? '<span class="tag warn">your wording</span>' : ""}<label class="row"><input type="checkbox" data-pref='${esc(JSON.stringify([p.id, ""]))}' ${v ? "checked" : ""} ${dis}> <span>${v ? "On" : "Off"}</span></label></div>
+      ${p.about ? `<p class="small muted">${esc(p.about)}</p>` : ""}
+      <div class="k">What Claude is told when it's on</div>
+      <textarea class="editor small" data-talk-text ${dis}>${esc(p.text || "")}</textarea>
+      <div class="set-actions"><button class="btn small primary" data-talk-save ${dis}>Save wording</button>${p.lfg_text ? `<button class="btn small" data-talk-reset ${dis} title="${esc(p.lfg_text)}">Put back LFG's wording</button>` : ""}${p.custom ? `<a href="#" class="small" data-pref-rm="${esc(p.id)}">Remove</a>` : ""}<span class="save-msg"></span></div></div>`;
+  };
+  return `${head("How Claude talks", "How Claude writes to you: answers, explanations, things to paste, PR comments. Each rule is on or off for every new session, in the exact words Claude gets, and you can change those words. Sessions → Rules turns one off for a single session.")}
+    ${unlocked ? "" : lockedNote("change these here")}
+    <div class="pref-grid talk-grid">${rules.filter(p => p.kind === "switch").map(card).join("")}</div>
+    ${prefControls({ ...P, catalog: rules.filter(p => p.kind !== "switch") }, P.defaults, P.defaults, null, unlocked)}
+    ${section("Add a rule of your own", unlocked ? `<div class="box pad"><input type="text" id="talk-title" class="wide" placeholder="A short name, e.g. Say which environment first"><textarea class="editor small mt" id="talk-text" placeholder="What Claude is told, e.g. When a reply is about a deploy, name the environment in its first sentence."></textarea><div class="set-actions"><button class="btn small primary" id="talk-add">Add rule</button><span class="save-msg" id="talk-msg"></span></div></div>` : lockedNote("add rules here"))}
+    <p class="muted small">These rules go into <code>${esc(P.file)}</code> with your other preferences, which your CLAUDE.md reads.</p>`;
+};
+function wireTalk(root) {
+  wirePrefs(root, softRoute);
+  $$("[data-talk]", root).forEach(c => {
+    const id = c.dataset.talk, msg = $(".save-msg", c), put = async text => {
+      const r = await save("pref_text", { id, text });
+      saidMsg(msg, r, text ? "Saved. New sessions get it; open ones with your next message." : "LFG's wording is back.");
+      if (r.ok) setTimeout(softRoute, 700);
+    };
+    const s = $("[data-talk-save]", c), r = $("[data-talk-reset]", c);
+    if (s) s.onclick = () => put($("[data-talk-text]", c).value);
+    if (r) r.onclick = () => put("");
+  });
+  const add = $("#talk-add", root);
+  if (add) add.onclick = async () => {
+    const title = $("#talk-title").value.trim(), text = $("#talk-text").value.trim();
+    if (!title || !text) return saidMsg($("#talk-msg"), { ok: false, why: "give it a name and what Claude is told" });
+    const id = "talk-" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+    const r = await save("pref_add", { id, group: TALK, title, text });
+    saidMsg($("#talk-msg"), r, "Added.");
+    if (r.ok) setTimeout(softRoute, 600);
+  };
+}
 function wirePrefsPage(root) {
   const b = $("#prefs-install", root);
   if (b) b.onclick = async () => { b.disabled = true; const r = await save("prefs_install", {}); if (!r.ok) { b.disabled = false; return alertMsg(b, r); } softRoute(); };
@@ -2139,11 +2182,19 @@ function ghTag(g) {
   const fails = (g.checks || {}).FAILURE || 0;
   return `<span class="tag ${tn}">${esc(t)}</span>${mine ? ` <span class="tag">you: ${esc(({ APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" })[mine.state] || mine.state.toLowerCase())}</span>` : ""}${fails ? ` <span class="tag bad">${plural(fails, "check")} failing</span>` : ""}${g.draft ? ' <span class="tag">draft</span>' : ""}`;
 }
+/* "12 files +340 −58" and GitHub's five-box bar: green for added lines, red for removed, gray when it's small. */
+function diffStat(g) {
+  if (!g || g.available === false || !g.files) return "";
+  const a = g.additions || 0, r = g.deletions || 0, t = a + r;
+  const green = t ? Math.round(5 * a / Math.max(t, 5)) : 0, red = t ? Math.min(5 - green, Math.round(5 * r / Math.max(t, 5))) : 0;
+  const boxes = [...Array(5)].map((_, i) => `<i class="${i < green ? "add" : i < green + red ? "del" : ""}"></i>`).join("");
+  return `<span class="diffstat" title="${esc(`${a} added and ${r} removed lines in ${g.files} files`)}">${plural(g.files, "file")} <b class="add">+${a}</b> <b class="del">−${r}</b><span class="bar">${boxes}</span></span>`;
+}
 function ghPanel(g) {
   if (!g || g.available === false) return g && g.why ? `<p class="muted small">Couldn't ask GitHub: ${esc(g.why)}</p>` : "";
   const word = { APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" };
   const checks = Object.entries(g.checks || {}).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", ");
-  return `<div class="pr-status small"><div class="tags">${ghTag(g)}</div><div class="muted">${(g.reviewers || []).map(r => `${esc(r.who)} ${esc(word[r.state] || r.state.toLowerCase())} ${ago(r.at)}`).join(" · ") || "nobody has reviewed yet"}${(g.waiting_on || []).length ? ` · waiting on ${esc(g.waiting_on.join(", "))}` : ""}${checks ? ` · checks: ${esc(checks)}` : ""}</div></div>`;
+  return `<div class="pr-status small"><div class="tags">${ghTag(g)}${diffStat(g)}</div><div class="muted">${(g.reviewers || []).map(r => `${esc(r.who)} ${esc(word[r.state] || r.state.toLowerCase())} ${ago(r.at)}`).join(" · ") || "nobody has reviewed yet"}${(g.waiting_on || []).length ? ` · waiting on ${esc(g.waiting_on.join(", "))}` : ""}${checks ? ` · checks: ${esc(checks)}` : ""}</div></div>`;
 }
 PAGES.prs = async arg => {
   if (arg && arg.startsWith("ticket/")) return prTicket(decodeURIComponent(arg.slice(7)));
@@ -2156,7 +2207,7 @@ PAGES.prs = async arg => {
   state.ticketTitles = d.ticket_titles || {};
   const qcols = [
     { k: "pick", label: "", html: x => `<input type="checkbox" data-pr-pick="${esc(prRef(x))}" ${state.prPick.has(prRef(x)) ? "checked" : ""} ${unlocked ? "" : "disabled"} title="Pick several PRs, for example a backend and its frontend, and review them together" aria-label="Pick ${esc(prRef(x))}">` },
-    { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}${linkTags(x.linked)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
+    { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(prRef(x))} · by ${esc(x.author)}</div><div class="sub">${ghTag(x.gh)}${linkTags(x.linked)}${diffStat(x.gh)}</div>${x.job ? `<div class="sub">${jobLine(x.job)}</div>` : ""}` },
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
     { k: "act", label: "", html: x => (x.job && x.job.status === "running") ? "" : `<button class="btn small${x.passes ? "" : " primary"}" data-pr-start="${esc(prRef(x))}" ${unlocked ? "" : "disabled"}>${x.passes ? "Re-review" : "Review"}</button> <button class="btn small" data-pr-sessions="${esc(prRef(x))}" ${unlocked ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button>${x.passes ? ` <a class="small" href="${esc(prHash(x))}">Open</a>` : ""}` },
   ];
@@ -2183,10 +2234,27 @@ PAGES.prs = async arg => {
    one works whichever repo is picked. */
 const linkTags = prs => (prs || []).map(x => ` <a class="tag mono" href="#prs/${esc(x.replace("#", "/"))}" title="Linked: reviewed together, or linked by you">with ${esc(x)}</a>`).join("");
 /* Which files a review reads to decide what to look for, how to score and how to word comments. */
+/* Review sources next to each other from one skill's folder (its SKILL.md and the files it points at) are one entry:
+   the skill, with its parts under it, moved and removed together. */
+function methodGroups(sources) {
+  const groups = [];
+  sources.forEach((x, i) => {
+    const m = /^(.*\/skills\/([^/]+))(\/|$)/.exec(x.path), key = m ? m[1] : x.path, last = groups[groups.length - 1];
+    if (m && last && last.key === key) last.items.push(i);
+    else groups.push({ key, skill: m ? m[2] : "", items: [i] });
+  });
+  return groups;
+}
 function methodSection(m, unlocked) {
   if (!m) return "";
-  const rows = m.sources.map((x, i) => `<li><span class="grow"><span class="mono small">${esc(x.path)}</span> ${x.missing ? '<span class="tag bad">not found</span>' : `<span class="muted small">${plural(x.found, "file")}</span>`}</span>${m.own && unlocked ? `<button class="btn small" data-rm-move='${i},-1' ${i ? "" : "disabled"} aria-label="Read earlier">↑</button><button class="btn small" data-rm-move='${i},1' ${i < m.sources.length - 1 ? "" : "disabled"} aria-label="Read later">↓</button><button class="btn small" data-rm-del="${i}">Remove</button>` : ""}</li>`).join("");
-  return `<details class="more mt" id="review-method"><summary><b>Review method</b> <span class="muted small">${m.own ? `your own: ${plural(m.sources.length, "source")}` : "LFG's built-in method"}</span></summary>
+  const gs = methodGroups(m.sources);
+  const part = x => `<span class="mono small">${esc(x.path)}</span> ${x.missing ? '<span class="tag bad">not found</span>' : `<span class="muted small">${plural(x.found, "file")}</span>`}`;
+  const rows = gs.map((g, gi) => {
+    const xs = g.items.map(i => m.sources[i]);
+    const what = g.skill && xs.length > 1 ? `<b>${esc(g.skill)}</b> skill <span class="mono small muted">${esc(g.key)}</span><ul class="parts">${xs.map(x => `<li>${part({ ...x, path: x.path.slice(g.key.length + 1) || x.path })}</li>`).join("")}</ul>` : part(xs[0]);
+    return `<li><span class="grow">${what}</span>${m.own && unlocked ? `<button class="btn small" data-rm-move='${gi},-1' ${gi ? "" : "disabled"} aria-label="Read earlier">↑</button><button class="btn small" data-rm-move='${gi},1' ${gi < gs.length - 1 ? "" : "disabled"} aria-label="Read later">↓</button><button class="btn small" data-rm-del="${gi}">Remove</button>` : ""}</li>`;
+  }).join("");
+  return `<details class="more mt" id="review-method"><summary><b>Review method</b> <span class="muted small">${m.own ? `your own: ${plural(gs.length, "source")}` : "LFG's built-in method"}</span></summary>
     <div class="readable"><p class="muted small">What every review here reads, in order, to decide what to look for, how serious each finding is, the score and how comments are worded. Later ones win. The repo's AGENTS.md and CLAUDE.md files are read after these and win over them.</p>
     <ul class="items box">${rows}</ul>
     ${unlocked ? `<div class="row mt"><input type="text" id="rm-new" class="grow mono" placeholder="A file or folder, e.g. ~/.claude/skills/review-pr/SKILL.md"><button class="btn" id="rm-add">Add</button>${m.own ? '<button class="btn" id="rm-reset" title="Go back to LFG\'s built-in review method">Use LFG\'s built-in method</button>' : ""}</div><span class="save-msg" id="rm-msg"></span>` : '<p class="muted small">Run <code>lfg ui --unlock</code> to change it here.</p>'}
@@ -2201,8 +2269,9 @@ function wireMethod(root) {
     if (!r.ok) return saidMsg($("#rm-msg", box), r, "");
     state.prMethod = r; sessionStorage.setItem("lfg.methodOpen", "1"); softRoute();
   };
-  $$("[data-rm-del]", box).forEach(b => b.onclick = () => put(cur().filter((_, i) => i !== +b.dataset.rmDel)));
-  $$("[data-rm-move]", box).forEach(b => b.onclick = () => { const [i, d] = b.dataset.rmMove.split(",").map(Number), l = cur(); [l[i], l[i + d]] = [l[i + d], l[i]]; put(l); });
+  const blocks = () => methodGroups(state.prMethod.sources).map(g => g.items.map(i => cur()[i]));
+  $$("[data-rm-del]", box).forEach(b => b.onclick = () => put(blocks().filter((_, g) => g !== +b.dataset.rmDel).flat()));
+  $$("[data-rm-move]", box).forEach(b => b.onclick = () => { const [g, d] = b.dataset.rmMove.split(",").map(Number), l = blocks(); [l[g], l[g + d]] = [l[g + d], l[g]]; put(l.flat()); });
   const add = $("#rm-add", box), inp = $("#rm-new", box);
   if (add) add.onclick = () => { const v = inp.value.trim(); if (v) put([...cur(), v]); };
   if (inp) inp.onkeydown = e => { if (e.key === "Enter") add.onclick(); };
@@ -2282,17 +2351,32 @@ function togetherSection(t, unlocked, me) {
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
   const fs = [...q.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
   const stale = !t.live && !q.posted ? `<p class="muted small">${link} has a newer review; post that one from its page.</p>` : "";
+  const own = !!(t.author && me && t.author === me);
   return section(`Findings on ${t.pr}`, `${t.title ? `<p class="muted small">${esc(t.title)}</p>` : ""}${q.summary ? `<p>${txt(q.summary)}</p>` : ""}
-    ${fs.length ? fs.map(f => prFinding(f, t.pr, unlocked, t.live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
-    ${stale || postBar(t.pr, q, t.live, !!(t.author && me && t.author === me), unlocked)}`, prTally(q));
+    ${fs.length ? fs.map(f => prFinding(f, t.pr, unlocked, t.live, own)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
+    ${stale || postBar(t.pr, q, t.live, own, unlocked)}`, prTally(q, own));
 }
 /* "3 findings · 1 kept · 2 to decide · score 91" for one PR's review */
-function prTally(p) {
+function prTally(p, own) {
   const kept = p.findings.filter(f => f.status === "keep").length, pending = p.findings.filter(f => f.status === "pending").length;
-  return `${plural(p.findings.length, "finding")} · ${kept} kept · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
+  return `${plural(p.findings.length, "finding")} · ${kept} ${own ? "to fix" : "kept"} · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
+}
+/* On your own PR: Claude fixes the findings marked Fix, in one commit unless that would be too big, and pushes. */
+function fixBar(pr, p, live, unlocked, fj) {
+  const steps = j => (j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  if (fj && fj.status === "running") return `<div class="callout">${dot("on")}<b>Fixing ${plural((fj.ids || []).length, "finding")}</b>, started ${ago(fj.started)}${fj.cwd ? ` in <span class="mono">${esc(fj.cwd)}</span>` : ""}. This updates by itself.${steps(fj)}</div>`;
+  const done = p.fix ? `<div class="callout ${(p.fix.commits || []).length ? "ok" : "warn"}">${dot((p.fix.commits || []).length ? "ok" : "warn")}${(p.fix.commits || []).length ? `Fixed and pushed ${ago(p.fix.ended)} in ${(p.fix.commits || []).map(c => `<span class="mono">${esc(c.slice(0, 8))}</span>`).join(", ")}.` : "The last fix didn't commit anything."}${p.fix.note ? ` <span class="pre-wrap">${txt(p.fix.note)}</span>` : ""}${(p.fix.skipped || []).length ? `<ul>${p.fix.skipped.map(x => `<li><b class="mono">${esc(x.id)}</b> skipped: ${txt(x.why || "")}</li>`).join("")}</ul>` : ""}</div>` : "";
+  const failed = fj && fj.status === "failed" ? `<div class="callout bad">${dot("bad")}The fix didn't go through: ${esc(fj.why || "")}${steps(fj)}</div>` : "";
+  if (!live) return done || `<p class="muted small">An older review. Only the newest one can be fixed.</p>`;
+  const pending = p.findings.filter(f => f.status === "pending").length;
+  const todo = p.findings.filter(f => f.status === "keep" && !(f.fixed || {}).commit).length;
+  return `${done}${failed}<div class="panel"><div class="k" style="margin-top:0">Fix your PR: <span class="mono">${esc(pr)}</span></div>
+      <div class="row"><button class="btn primary" data-pr-fix="${esc(pr)}" ${unlocked && !pending && todo ? "" : "disabled"}>Fix ${plural(todo, "finding")}</button>
+      <span class="muted small">${pending ? `Choose Fix or Pass on ${plural(pending, "more finding")} first.` : todo ? "Claude fixes them in a checkout of the PR's branch, runs the tests, and pushes one commit (more only if one would be too big to review)." : "Nothing marked Fix."}</span></div></div>`;
 }
 /* Post one PR's review to GitHub. Every PR on a reviewed-together page gets its own, whichever repo is picked. */
-function postBar(pr, p, live, own, unlocked) {
+function postBar(pr, p, live, own, unlocked, fj) {
+  if (own && !p.posted) return fixBar(pr, p, live, unlocked, fj);
   if (p.posted) return `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`;
   if (!live) return `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
   const pending = p.findings.filter(f => f.status === "pending").length, kept = p.findings.filter(f => f.status === "keep").length;
@@ -2301,25 +2385,36 @@ function postBar(pr, p, live, own, unlocked) {
       <div class="row mt">${(own ? [["comment", "Comment only"]] : [["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]]).map(([e, l]) => `<button class="btn${e === "request-changes" || own ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
       <span class="muted small">${pending ? `Decide ${plural(pending, "more finding")} first.` : `${plural(kept, "kept finding")} will be posted. You'll see exactly what goes out before it does.`}${own ? " This is your own PR, so GitHub only takes a comment." : ""}</span></div></div>`;
 }
-function prFinding(f, pr, unlocked, live) {
+function prFinding(f, pr, unlocked, live, own) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
   const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("")
-    + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("");
+    + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("")
+    + ((f.fixed || {}).commit ? `<span class="tag ok">Fixed in ${esc(f.fixed.commit.slice(0, 8))}</span>` : "");
   const posted = f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">Posted ↗</a>` : "";
-  const can = unlocked && live && !f.comment_id;
+  const can = unlocked && live && !f.comment_id && !(f.fixed || {}).commit;
   const btn = (status, text) => `<button class="btn small${f.status === status ? " primary" : ""}" data-pr-mark='${esc(JSON.stringify([pr, f.id, status]))}' ${can ? "" : "disabled"}>${text}</button>`;
+  const chat = f.chat || [];
+  const ref = esc(JSON.stringify([pr, f.id]));
+  const code = f.file && f.line ? `<div class="pr-snip" data-pr-snip='${ref}'><div class="pr-snip-h mono">${esc(where)}</div><div class="muted small pad">Loading the code…</div></div>` : `<div class="muted small mono">${esc(where)}</div>`;
   return `<div class="card pr-finding ${esc(f.status)}" id="f-${esc(f.id)}"><div class="row">${st(f.severity === "nitpick" ? "nit" : f.severity)}${tags}<span class="grow"></span><span class="muted small mono">${esc(f.id)}</span></div>
     <div class="title">${txt(f.title || f.issue)}</div>
     ${f.issue && f.title ? `<p>${txt(f.issue)}</p>` : ""}${f.fix ? `<p><b>Fix:</b> ${txt(f.fix)}</p>` : ""}
-    <div class="muted small mono">${esc(where)}</div>
+    ${code}
     ${f.detail ? `<details class="more"><summary>What the review checked</summary><div class="md">${md(f.detail)}</div></details>` : ""}
-    <div class="k">Comment the author will read</div>
+    ${own ? "" : `<div class="k">Comment the author will read</div>
     <div class="pr-body md" data-pr-body="${esc(f.id)}">${md(f.body)}</div>
     <div class="pr-edit" data-pr-editbox="${esc(f.id)}" hidden>
-      <div class="row"><input type="text" class="grow" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"><button class="btn small" data-pr-askgo='${esc(JSON.stringify([pr, f.id]))}'>Ask Claude</button></div>
+      <div class="row"><input type="text" class="grow" data-pr-ask="${esc(f.id)}" placeholder="Ask Claude to change it: shorter, softer, add an example…"><button class="btn small" data-pr-askgo='${ref}'>Ask Claude</button></div>
       <textarea class="editor small">${esc(f.body)}</textarea>
-      <div class="set-actions"><button class="btn small primary" data-pr-editsave='${esc(JSON.stringify([pr, f.id]))}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>
-    <div class="row mt">${posted || `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}</div></div>`;
+      <div class="set-actions"><button class="btn small primary" data-pr-editsave='${ref}'>Save comment</button><button class="btn small" data-pr-editcancel="${esc(f.id)}">Cancel</button><span class="save-msg"></span></div></div>`}
+    <div class="pr-discuss" ${chat.length ? "" : "hidden"}><div class="k">Discussion</div><div class="pr-thread">${chat.map(x => `<div class="pr-q"><b>You:</b> ${txt(x.q)}</div><div class="pr-a md">${md(x.a)}</div>`).join("")}</div>
+      <div class="row"><input type="text" class="grow" data-pr-discussq placeholder="e.g. is this reachable? would the other fix be simpler?" ${unlocked ? "" : "disabled"}><button class="btn small primary" data-pr-discussgo='${ref}' ${unlocked ? "" : "disabled"}>Send</button></div></div>
+    <div class="row mt">${posted || `${own ? `${btn("keep", "Fix")}${btn("drop", "Pass")}` : `${btn("keep", "Keep")}${btn("drop", "Drop")}<button class="btn small" data-pr-edit="${esc(f.id)}" ${can ? "" : "disabled"}>Edit comment</button>`}`}<button class="btn small" data-pr-discuss ${chat.length ? "hidden" : ""}>Discuss</button></div></div>`;
+}
+/* The code a finding points at, like GitHub shows it: file name on top, old and new line numbers, added and removed lines. */
+function snipHtml(sn) {
+  const rows = sn.rows.map(r => `<tr class="${r.kind === "+" ? "add" : r.kind === "-" ? "del" : ""}${r.at ? " at" : ""}"><td class="ln">${r.kind === "+" ? "" : esc(r.old ?? "")}</td><td class="ln">${r.kind === "-" ? "" : esc(r.new ?? "")}</td><td class="sg">${r.kind === " " ? "" : esc(r.kind)}</td><td class="tx">${esc(r.text)}</td></tr>`).join("");
+  return `<div class="pr-snip-h mono">${esc(sn.file)}</div><div class="pr-snip-b"><table>${rows}</table></div>`;
 }
 /* Every reviewed PR on one Linear ticket, on one page: each with its newest review, score and post box. */
 async function prTicket(t) {
@@ -2340,8 +2435,8 @@ async function prTicket(t) {
     const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
     const link = `<a class="mono" href="#prs/${esc(pr.replace("#", "/"))}">${esc(pr)}</a>`;
     return section(`Findings on ${pr}`, `<p class="muted small">${esc(rec.title || "")} · by ${esc(rec.author || "")} · ${link}${rec.passes.length > 1 ? `, review ${p.n} of ${rec.passes.length}` : ""} · ${ago(p.ts)}</p>${ghPanel(x.gh)}${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
-      ${fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
-      ${postBar(pr, p, live, own, unlocked)}`, prTally(p));
+      ${fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "Nothing to comment on in this PR.")}
+      ${postBar(pr, p, live, own, unlocked, x.fix_job)}`, prTally(p, own));
   }).join("");
   return `${head(`${t}${title ? ": " + title : ""}`, `The newest review of each of this ticket's ${plural(refs.length, "reviewed PR")}. Each PR is posted on its own.`, back)}${parts}`;
 }
@@ -2354,7 +2449,8 @@ async function prDetail(arg) {
   const rec = d.record, j = d.job;
   crumbs("prs", pr);
   const running = j && j.status === "running";
-  if (running) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
+  const fixing = d.fix_job && d.fix_job.status === "running";
+  if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const kindOf = j && (j.fresh ? "new review" : j.re_review ? "re-review" : "review");
   const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
@@ -2376,7 +2472,9 @@ async function prDetail(arg) {
   const p = passes.find(x => x.n === pick) || last;
   const live = p === last && !p.posted;
   const byId = Object.fromEntries(passes.flatMap(x => x.findings).map(f => [f.id, f]));
-  const label = x => `Review ${x.n}${x.kind === "re-review" ? " · re-review" : ""}`;
+  // a full review saved before LFG recorded the kind: no earlier findings followed up, and every finding is new
+  const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
+  const label = x => `Review ${x.n}${full(x) ? " · full review" : x.kind === "re-review" ? " · re-review" : ""}`;
   const passTabs = `<div class="tabs pr-passes">${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
   const prior = (p.prior || []).length ? section("Earlier comments", `<div class="box items">${p.prior.map(x => { const [t, tn] = PRIOR[x.state] || [x.state, ""]; const f = byId[x.id] || {}; return `<details class="item"><summary>${dot(tn)}<span class="grow">${txt(f.title || x.id)}</span><span class="muted small nowrap">${esc(t)}</span></summary><div class="item-body">${x.note ? `<p>${txt(x.note)}</p>` : ""}${f.comment_url ? `<a class="small" href="${esc(f.comment_url)}" target="_blank" rel="noopener noreferrer">The comment on GitHub ↗</a>` : ""}</div></details>`; }).join("")}</div>`, "what happened to what you posted last time") : "";
   const order = { blocker: 0, major: 1, minor: 2, nitpick: 3, note: 4 };
@@ -2399,8 +2497,8 @@ async function prDetail(arg) {
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted">Loading…</div></details>` : ""}</div>
       ${prior}
       ${together.length ? `<div class="callout">This review covered ${plural(together.length + 1, "PR")} in one session: <span class="mono">${esc(pr)}</span>${together.map(t => `, <a class="mono" href="#prs/${esc(t.pr.replace("#", "/"))}">${esc(t.pr)}</a>`).join("")}. Each PR has its own findings, score and post box below.</div>` : ""}
-      ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked) : ""), prTally(p))}
-      ${together.length ? "" : postBar(pr, p, live, own, unlocked)}
+      ${section(together.length ? `Findings on ${pr}` : "Findings", (fs.length ? fs.map(f => prFinding(f, pr, unlocked, live, own)).join("") : empty("Nothing found", "This review found nothing to comment on.")) + (together.length ? postBar(pr, p, live, own, unlocked, d.fix_job) : ""), prTally(p, own))}
+      ${together.length ? "" : postBar(pr, p, live, own, unlocked, d.fix_job)}
       ${together.map(t => togetherSection(t, unlocked, d.gh && d.gh.me)).join("")}
     </div>
     ${sess}`;
@@ -2553,6 +2651,36 @@ function wirePrs(root) {
     softRoute();
   });
   // finding ids repeat across PRs on one page (1.1 on each), so look inside the finding's own card
+  $$("[data-pr-snip]", root).forEach(async el => {
+    const [pr, id] = JSON.parse(el.dataset.prSnip);
+    const d = await api("prsnippet", { pr, id }).catch(() => ({}));
+    if (d.snippet) el.innerHTML = snipHtml(d.snippet);
+    else $(".pad", el).textContent = "Couldn't get this code from GitHub.";
+  });
+  $$("[data-pr-discuss]", root).forEach(b => b.onclick = () => {
+    const box = $(".pr-discuss", b.closest(".pr-finding"));
+    box.hidden = false; b.hidden = true; $("[data-pr-discussq]", box).focus();
+  });
+  $$("[data-pr-discussgo]", root).forEach(b => {
+    const [pr, id] = JSON.parse(b.dataset.prDiscussgo), box = b.closest(".pr-discuss"), input = $("[data-pr-discussq]", box);
+    const go = async () => {
+      if (!input.value.trim()) return input.focus();
+      b.disabled = true; b.textContent = "Thinking…";
+      const d = await save("review_discuss", { pr, id, question: input.value });
+      b.disabled = false; b.textContent = "Send";
+      if (!d.ok) return alertMsg(b, d);
+      $(".pr-thread", box).insertAdjacentHTML("beforeend", `<div class="pr-q"><b>You:</b> ${txt(d.q)}</div><div class="pr-a md">${md(d.a)}</div>`);
+      input.value = "";
+    };
+    b.onclick = go;
+    input.onkeydown = e => { if (e.key === "Enter") go(); };
+  });
+  $$("[data-pr-fix]", root).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Starting…";
+    const d = await save("review_fix", { pr: b.dataset.prFix });
+    if (!d.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, d); }
+    softRoute();
+  });
   $$("[data-pr-edit]", root).forEach(b => b.onclick = () => {
     const card = b.closest(".pr-finding");
     $(`[data-pr-editbox="${b.dataset.prEdit}"]`, card).hidden = false;
@@ -2625,13 +2753,14 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["prefs", "usage", "skills", "integrations", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "usage", "skills", "integrations", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
   sessions: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
   environment: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   prefs: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
+  talk: "M4 5h16v10H9l-5 4zM8 9h8M8 12h5",
   runs: "M5 4l14 8-14 8z",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
@@ -2712,7 +2841,7 @@ async function route(opts) {
   const key = PAGES[page] ? page : "home";
   const arg = rest.join("/");
   renderNav(key);
-  crumbs(key);
+  if (!soft) crumbs(key);  // a refresh keeps the page's own crumbs (e.g. the PR) instead of flashing back to the page
   document.title = `${TITLES[key]} · LFG`;
   const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
   view.classList.toggle("wide", key === "review" && !!arg);  // the review screens are two panes: use the width
@@ -2729,6 +2858,7 @@ async function route(opts) {
   if (key === "sessions") wireSessions(view);
   if (key === "knowledge") wireKnowledge(view);
   if (key === "prefs") wirePrefsPage(view);
+  if (key === "talk") wireTalk(view);
   if (key === "environment") wireEnvironment(view);
   if (key === "checks") { $$('[data-tabs="checks"] .tab', view).forEach(t => t.addEventListener("click", () => setTimeout(() => wireSonar(view), 0))); wireSonar(view); }
   if (key === "usage") { wireUsage(view); loadHeadroom(); }
@@ -2796,6 +2926,34 @@ async function init() {
   mapStatus();
   route();
   offerTours();
+  watchNotices();
+}
+/* A review finished: a desktop notification that opens it (once you allow them), and a note in the page either way. */
+async function watchNotices() {
+  let since = 0;
+  const tick = async () => {
+    const d = await api("notices", { since }).catch(() => null);
+    if (!d) return;
+    for (const x of d.items || []) noticeShow(x);
+    since = d.last || since;
+  };
+  await tick();
+  setInterval(tick, 15000);
+}
+function noticeShow(x) {
+  const href = `#prs/${x.pr.replace("#", "/")}`;
+  if ("Notification" in window && Notification.permission === "granted") {
+    const n = new Notification(x.title, { body: x.body, tag: `lfg-${x.n}` });
+    n.onclick = () => { window.focus(); location.hash = href; n.close(); };
+  }
+  const box = document.createElement("div");
+  box.className = `notice ${x.ok ? "ok" : "bad"}`;
+  box.innerHTML = `${dot(x.ok ? "ok" : "bad")}<div class="grow"><a href="${esc(href)}"><b>${esc(x.title)}</b></a><div class="small muted">${esc(x.body)}</div>${"Notification" in window && Notification.permission === "default" ? '<button class="btn tiny" data-notify-on>Also tell me on the desktop</button>' : ""}</div><button class="btn tiny" data-notice-x aria-label="Close">×</button>`;
+  $("[data-notice-x]", box).onclick = () => box.remove();
+  $("a", box).onclick = () => box.remove();
+  const on = $("[data-notify-on]", box);
+  if (on) on.onclick = async () => { await Notification.requestPermission(); on.remove(); };
+  ($("#notices") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "notices" }))).appendChild(box);
 }
 async function loadBranches() {
   /* runs and checks are tagged with the branch they ran on; the code map is one per project */
@@ -2809,7 +2967,7 @@ async function loadBranches() {
   const opt = (v, label) => `<option value="${esc(v)}" ${v === state.branch ? "selected" : ""}>${esc(label)}</option>`;
   sel.innerHTML = opt("", "All branches") + B.branches.map(b => opt(b.name, b.name + (b.state === "current" ? " (checked out)" : b.state === "deleted" ? " (deleted)" : ""))).join("") + (B.unrecorded ? opt("-", "Older runs (branch unknown)") : "");
   sel.disabled = !state.repo;
-  sel.hidden = !B.branches.length && !B.unrecorded;
+  sel.hidden = !B.branches.some(b => b.runs) && !B.unrecorded;  // nothing to filter: no LFG runs on any branch yet
   sel.title = "Show runs and checks from one branch. The code map always follows the checked-out branch.";
 }
 /* "Update ready": newer LFG in your fork or the original project. Checked on load, every minute and when the tab
