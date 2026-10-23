@@ -71,6 +71,15 @@ BUILTIN = [
          {"value": "auto", "label": "On its own, after the first push", "text": "Open a pull request (`gh pr "
           "create`) on your own after the first push of a branch that has none, never from main, master, qa or "
           "prod."}]},
+    {"id": "edit_pr", "group": "GitHub", "title": "Editing PR title and description", "kind": "switch",
+     "default": False, "enforce": True,
+     "about": "On: Claude may change the title and description of an open pull request you opened "
+              "(`gh pr edit --title`, `--body`, `--body-file`), and nothing else about it: no reviewers, base branch, "
+              "labels or anything else. LFG asks GitHub that the PR is open and yours first. Off: blocked by safety "
+              "rule 2.",
+     "text": "You may change the title and description of an open pull request I opened, with `gh pr edit` and only "
+             "`--title`, `--body` or `--body-file`. Never reviewers, the base branch, labels or anything else.",
+     "off_text": ""},
     {"id": "merge_pr", "group": "GitHub", "title": "Merging PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
          {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
@@ -227,10 +236,11 @@ ABOUT = {
     ("open_pr", "never"):
         "Claude is blocked from opening pull requests; you open them.",
     ("open_pr", "ask"):
-        "Claude opens a PR only when you say so. Editing, commenting on or closing one stays blocked.",
+        "Claude opens a PR only when you say so. Commenting on or closing one stays blocked; editing its title and "
+        "description follows \"Editing PR title and description\".",
     ("open_pr", "auto"):
-        "Claude opens a PR by itself after it first pushes a branch that has none. Editing, commenting on or "
-        "closing one stays blocked.",
+        "Claude opens a PR by itself after it first pushes a branch that has none. Commenting on or closing one "
+        "stays blocked; editing its title and description follows \"Editing PR title and description\".",
     ("merge_pr", "never"):
         "Claude is blocked from merging pull requests; you merge.",
     ("style_point_words", "20"): "Each point, bullet or sentence is at most 20 words.",
