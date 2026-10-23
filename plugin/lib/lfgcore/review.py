@@ -126,7 +126,8 @@ def rewrite(repo, number, fid, instruction):
                                  "Fix: " + (f.get("fix") or ""), "Where: %s:%s" % (f.get("file") or "-", f.get("line")
                                                                                    or "-")) if x)
     cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
-                        + _model(), input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"]),
+                        + _model() + _direct(),
+                        input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"]),
                         capture_output=True, text=True, timeout=300)
     try:
         text = (json.loads(cp.stdout).get("result") or "").strip()
@@ -837,6 +838,20 @@ def chosen_model():
     return str((C.config().get("review") or {}).get("model") or "")
 
 
+def _direct():
+    """Settings that send this one call straight to Anthropic, past the Headroom proxy, when Claude Code goes through
+    it. Its compression drops small words, which mangled short chat messages ("i can merge this" arrived as "i
+    merge"), so a conversation from the dashboard skips it. Long review runs still use it."""
+    from . import headroom as HR
+    try:
+        if not HR.routed():
+            return []
+        up = (C.read_json(HR._state_path(), {}) or {}).get("upstream") or "https://api.anthropic.com"
+    except Exception:  # noqa: BLE001 - if in doubt, leave the call as it was
+        return []
+    return ["--settings", json.dumps({"env": {"ANTHROPIC_BASE_URL": up}})]
+
+
 def _model(m=None):
     m = chosen_model() if m is None else m
     return ["--model", m] if m else []
@@ -1180,7 +1195,7 @@ def ask(repo, number, n, question):
                ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
     else:
         cmd = ["claude", "-p", prompt, "--tools", ""]
-    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model(),
+    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model() + _direct(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
     try:
@@ -1319,7 +1334,7 @@ def discuss(repo, number, fid, question):
         code = "\n".join("%s %s" % (r["new"] or r["old"] or "", r["text"]) for r in (snip or {}).get("rows") or [])
         cmd = ["claude", "-p", ASK % (_review_now(rec, p), about + ("\n\nThe code:\n" + code if code else "")),
                "--tools", ""]
-    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model(),
+    cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model() + _direct(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
     try:
@@ -1396,7 +1411,7 @@ def check_fixed(repo, number, fid):
                           p["head_sha"][:8], head[:8], (patch or "(no changes to this file)")[:30000],
                           now[:12000] or "-", ", ".join(others[:40]) or "none")
         cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
-                            + _model(), input=prompt, capture_output=True, text=True, timeout=300)
+                            + _model() + _direct(), input=prompt, capture_output=True, text=True, timeout=300)
         try:
             ans = _last_object(json.loads(cp.stdout).get("result") or "", "state")
         except ValueError:

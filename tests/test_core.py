@@ -3020,6 +3020,19 @@ class ReviewTest(unittest.TestCase):
         self.assertIn('"id": "1.1"', asked[0][2])  # Claude sees the review as it stands
         self.assertIn("--tools", asked[0])  # an imported review has no session: no tools
 
+    def test_a_chat_from_the_dashboard_goes_straight_to_anthropic_past_headroom(self):
+        self.saved()
+        asked = []
+        with mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=self.claude_says("Fine.", asked)):
+            with mock.patch("lfgcore.headroom.routed", return_value=True):
+                R.ask("o/r", 7, 1, "i feel like i can merge this")
+            with mock.patch("lfgcore.headroom.routed", return_value=False):
+                R.ask("o/r", 7, 1, "and now?")
+        sent = asked[0][asked[0].index("--settings") + 1]
+        self.assertEqual(json.loads(sent)["env"]["ANTHROPIC_BASE_URL"], "https://api.anthropic.com")
+        self.assertNotIn("--settings", asked[1])  # no proxy in the way: nothing to skip
+
     def test_a_posted_comment_is_never_changed_by_talking(self):
         self.saved()
         rec = R.load("o/r", 7)
