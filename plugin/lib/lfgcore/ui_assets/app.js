@@ -1677,7 +1677,8 @@ async function sessionRules(sid) {
 }
 /* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
 PAGES.sessions = async () => {
-  const [d, unlocked, sr] = await Promise.all([api("sessions", { ...(state.showHidden ? { hidden: "1" } : {}), ...scopeArgs("sessions") }), isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
+  const loose = localStorage.getItem("lfg.sessions.loose") === "1";
+  const [d, unlocked, sr] = await Promise.all([api("sessions", { ...(state.showHidden ? { hidden: "1" } : {}), ...scopeArgs("sessions"), ...(loose ? { loose: "1" } : {}) }), isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
   state.sessions = d;
   const runsOf = {};
   (sr.runs || []).forEach(j => (runsOf[j.session] || (runsOf[j.session] = [])).push(j));
@@ -1687,11 +1688,13 @@ PAGES.sessions = async () => {
   const rows = d.sessions.filter(hit);
   const byRepo = new Map();
   for (const s of rows) {
-    const repo = s.folder ? "Your groups" : s.repo || "Other";
+    // outside any repo: one heading, then the folder it was started in (~/code, ~/Downloads, ...)
+    const repo = s.folder ? "Your groups" : s.loose ? "Outside a repo" : s.repo || "Other";
     if (!byRepo.has(repo)) byRepo.set(repo, new Map());
     const g = byRepo.get(repo);
-    if (!g.has(s.group)) g.set(s.group, []);
-    g.get(s.group).push(s);
+    const sub = s.loose && !s.folder ? homePath(s.cwd) || "(folder unknown)" : s.group;
+    if (!g.has(sub)) g.set(sub, []);
+    g.get(sub).push(s);
   }
   const line = s => `<li class="sess" data-sid="${esc(s.id)}"><button class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${unlocked ? "" : "disabled"} title="${s.starred ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away"}" aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div>
@@ -1718,9 +1721,12 @@ PAGES.sessions = async () => {
     return `${live.length ? `<ul class="items sess-list">${live.map(line).join("")}</ul>` : ""}${old.length ? `<details class="more sess-old"><summary>${plural(old.length, "older session")}, not starred and untouched for a week</summary><ul class="items sess-list">${old.map(line).join("")}</ul></details>` : ""}`;
   };
   const prTags = name => (GP[name] || []).map(pr => `<a class="tag mono" href="#prs/${esc(pr.replace("#", "/"))}" title="This group follows ${esc(pr)}: every session that mentions it joins">${esc(pr)}</a>`).join(" ");
-  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || !ss.length || ss.some(s => s.starred || Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b> ${repo === "Your groups" ? prTags(name) : ""}</span><span class="muted small nowrap">${ss.length ? `${plural(ss.length, "session")} · ${ago(ss[0].modified)}` : "no session mentions it yet"}</span>${repo !== "Your groups" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary>${listOf(ss)}</details>`).join(""), plural([...g.values()].flat().length, "session")));
+  const groups = [...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || !ss.length || ss.some(s => s.starred || Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b> ${repo === "Your groups" ? prTags(name) : ""}</span><span class="muted small nowrap">${ss.length ? `${plural(ss.length, "session")} · ${ago(ss[0].modified)}` : "no session mentions it yet"}</span>${repo !== "Your groups" && repo !== "Outside a repo" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary>${listOf(ss)}</details>`).join(""), plural([...g.values()].flat().length, "session")));
   const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>${esc(unlockCmd())}</code> in your terminal to change them here. Copy works either way.</div>`;
-  return `${head("Sessions", `Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up. ${scopeLine("sessions")}`)}
+  const tab = (on, label, act, title) => `<a href="#" class="tab ${on ? "on" : ""}" data-sess-scope="${act}" title="${esc(title)}">${label}</a>`;
+  const tabs = `<div class="tabs page-tabs">${state.repo ? tab(!loose && !allRepos("sessions"), esc(repoName()), "repo", "Sessions in this repo and its worktrees") : ""}${tab(!loose && allRepos("sessions"), "All repos", "all", "Every session, in a repo or not")}${tab(loose, `Outside a repo${d.loose_count ? ` <span class="n">${n(d.loose_count)}</span>` : ""}`, "loose", "Sessions started in a folder that isn't a git repo: your home folder, ~/code, a scratch folder")}</div>`;
+  return `${head("Sessions", `Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up.`)}
+    ${tabs}
     ${lock}
     <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><span class="count">${plural(rows.length, "session")}${q ? ` of ${d.sessions.length}` : ""}</span>${d.hidden_count ? `<label class="small"><input type="checkbox" id="sess-hidden" ${state.showHidden ? "checked" : ""}> Show ${plural(d.hidden_count, "hidden session")}</label>` : ""}</div>
     ${rows.length ? groups.join("") : empty("No sessions match", q ? "Try a ticket number, a branch or a repo name." : "No Claude Code sessions found in " + esc(d.projects_dir))}`;
@@ -1780,7 +1786,16 @@ async function sessionSkill(sid, name) {
     closeDrawer(); prefToast(`${skill || "Your instruction"} is running on the session.`); softRoute();
   };
 }
+/* A path with the home folder as ~ */
+const homePath = p => (p || "").replace(/^\/(Users|home)\/[^/]+/, "~");
 function wireSessions(root) {
+  $$("[data-sess-scope]", root).forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const v = a.dataset.sessScope;
+    localStorage.setItem("lfg.sessions.loose", v === "loose" ? "1" : "");
+    if (v !== "loose") localStorage.setItem("lfg.allrepos.sessions", v === "all" ? "1" : "");
+    route();
+  });
   $$("[data-sess-skill]", root).forEach(b => b.onclick = () => { const [sid, name] = JSON.parse(b.dataset.sessSkill); sessionSkill(sid, name); });
   $$("[data-run-stop]", root).forEach(b => b.onclick = async () => { b.disabled = true; const r = await save("skill_stop", { id: b.dataset.runStop }); if (!r.ok) return alertMsg(b, r); b.textContent = "Stopping after this pass"; });
   const find = $("#sess-find", root);

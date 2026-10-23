@@ -209,7 +209,7 @@ def api(view, q):
         return dict(d, job=U.job(), fix=U.fix_job())
     if view == "sessions":
         from . import sessions as SS
-        return SS.listing(hidden=_arg(q, "hidden") == "1", only=_only(q))
+        return SS.listing(hidden=_arg(q, "hidden") == "1", only=_only(q), loose=_arg(q, "loose") == "1")
     if view == "sessionrecent":
         from . import sessions as SS
         try:

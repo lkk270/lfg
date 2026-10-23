@@ -2747,6 +2747,22 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(rows[a]["resume"], "cd /nowhere/app && claude --resume " + a)
         self.assertEqual(rows[a]["prompts"], 1)  # the meta line isn't a message you sent
 
+    def test_sessions_started_outside_any_repo_have_their_own_view(self):
+        root, _ = git_repo()
+        plain = tempfile.mkdtemp()  # a folder that isn't a git repo
+        self.addCleanup(__import__("shutil").rmtree, plain, True)
+        a, b = ("%08d-0000-0000-0000-000000000000" % i for i in (61, 62))
+        self.write(a, root, "main", "fix the build")
+        self.write(b, plain, "", "just a question")
+        rows = {r["id"]: r for r in self.SS.listing()["sessions"]}
+        self.assertEqual((rows[a]["loose"], rows[b]["loose"]), (False, True))
+        only = self.SS.listing(only=root)
+        self.assertEqual([r["id"] for r in only["sessions"]], [a])
+        self.assertEqual(only["loose_count"], 1)  # counted even when this repo is picked
+        loose = self.SS.listing(only=root, loose=True)
+        self.assertEqual([r["id"] for r in loose["sessions"]], [b])
+        self.assertEqual([r["id"] for r in ui.api("sessions", {"loose": ["1"]})["sessions"]], [b])
+
     def test_recent_messages_show_what_you_typed_and_how_claude_answered(self):
         a = "%08d-0000-0000-0000-000000000000" % 5
         self.write(a, "/nowhere/app", "main", "fix the login bug")
