@@ -3148,6 +3148,17 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.dict(R.os.environ, {"LFG_REVIEW_SOURCES": "[]"}):
             self.assertFalse(R.sources()["own"])  # the run's own pick wins over the saved one
         self.assertEqual(R.method_choices()[0]["id"], "builtin")
+        home = tempfile.mkdtemp()  # never the real ~/.claude/skills
+        self.addCleanup(__import__("shutil").rmtree, home, True)
+        skills = os.path.join(home, ".claude", "skills")
+        for name, about in (("review-x", "Review a PR the careful way"), ("audit-x", "description: >-\n  Audit it"),
+                            ("ship-x", "Build a ticket, then run /review-pr on it")):
+            os.makedirs(os.path.join(skills, name), exist_ok=True)
+            with open(os.path.join(skills, name, "SKILL.md"), "w") as f:
+                f.write("---\nname: %s\ndescription: %s\n---\n" % (name, about))
+        with mock.patch.object(R.C, "HOME", home):
+            fits = {m["id"]: m["fits"] for m in R.method_choices()}
+        self.assertEqual((fits["review-x"], fits["ship-x"]), (True, False))
         with self.assertRaises(R.ReviewError):
             R.start("o/r", 7, method="no-such-skill")
 
