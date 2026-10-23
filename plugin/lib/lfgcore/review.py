@@ -362,10 +362,14 @@ def save(repo, number, data, ticket=None, meta=None):
     score = data.get("score")
     if score is not None and not (isinstance(score, int) and 0 <= score <= 100):
         raise ReviewError("score must be an integer 0-100 or null")
+    verdict = data.get("verdict") or None
+    if verdict not in (None,) + VERDICTS:
+        raise ReviewError("verdict must be one of %s, or left out" % ", ".join(VERDICTS))
     rec["passes"].append({
         "n": n, "kind": "first" if n == 1 else "re-review", "ts": C.now_iso(), "reviewer": data.get("reviewer") or "",
         "head_sha": data.get("head_sha") or meta["head_sha"], "base": meta["base"],
-        "summary": _text(data.get("summary"), "summary"), "score": score,
+        "summary": _text(data.get("summary"), "summary"), "score": score, "verdict": verdict,
+        "verdict_why": _text(data.get("verdict_why"), "verdict_why", 400) if verdict else "",
         "approach_notes": [_text(x, "approach note", 4000) for x in data.get("approach_notes") or []],
         "questions": [{"id": "q%d" % k, "ask": _text(q.get("ask"), "question", 1000), "why": _text(q.get("why"), "why",
                                                                                                     1000),
@@ -405,6 +409,7 @@ def mark(repo, number, ids, status=None, body=None):
             raise ReviewError("%s is already posted on GitHub; change it there" % fid)
         if status:
             f["status"] = status
+            f.pop("dropped_by", None)  # your own decision now
         if body is not None:
             if not body.strip():
                 raise ReviewError("the comment can't be empty")
@@ -894,8 +899,10 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None):
               "never chained with ; or &&. Don't run `lfg review save` and don't write files: %s, and LFG saves it. "
               "Skip the steps after saving (showing the table, triage, the post command).%s"
               % (skill, what, " (Linear ticket %s)" % ticket if ticket else "", out,
-                 " Do a full first review of the whole PR, as if there were no earlier reviews: no prior list, every "
-                 "finding since \"first\"." if fresh else ""))
+                 " This is a new full review: review the whole PR from scratch, every new finding with since "
+                 "\"first\". Where there are earlier reviews, still check each earlier finding still open and "
+                 "fill `prior`, and never raise a settled one, as the skill's New full review step says."
+                 if fresh else ""))
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
            "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)] + _model(model)
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1027,8 +1034,10 @@ ASK = ("Lee is talking to you about the review you did, from the LFG dashboard. 
        "conversation settles a change to the review (Lee asks for one, or you agree a finding is wrong, mis-rated or "
        "badly worded), end your reply with one ```json block {\"changes\": [{\"pr\": \"owner/repo#n\", \"id\": "
        "\"1.2\", and only the fields that change: \"title\", \"severity\", \"issue\", \"fix\", \"body\", \"reply\", "
-       "\"status\" (\"keep\" or \"drop\")}], \"summary\": \"only if the summary changes\"}. LFG applies it. "
-       "Never save, post or run anything that writes.\n\nThe review as it stands: %s\n\n%s")
+       "\"status\" (\"keep\" or \"drop\")}], \"summary\": \"only if the summary changes\", \"score\": only "
+       "if the score changes (0-100), \"verdict\" (\"mergeable\", \"almost\" or \"not\") and \"verdict_why\" only if "
+       "whether it can merge changes}. LFG applies it. Never save, post or run anything that writes.\n\n"
+       "The review as it stands: %s\n\n%s")
 
 
 CHANGE_FIELDS = {"title": 200, "issue": 1000, "fix": 1000, "body": MAX_BODY, "reply": 4000}
@@ -1057,12 +1066,30 @@ def apply_changes(repo, number, n, out):
         if c.get("severity") in SEVERITIES and c["severity"] != f["severity"]:
             f["severity"] = c["severity"]
             what.append("severity")
+        if c.get("status") == "drop" and c["status"] != f["status"]:
+            f["dropped_by"] = "claude"  # agreed in a conversation that it isn't needed
         if c.get("status") in ("keep", "drop") and c["status"] != f["status"]:
             f["status"] = c["status"]
             what.append("kept" if c["status"] == "keep" else "dropped")
         if what:
             recs[(r, k)] = rec
             done.append("%s%s: %s" % ("" if (r, k) == (repo, number) else ref(r, k) + " ", f["id"], ", ".join(what)))
+    v = (out or {}).get("verdict")
+    if v in VERDICTS:
+        rec = recs.get((repo, number)) or need(repo, number)
+        p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
+        if p and p.get("verdict") != v:
+            p["verdict"], p["verdict_why"] = v, _text((out or {}).get("verdict_why"), "verdict_why", 400)
+            recs[(repo, number)] = rec
+            done.append("verdict")
+    score = (out or {}).get("score")
+    if isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100:
+        rec = recs.get((repo, number)) or need(repo, number)
+        p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
+        if p and p.get("score") != score:
+            p["score"] = score
+            recs[(repo, number)] = rec
+            done.append("score %d" % score)
     summary = (out or {}).get("summary")
     if isinstance(summary, str) and summary.strip():
         rec = recs.get((repo, number)) or need(repo, number)
@@ -1140,7 +1167,58 @@ def answer(repo, number, n, qid, text):
         raise ReviewError("no question %s on review %s" % (qid, n))
     qq["answer"] = _text(text, "answer", 4000)
     store(rec)
-    return ask(repo, number, n, "You asked: %s\nMy answer: %s" % (qq["ask"], qq["answer"]))
+    out = ask(repo, number, n, "You asked: %s\nMy answer: %s" % (qq["ask"], qq["answer"]))
+    rec = need(repo, number)  # Claude's reply stays under the question too, with what it changed
+    p = next(x for x in rec["passes"] if x["n"] == int(n))
+    qq = next(x for x in p.get("questions") or [] if x["id"] == qid)
+    qq.update(reply=out["a"], changed=out["changed"])
+    store(rec)
+    return out
+
+
+VERDICTS = ("mergeable", "almost", "not")
+
+
+def verdict_of(p):
+    """The review's own call on whether it can merge, else one worked out from what's still open (older reviews)."""
+    if p.get("verdict") in VERDICTS:
+        return p["verdict"]
+    if (p.get("posted") or {}).get("event") == "APPROVE":
+        return "mergeable"  # you approved it
+    open_ = [f for f in p.get("findings") or [] if f["status"] != "drop" and not (f.get("fixed") or {}).get("commit")]
+    if any(f["severity"] in ("blocker", "major") for f in open_):
+        return "not"
+    return "almost" if any(f["severity"] == "minor" for f in open_) else "mergeable"
+
+
+def scores(rec):
+    """Every review's score in order, with its kind, so the page can show which way the PR is heading."""
+    return [{"n": p["n"], "score": p.get("score"), "kind": p.get("kind") or "first"} for p in rec.get("passes") or []
+            if p.get("score") is not None]
+
+
+def remember(repo, number, n, qid, to):
+    """Keep your answer to a review's question: a decision in this repo's dev-graph, or a note in your second-brain,
+    so later sessions and reviews know it."""
+    from . import knowledge as KN
+    if to not in ("dev-graph", "second-brain"):
+        raise ReviewError("save to dev-graph or second-brain")
+    rec = need(repo, number)
+    p = next((x for x in rec["passes"] if x["n"] == int(n or 0)), None)
+    qq = next((x for x in (p or {}).get("questions") or [] if x["id"] == qid), None)
+    if not qq or not qq.get("answer"):
+        raise ReviewError("answer the question first")
+    text = "%s\n\nAnswer: %s\n\n(From the review of %s.)" % (qq["ask"], qq["answer"], ref(repo, number))
+    try:
+        out = KN.add("decision" if to == "dev-graph" else "note", qq["ask"][:200], text,
+                     repo=repo.split("/")[-1] if to == "dev-graph" else "")
+    except Exception as e:  # the graph may be down: say so on the page, the answer itself is safe
+        raise ReviewError("couldn't save to %s: %s" % (to, str(e)[:200])) from None
+    rec = need(repo, number)
+    p = next(x for x in rec["passes"] if x["n"] == int(n))
+    next(x for x in p["questions"] if x["id"] == qid)["saved"] = {"to": to, "slug": out["slug"], "at": C.now_iso()}
+    store(rec)
+    return out
 
 
 def post_reply(repo, number, fid, body=None):
@@ -1211,7 +1289,9 @@ def discuss(repo, number, fid, question):
 
 
 DISCUSS = ("This is about one finding, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\nThe comment drafted "
-           "for the author: %s%s\n\nLee says: %s")
+           "for the author: %s%s\n\nLee says: %s\n\nIf Lee says it isn't needed and the code agrees, say so in a "
+           "sentence and drop it (\"status\": \"drop\"), lowering \"score\" if the finding had cost points. If you "
+           "disagree, keep it and say plainly why it still matters and what has to change.")
 
 
 # ---------------------------------------------------------------- code snippets
@@ -1636,7 +1716,8 @@ def sessions_for(repo, number, days=30):
 CONVERT = ("Below is a code review someone did in a Claude Code session. Turn it into this JSON and reply with only "
            "the JSON in one ```json block. Keep every finding the review settled on, with its wording; leave out "
            "ones it dropped or withdrew. Use null where the review doesn't say.\n\n%s\n\nThe review:\n\n%s")
-SHAPE = ('{"summary": "...", "score": 0-100 or null, "approach_notes": [], "findings": [{"title": "...", '
+SHAPE = ('{"summary": "...", "score": 0-100 or null, "verdict": "mergeable|almost|not", "verdict_why": "one line", '
+         '"approach_notes": [], "findings": [{"title": "...", '
          '"severity": "blocker|major|minor|nitpick|note", "file": "path or null", "line": int or null, '
          '"issue": "one line", "fix": "one line", "detail": "evidence, not posted", "body": "the comment the author '
          'reads", "origin": "introduced|exposed|pre-existing", "since": "first"}]}')
@@ -1725,6 +1806,11 @@ def dashboard(fresh=False, only=None):
         r = have.get((x["repo"], x["number"]))
         x["passes"] = len(r["passes"]) if r else 0
         x["job"] = job(x["repo"], x["number"])
+        if r:  # the latest review, so the open lists say where each PR stands too
+            p = r["passes"][-1]
+            x.update(score=p.get("score"), scores=scores(r), verdict=verdict_of(p), posted=p.get("posted"),
+                     reviewed=p.get("ts"), tally={s: sum(f["status"] == s for f in p["findings"])
+                                                  for s in ("pending", "keep", "drop")})
     want = {(x["repo"], x["number"]) for x in q + mine + others}
     want |= {(r["repo"], r["number"]) for r in recs if r.get("state") == "OPEN"}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
@@ -1744,7 +1830,8 @@ def dashboard(fresh=False, only=None):
         out.append({"repo": r["repo"], "number": r["number"], "title": r.get("title"), "author": r.get("author"),
                     "url": r.get("url"), "ticket": r.get("ticket") or ticket_of(r.get("title"), "", r.get("branch")),
                     "open": r.get("state") in (None, "OPEN"), "passes": len(r["passes"]),
-                    "score": p.get("score"), "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
+                    "score": p.get("score"), "scores": scores(r), "verdict": verdict_of(p),
+                    "posted": p.get("posted"), "tally": tally, "updated": r.get("updated"),
                     "job": job(r["repo"], r["number"]), "gh": st.get((r["repo"], r["number"]))})
     links = _links()["prs"]  # linked PRs show on every row, whichever repo they are in
     for x in q + mine + out:
@@ -1758,8 +1845,9 @@ def dashboard(fresh=False, only=None):
                 out.append({"repo": r["repo"], "number": r["number"], "title": r.get("title"),
                             "author": r.get("author"), "url": r.get("url"), "ticket": r.get("ticket") or "",
                             "open": r.get("state") in (None, "OPEN"), "passes": len(r["passes"]),
-                            "score": p.get("score"), "posted": p.get("posted"), "tally": tally,
-                            "updated": r.get("updated"), "job": job(r["repo"], r["number"]), "gh": None,
+                            "score": p.get("score"), "scores": scores(r), "verdict": verdict_of(p),
+                            "posted": p.get("posted"),
+                            "tally": tally, "updated": r.get("updated"), "job": job(r["repo"], r["number"]), "gh": None,
                             "linked": links.get(n) or [], "other_repo": True})
     # a ticket's PRs in the repos not picked top left: its group shows all of them
     shown = {x.get("ticket") for x in q + mine + out} - {"", None}

@@ -3014,8 +3014,44 @@ class ReviewTest(unittest.TestCase):
         p = R.load("o/r", 7)["passes"][0]
         self.assertEqual(p["questions"][0]["answer"], "yes, by the mobile app")
         self.assertIn("My answer: yes, by the mobile app", asked[0][2])
+        self.assertEqual(p["questions"][0]["reply"], "Then 1.1 stands.")  # Claude's reply shows under the question
         with self.assertRaises(R.ReviewError):
             R.answer("o/r", 7, 1, "q9", "x")
+        added = []
+        with mock.patch("lfgcore.knowledge.add", side_effect=lambda *a, **k: added.append((a, k)) or {"slug": "dec-x"}):
+            R.remember("o/r", 7, 1, "q1", "dev-graph")
+        self.assertEqual(added[0][0][0], "decision")
+        self.assertIn("Answer: yes, by the mobile app", added[0][0][2])
+        self.assertEqual(added[0][1]["repo"], "r")
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["questions"][0]["saved"]["to"], "dev-graph")
+        with self.assertRaises(R.ReviewError):
+            R.remember("o/r", 7, 1, "q1", "somewhere")
+
+    def test_older_reviews_get_an_estimated_verdict_and_a_score_history(self):
+        f = lambda sev, st="keep": {"severity": sev, "status": st}  # noqa: E731
+        self.assertEqual(R.verdict_of({"findings": [f("major")]}), "not")
+        self.assertEqual(R.verdict_of({"findings": [f("major", "drop"), f("minor")]}), "almost")
+        self.assertEqual(R.verdict_of({"findings": [f("nitpick")]}), "mergeable")
+        self.assertEqual(R.verdict_of({"findings": [f("major")], "posted": {"event": "APPROVE"}}), "mergeable")
+        self.assertEqual(R.verdict_of({"verdict": "almost", "findings": []}), "almost")
+        rec = {"passes": [{"n": 1, "score": 60}, {"n": 2, "score": None}, {"n": 3, "score": 80, "kind": "full"}]}
+        self.assertEqual(R.scores(rec), [{"n": 1, "score": 60, "kind": "first"}, {"n": 3, "score": 80, "kind": "full"}])
+
+    def test_a_review_says_whether_it_can_merge_and_talking_can_change_that(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "score": 70, "verdict": "almost", "verdict_why": "one minor left",
+                              "findings": [self.finding()]})
+            with self.assertRaises(R.ReviewError):
+                R.save("o/r", 7, {"summary": "s", "verdict": "probably", "findings": []})
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["verdict"], p["verdict_why"]), ("almost", "one minor left"))
+        changed = R.apply_changes("o/r", 7, 1, {"changes": [{"id": "1.1", "status": "drop"}], "score": 92,
+                                                "verdict": "mergeable", "verdict_why": "nothing left"})
+        self.assertEqual(changed, ["1.1: dropped", "verdict", "score 92"])
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["verdict"], p["score"], p["findings"][0]["dropped_by"]), ("mergeable", 92, "claude"))
+        R.mark("o/r", 7, ["1.1"], status="keep")  # your own call replaces Claude's
+        self.assertNotIn("dropped_by", R.load("o/r", 7)["passes"][0]["findings"][0])
 
     def test_someone_elses_comment_on_your_pr_becomes_a_finding_with_a_reply(self):
         rb = {"who": "coderabbitai", "url": "https://github.com/o/r/pull/7#discussion_r9", "comment_id": 9,
@@ -3085,6 +3121,7 @@ class ReviewTest(unittest.TestCase):
                          ["is this reachable?", "and the fix?"])
         self.assertIn("is this reachable?", asked[1][2])  # the second question sees the first
         self.assertIn("This breaks on empty input.", asked[0][2])
+        self.assertIn("drop it", asked[0][2])  # agreeing it isn't needed drops it; disagreeing says why
         with self.assertRaises(R.ReviewError):
             R.discuss("o/r", 7, "1.1", " ")
 
@@ -3225,7 +3262,8 @@ class ReviewTest(unittest.TestCase):
             R.run("o/api", 7, together=[("o/web", 9)])
             R.run("o/api", 7, together=[("o/web", 9)], fresh=True)
         prompt = [c[0][0][2] for c in run.call_args_list if c[0][0][0] == "claude"][-1]
-        self.assertIn("full first review", prompt)
+        self.assertIn("new full review", prompt)
+        self.assertIn("fill `prior`", prompt)  # earlier open findings are still tracked
         self.assertEqual([p["kind"] for p in R.load("o/api", 7)["passes"]], ["first", "full"])
         self.assertEqual([p["kind"] for p in R.load("o/web", 9)["passes"]], ["first", "full"])
         self.assertFalse(R.job("o/web", 9)["re_review"])
@@ -3919,3 +3957,70 @@ class ReviewOnRedTest(unittest.TestCase):
         self.stamp({"green": True, "state": "green"})
         C.run(self.who + ["commit", "-q", "--allow-empty", "-m", "more"], cwd=self.root)
         self.assertTrue(C.review_status(self.root)["stands"])
+
+
+class SkillRunTest(unittest.TestCase):
+    SID = "%08d-0000-0000-0000-000000000000" % 77
+
+    def setUp(self):
+        import tempfile
+        from lfgcore import skillrun as SR
+        from lfgcore import sessions as SS
+        self.SR, self.dir = SR, tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+        p = mock.patch.object(SS, "PROJECTS", self.dir)
+        p.start()
+        self.addCleanup(p.stop)
+        os.makedirs(os.path.join(self.dir, "-nowhere-app"))
+        with open(os.path.join(self.dir, "-nowhere-app", self.SID + ".jsonl"), "w") as f:
+            f.write(json.dumps({"type": "user", "cwd": self.dir, "message": {"content": "build it"}}) + "\n")
+        for f in glob.glob(os.path.join(SR.runs_dir(), "*")):
+            os.remove(f)
+
+    def claude(self, replies, cmds):
+        def run(cmd, stdout=None, **kw):
+            cmds.append(cmd)
+            sid = "%08d-1111-1111-1111-111111111111" % len(cmds)
+            stdout.write("\n".join(json.dumps(e) for e in [
+                {"type": "system", "subtype": "init", "session_id": sid},
+                {"type": "assistant", "session_id": sid, "message": {"model": "claude-opus-5-5", "content": [
+                    {"type": "tool_use", "name": "Skill", "input": {"skill": "conform-pr"}}]}},
+                {"type": "result", "session_id": sid, "result": replies[len(cmds) - 1]}]))
+            return subprocess.CompletedProcess(cmd, 0)
+        return run
+
+    def test_a_skill_runs_on_a_copy_of_the_session_in_a_loop_until_nothing_is_left(self):
+        SR = self.SR
+        with mock.patch("subprocess.Popen") as popen:
+            jid = SR.start(self.SID, skill="/conform-pr", say="skip the docs", times=3, until_clean=True,
+                           mode="acceptEdits")["id"]
+        self.assertIn("run", popen.call_args[0][0])
+        cmds = []
+        with mock.patch.object(SR.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "notify") as notify, \
+                mock.patch("subprocess.run", side_effect=self.claude(["Fixed two.", "All good.\nLFG: nothing left",
+                                                                       "never"], cmds)):
+            j = SR.run(jid)
+        self.assertEqual((j["status"], len(j["passes"])), ("done", 2))  # stopped once a pass changed nothing
+        self.assertEqual(cmds[0][2], "/conform-pr skip the docs\n\n" + SR.LOOP % (1, 3, SR.DONE_MARK))
+        self.assertEqual(cmds[0][cmds[0].index("--resume") + 1], self.SID)
+        self.assertIn("--fork-session", cmds[0])  # your session stays as it was
+        self.assertEqual(cmds[1][cmds[1].index("--resume") + 1], j["passes"][0]["session"])  # then the copy
+        self.assertNotIn("--fork-session", cmds[1])
+        self.assertEqual(cmds[0][cmds[0].index("--permission-mode") + 1], "acceptEdits")
+        self.assertEqual(j["passes"][1]["said"], "All good.")
+        self.assertEqual(notify.call_args[1]["place"], "session:" + self.SID)
+        v = SR.view(j)
+        self.assertEqual(v["used"]["skills"][0]["name"], "conform-pr")
+        self.assertIn(j["passes"][1]["session"], v["resume"])
+        self.assertEqual(ui.api("skillruns", {"id": [self.SID], "runs_only": ["1"]})["runs"][0]["id"], jid)
+
+    def test_a_run_needs_something_to_do_and_a_real_session(self):
+        SR = self.SR
+        for kw in ({}, {"skill": "rm -rf"}, {"say": "x", "mode": "bypassPermissions"}, {"say": "x", "model": "gpt"}):
+            with self.assertRaises(SR.RunError):
+                SR.start(self.SID, **kw)
+        with self.assertRaises(ValueError):
+            SR.start("../etc", say="x")
+        with self.assertRaises(ui.S.Invalid):  # the page shows why
+            ui.save("skill_run", {"session": self.SID})
