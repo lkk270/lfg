@@ -2759,6 +2759,7 @@ function wirePrs(root) {
     if (cache[el.dataset.prSnip]) return (el.innerHTML = snipHtml(cache[el.dataset.prSnip]));
     const d = await api("prsnippet", { pr, id }).catch(() => ({}));
     if (d.snippet) cache[el.dataset.prSnip] = d.snippet;
+    setTimeout(() => { if (state.pin && Date.now() < state.pin.until) state.pin.keep(); }, 0);
     if (d.snippet) el.innerHTML = snipHtml(d.snippet);
     else $(".pad", el).textContent = "Couldn't get this code from GitHub.";
   });
@@ -3124,7 +3125,12 @@ function applyGoto(view) {
   const el = $(state.goto, view);
   state.goto = null;
   if (!el) return;
-  el.scrollIntoView({ block: "start", behavior: "smooth" });
+  // code snippets above it load after this and push it down: keep it in place until they're in, or you scroll
+  const until = Date.now() + 4000, keep = () => el.isConnected && el.scrollIntoView({ block: "start" });
+  keep();
+  state.pin = { keep, until };
+  const stop = () => { state.pin = null; window.removeEventListener("wheel", stop); window.removeEventListener("keydown", stop); };
+  window.addEventListener("wheel", stop, { once: true }); window.addEventListener("keydown", stop, { once: true });
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 1800);
 }
