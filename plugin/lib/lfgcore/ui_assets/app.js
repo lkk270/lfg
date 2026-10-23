@@ -2274,6 +2274,12 @@ PAGES.prs = async arg => {
   state.prMethod = d.method;
   const lock = unlocked ? "" : `<div class="callout warn">Buttons are locked. Run <code>${esc(unlockCmd())}</code> in your terminal to review and post from here.</div>`;
   state.prPick = state.prPick || new Set();
+  /* merged and closed PRs are done: hidden unless you ask, remembered across visits */
+  const showDone = localStorage.getItem("lfg.prs.done") === "1";
+  const isDone = x => x.open === false || ["MERGED", "CLOSED"].includes((x.gh || {}).state);
+  const done = (d.reviews || []).filter(isDone).length;
+  const shownReviews = showDone ? d.reviews : (d.reviews || []).filter(x => !isDone(x));
+  const doneToggle = done ? `<label class="row small done-toggle"><input type="checkbox" data-prs-done ${showDone ? "checked" : ""}> Show merged and closed PRs (${done})</label>` : "";
   state.prReviewed = new Set([...(d.queue || []), ...(d.mine || []), ...(d.reviews || []), ...(d.ticket_more || [])].filter(x => x.passes).map(prRef));
   state.prTicket = Object.fromEntries([...(d.queue || []), ...(d.mine || []), ...(d.reviews || [])].filter(x => x.ticket).map(x => [prRef(x), x.ticket]));
   state.ticketTitles = d.ticket_titles || {};
@@ -2302,7 +2308,7 @@ PAGES.prs = async arg => {
     ${ticketSection(d, unlocked)}
     ${section("Waiting on you", d.queue_why ? unavailable({ why: d.queue_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.queue, qcols, { ...qopts, emptyTitle: "Nothing waiting", emptyBody: "No open PRs ask for your review." })}</div>`, "open PRs where GitHub lists you as a reviewer")}
     ${section("Your open PRs", d.mine_why ? unavailable({ why: d.mine_why }, "Couldn't ask GitHub") : `<div class="box">${table(d.mine, qcols, { ...qopts, emptyTitle: "No open PRs", emptyBody: "You have no open pull requests here." })}</div>`, "review your own work before others do; on your own PR you can only comment. Open one to link it to a session or a session group")}
-    ${section("Your reviews", `<div class="box">${table(d.reviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: "No reviews yet", emptyBody: "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}
+    ${section("Your reviews", `${doneToggle}<div class="box">${table(shownReviews, rcols, { onRow: x => (location.hash = prHash(x)), sort: "updated", emptyTitle: done && !showDone ? "No open PRs reviewed" : "No reviews yet", emptyBody: done && !showDone ? "Every PR you reviewed here is merged or closed. Tick the box above to see them." : "Press Review above, or run <code>/lfg:review &lt;PR&gt;</code> in Claude Code." })}</div>`)}
     ${methodSection(d.method, unlocked)}`;
 };
 /* A model's name as people say it: claude-opus-5-5 is Opus 5.5. */
@@ -2991,6 +2997,7 @@ function grow(t) {
   fit();
 }
 function wirePrs(root) {
+  $$("[data-prs-done]", root).forEach(c => c.onchange = () => { localStorage.setItem("lfg.prs.done", c.checked ? "1" : "0"); softRoute(); });
   $$("[data-pr-group]", root).forEach(b => b.onclick = prGroup);
   $$("[data-review-model]", root).forEach(s => s.onchange = async () => {
     const r = await save("review_model", { model: s.value });
@@ -3437,7 +3444,7 @@ async function watchNotices() {
   const tick = async () => {
     const d = await api("notices", { since }).catch(() => null);
     if (!d) return;
-    for (const x of d.items || []) noticeShow(x);
+    if ((d.items || []).length) noticeBatch(d.items);
     since = d.last || since;
   };
   await tick();
@@ -3476,17 +3483,44 @@ function desktopNotice(title, body, onclick) {
   n.onclick = () => { window.focus(); onclick(); n.close(); };
   return true;
 }
-function noticeShow(x) {
-  desktopNotice(x.title, x.body, () => noticeGo(x));
-  const box = document.createElement("div");
-  box.className = `notice ${x.ok ? "ok" : "bad"}`;
-  box.title = "Open it";
-  box.innerHTML = `${dot(x.ok ? "ok" : "bad")}<div class="grow"><b>${esc(x.title)}</b><div class="small muted">${esc(x.body)}</div>${"Notification" in window && Notification.permission === "default" ? '<button class="btn tiny" data-notify-on>Also tell me on the desktop</button>' : ""}</div><button class="btn tiny" data-notice-x aria-label="Close">×</button>`;
-  box.onclick = e => { if (e.target.closest("button")) return; box.remove(); noticeGo(x); };
-  $("[data-notice-x]", box).onclick = () => box.remove();
-  const on = $("[data-notify-on]", box);
-  if (on) on.onclick = async () => { await Notification.requestPermission(); on.remove(); };
-  ($("#notices") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "notices" }))).appendChild(box);
+/* Notices stack in one box at the bottom right: the newest three show, the rest fold under "N more", and Clear all
+   empties it. A batch that arrives at once (a tab coming back) makes one desktop notification, not one each. */
+const NOTICES = [];
+let noticesOpen = false;
+function noticeShow(x, quiet) {
+  if (!quiet) desktopNotice(x.title, x.body, () => noticeGo(x));
+  NOTICES.unshift(x);
+  noticesDraw();
+}
+function noticeBatch(items) {
+  if (items.length > 2) {
+    const bad = items.filter(x => !x.ok).length;
+    desktopNotice(`${items.length} updates`, `${items.length - bad} done${bad ? `, ${bad} failed` : ""}. Open the dashboard to see them.`, () => window.focus());
+    items.forEach(x => noticeShow(x, true));
+  } else items.forEach(x => noticeShow(x));
+}
+function noticesDraw() {
+  let box = $("#notices");
+  if (!box) box = document.body.appendChild(Object.assign(document.createElement("div"), { id: "notices" }));
+  if (!NOTICES.length) { box.innerHTML = ""; noticesOpen = false; return; }
+  const shown = noticesOpen ? NOTICES : NOTICES.slice(0, 3), more = NOTICES.length - shown.length;
+  const card = (x, i) => `<div class="notice ${x.ok ? "ok" : "bad"}" data-notice="${i}" title="Open it">${dot(x.ok ? "ok" : "bad")}<div class="grow"><b>${esc(x.title)}</b><div class="small muted">${esc(x.body)}</div><div class="small faint">${ago(x.at)}</div></div><button class="btn tiny" data-notice-x="${i}" aria-label="Close">×</button></div>`;
+  const ask = "Notification" in window && Notification.permission === "default";
+  box.innerHTML = `${NOTICES.length > 1 ? `<div class="notices-h"><b>${plural(NOTICES.length, "update")}</b><span class="grow"></span>${ask ? '<button class="btn tiny" data-notify-on>Desktop alerts</button>' : ""}<button class="btn tiny" data-notices-clear>Clear all</button></div>` : ""}
+    <div class="notices-list ${noticesOpen ? "open" : ""}">${shown.map((x, i) => card(x, i)).join("")}</div>
+    ${more ? `<button class="notices-more" data-notices-more>Show ${plural(more, "more update")}</button>` : noticesOpen && NOTICES.length > 3 ? '<button class="notices-more" data-notices-more>Show fewer</button>' : ""}
+    ${NOTICES.length === 1 && ask ? '<button class="btn tiny notices-ask" data-notify-on>Also tell me on the desktop</button>' : ""}`;
+  $$("[data-notice]", box).forEach(el => el.onclick = e => {
+    const i = +el.dataset.notice;
+    if (e.target.closest("[data-notice-x]")) { NOTICES.splice(i, 1); return noticesDraw(); }
+    const [x] = NOTICES.splice(i, 1);
+    noticesDraw(); noticeGo(x);
+  });
+  const clear = $("[data-notices-clear]", box);
+  if (clear) clear.onclick = () => { NOTICES.length = 0; noticesDraw(); };
+  const more_ = $("[data-notices-more]", box);
+  if (more_) more_.onclick = () => { noticesOpen = !noticesOpen; noticesDraw(); };
+  $$("[data-notify-on]", box).forEach(b => b.onclick = async () => { await Notification.requestPermission(); noticesDraw(); });
 }
 /* Settings → General: check desktop notifications end to end, and say what's in the way when they don't show. */
 function notifyRow() {
