@@ -662,12 +662,14 @@ def _pr_head(cwd, pr, repo):
     return cp.stdout.strip() if cp.returncode == 0 else ""
 
 
-def _rewrite_allowed(values, cwd, amend_all=False, push=False):
-    """None if amending (or force-pushing the amend) is within your rule here, else why not."""
+def _rewrite_allowed(values, cwd, amend_all=False, push=False, branch=None, local="HEAD"):
+    """None if amending (or force-pushing the amend) is within your rule here, else why not. A force-push that names
+    its branch (`git push -f origin feat`, `feat:feat`) is judged on that branch and its local commit `local`, not on
+    whatever the checkout it runs from has checked out."""
     mode = values.get("rewrite", "never")
     if mode == "never":
         return "amending and force-pushing are off for this session"
-    branch = _branch(cwd)
+    branch = branch or _branch(cwd)
     if branch in PROTECTED_BRANCHES:
         return "rewriting main, master, qa or prod is never allowed"
     if mode == "anytime":
@@ -677,13 +679,13 @@ def _rewrite_allowed(values, cwd, amend_all=False, push=False):
         return "amending is only for small fixes on a branch with your own open PR, and %s has none" % (
             branch or "this checkout")
     if push:
-        remote = _git_out(cwd, "rev-parse", "--verify", "-q", "@{upstream}") or \
+        remote = (local == "HEAD" and _git_out(cwd, "rev-parse", "--verify", "-q", "@{upstream}")) or \
             _git_out(cwd, "rev-parse", "--verify", "-q", "origin/" + branch)
         if not remote:
             return "can't tell what the force-push would replace (no upstream for %s)" % branch
-        if _git_out(cwd, "rev-parse", remote + "^") != _git_out(cwd, "rev-parse", "HEAD^"):
+        if _git_out(cwd, "rev-parse", remote + "^") != _git_out(cwd, "rev-parse", local + "^"):
             return "this force-push would replace more than the last commit; only an amended last commit may go"
-        n = _lines(_git_out(cwd, "diff", "--numstat", remote, "HEAD"))
+        n = _lines(_git_out(cwd, "diff", "--numstat", remote, local))
     else:
         n = _lines(_git_out(cwd, "diff", "--cached", "--numstat"))
         if amend_all:
@@ -722,14 +724,18 @@ def check_command(cmd, values, cwd=None):
                 if force:
                     if values["rewrite"] == "never":
                         return "force-pushing is off for this session"
-                    refs = [a.lstrip("+").split(":")[-1] for a in rest if not a.startswith("-")][1:]
-                    target = refs or [_branch(here)]
-                    if any(t.replace("refs/heads/", "") in PROTECTED_BRANCHES for t in target if t):
+                    specs = [a.lstrip("+") for a in rest if not a.startswith("-")][1:]  # after the remote
+                    # each refspec is local:remote (or one name for both); none means this checkout's branch
+                    pairs = [(sp.split(":")[0] or "HEAD", sp.split(":")[-1].replace("refs/heads/", "")) for sp in specs]
+                    pairs = pairs or [("HEAD", _branch(here))]
+                    if any(dst in PROTECTED_BRANCHES for _, dst in pairs if dst):
                         return "force-pushing main, master, qa or prod is never allowed"
                     if values["rewrite"] == "review":
-                        why = _rewrite_allowed(values, here, push=True)
-                        if why:
-                            return why
+                        for src, dst in pairs:
+                            why = _rewrite_allowed(values, here, push=True, branch=dst or None,
+                                                   local=src.replace("refs/heads/", "") if specs else "HEAD")
+                            if why:
+                                return why
         if base == "gh" and argv[1:3] == ["pr", "merge"]:
             if values["merge_pr"] == "never":
                 return "your rule for this session is that you merge PRs, not Claude"
