@@ -215,6 +215,16 @@ def api(view, q):
             return dict(SS.recent(_arg(q, "id")), used=SS.usage_of(_arg(q, "id")))
         except ValueError as e:
             return {"available": False, "why": str(e)}
+    if view == "skillruns":
+        from . import review as R
+        from . import skillrun as SR
+        sid = _arg(q, "id")
+        runs = [SR.view(j) for j in SR.listing(sid or None)]
+        if _arg(q, "runs_only") == "1":
+            return {"runs": runs}
+        return {"runs": runs, "skills": SR.skills(_rid(q)),
+                "modes": [{"id": k, "label": v} for k, v in SR.MODES.items()], "models": R.models(),
+                "model": R.chosen_model()}
     if view == "sessiondone":
         from . import sessions as SS
         return SS.group_cleanup(_arg(q, "repo"), _arg(q, "group"))
@@ -437,6 +447,17 @@ def save(what, body):
             return SS.file_into(body.get("id"), body.get("folder"), body.get("from") or "")
         except ValueError as e:
             raise S.Invalid(str(e)) from None
+    if what in ("skill_run", "skill_stop"):
+        from . import skillrun as SR
+        try:
+            if what == "skill_stop":
+                return SR.stop(body.get("id"))
+            return SR.start(body.get("session"), skill=body.get("skill") or "", say=body.get("say") or "",
+                            times=body.get("times") or 1, until_clean=bool(body.get("until_clean")),
+                            mode=str(body.get("mode") or "auto"), model=str(body.get("model") or ""),
+                            fork=body.get("fork", True) is not False)
+        except (SR.RunError, ValueError, TypeError) as e:
+            raise S.Invalid(str(e)) from None
     if what.startswith("review_"):
         return review_action(what, body)
     from . import control as K
@@ -475,6 +496,8 @@ def review_action(what, body):
         if what == "review_post":
             return R.post(repo, number, str(body.get("event") or ""), body=str(body.get("body") or ""),
                           dry_run=bool(body.get("dry_run")))
+        if what == "review_remember":
+            return R.remember(repo, number, body.get("pass"), str(body.get("id") or ""), str(body.get("to") or ""))
         if what == "review_run":
             together = body.get("with") or []
             if not isinstance(together, list):

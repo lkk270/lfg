@@ -56,6 +56,9 @@ preflight: graphs
      Findings get `since: "new"`.
    - **Missed.** One more pass over the whole PR for what earlier passes missed. Findings get `since: "missed"`.
      Never re-file an earlier finding: track it in `prior` instead, and never re-raise a settled one.
+   **New full review** (asked for one on a PR with earlier reviews): review the whole PR from scratch, findings with
+   `since: "first"`, and still do the **Earlier findings** and **Settled** passes above, so every finding still open
+   is tracked in `prior` rather than lost or filed twice.
 8. **Other reviewers.** `lfg review others <pr>`: what people and bots (CodeRabbit, Sonar, other agents) already
    said, inline (with `file` and `line`) or in the conversation. For each finding someone already raised, at the same
    spot or the same idea in other words, list them in `echoes` and say so in `body`: agree with them by name and add
@@ -80,7 +83,8 @@ The file passed to `lfg review save`:
 
 ```json
 {"summary": "two or three sentences: what the PR does and whether it is mergeable",
- "score": 84, "approach_notes": ["..."],
+ "score": 84, "verdict": "mergeable|almost|not", "verdict_why": "one line: what stands between it and merging",
+ "approach_notes": ["..."],
  "findings": [{"title": "short name", "severity": "blocker|major|minor|nitpick|note",
    "file": "path/in/repo.ts", "line": 42, "issue": "one line", "fix": "one line",
    "detail": "evidence for the reviewer: what you checked and where; not posted",
@@ -96,6 +100,9 @@ The file passed to `lfg review save`:
 ```
 
 `line` is a line in the PR's version of the file, or null for a finding about the PR as a whole.
+
+`verdict`: `mergeable` when nothing should hold it up, `almost` when only small fixes stand in the way (minors, a
+failing check with an obvious cause, a question to answer), `not` with any blocker or major, or a design problem.
 
 Then show the user, per PR: the earlier-finding states (re-review), the score, then one row per finding: id,
 severity, title, `file:line`, the `issue` line. All at once, not one at a time. Then triage on their word:

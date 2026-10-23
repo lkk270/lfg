@@ -824,6 +824,9 @@ def _lfg(argv):
         _block("2", "`lfg review post` publishes a review on GitHub; run it yourself (or use lfg ui)")
     if sub == "review" and "fix" in rest:
         _block("2", "`lfg review fix` commits and pushes to your PR; start it yourself (or use lfg ui)")
+    if sub == "sessions" and rest[:1] in (["skill"], ["run"]):
+        _block("2", "`lfg sessions %s` starts another Claude on one of your sessions; start it yourself (or use "
+                    "lfg ui)" % rest[0])
     if sub == "update" and ("apply" in rest or "fix" in rest):
         _block("13", "`lfg update %s` merges, pushes and installs new LFG code; run it yourself "
                     "(or use lfg ui)" % ("apply" if "apply" in rest else "fix"), hard=True)
@@ -999,6 +1002,8 @@ SELFTEST = [
     ("Bash", {"command": "lfg review fix 12"}, True),
     ("Bash", {"command": "lfg review mark 12 1.1 --drop"}, False),
     ("Bash", {"command": "lfg review run 12"}, True),
+    ("Bash", {"command": "lfg sessions skill 0000 /lfg:secure"}, True),
+    ("Bash", {"command": "lfg sessions list --find x"}, False),
     ("Bash", {"command": "lfg update apply"}, True),
     ("Bash", {"command": "lfg update fix"}, True),
     ("Bash", {"command": "lfg update check --json"}, False),

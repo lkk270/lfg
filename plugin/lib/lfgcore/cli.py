@@ -1009,6 +1009,19 @@ def cmd_sessions(a):
         if a.action == "folder":
             _print(SS.file_into(a.id, " ".join(a.value)))
             return 0
+        if a.action in ("skill", "run"):
+            from . import skillrun as SR
+            try:
+                if a.action == "run":  # the dashboard's detached worker
+                    j = SR.run(a.id)
+                    return 0 if j["status"] == "done" else 1
+                vals = a.value or []
+                skill = vals[0] if vals and vals[0].startswith("/") else ""
+                _print(SR.start(a.id, skill=skill, say=" ".join(vals[1:] if skill else vals), times=a.times,
+                                until_clean=a.until_clean, mode=a.mode, model=a.model or "", fork=not a.in_place))
+                return 0
+            except SR.RunError as e:
+                C.die(str(e), 2)
     except ValueError as e:
         C.die(str(e), 2)
     d = SS.listing(days=a.days)
@@ -1381,10 +1394,16 @@ def main(argv=None):
     up.add_argument("action", nargs="?", default="check", choices=["check", "apply", "fix"])
     up.add_argument("--json", action="store_true")
     ss = sp.add_parser("sessions", help="every Claude Code session on this machine, with the command that resumes it")
-    ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder"])
-    ss.add_argument("id", nargs="?", help="name/folder: the session id")
-    ss.add_argument("value", nargs="*", help="name: your name for it; folder: your group for it, LFG only, nothing on "
+    ss.add_argument("action", nargs="?", default="list", choices=["list", "name", "folder", "skill", "run"])
+    ss.add_argument("id", nargs="?", help="name/folder/skill: the session id; run: the run id")
+    ss.add_argument("value", nargs="*", help="skill: /skill-name then anything to tell it; "
+                    "name: your name for it; folder: your group for it, LFG only, nothing on "
                     "disk moves (empty takes it out)")
+    ss.add_argument("--times", type=int, default=1, help="skill: run it this many times in a row (max 10)")
+    ss.add_argument("--until-clean", action="store_true", help="skill: stop early once a pass changes nothing")
+    ss.add_argument("--mode", default="auto", choices=["auto", "acceptEdits", "dontAsk"], help="skill: permissions")
+    ss.add_argument("--model", help="skill: the model to run on (default: Claude Code's own)")
+    ss.add_argument("--in-place", action="store_true", help="skill: add to the session itself, not a copy of it")
     ss.add_argument("--find", help="list: only sessions whose name, repo, branch, ticket or group has this")
     ss.add_argument("--days", type=int, help="list: only the last N days")
     ss.add_argument("--limit", type=int, default=30)
