@@ -3101,6 +3101,44 @@ class ReviewTest(unittest.TestCase):
         self.assertIn("3 if not s: return", asked[0])  # the file now, with line numbers
         self.assertEqual(R.load("o/r", 7)["passes"][0]["findings"][0]["check"]["state"], "fixed")
 
+    def test_one_review_can_follow_its_own_method(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1",
+                   "result": "```json\n%s\n```" % json.dumps({"summary": "s", "findings": [self.finding()]})}]
+        seen = []
+
+        def run(cmd, cwd=None, stdout=None, env=None, **kw):
+            seen.append((env or {}).get("LFG_REVIEW_SOURCES"))
+            return self.fake_claude(events)(cmd, cwd=cwd, stdout=stdout, **kw)
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=run):
+            R.run("o/r", 7)
+            R.run("o/r", 7, method=json.dumps(["~/.claude/skills/review-pr"]))
+        self.assertEqual([x for x in seen if x is not None], ['["~/.claude/skills/review-pr"]'])
+        passes = R.load("o/r", 7)["passes"]
+        self.assertEqual((passes[0]["run"]["method"], passes[1]["run"]["method"]),
+                         ("LFG's built-in method", "review-pr"))
+        with mock.patch.dict(R.os.environ, {"LFG_REVIEW_SOURCES": "[]"}):
+            self.assertFalse(R.sources()["own"])  # the run's own pick wins over the saved one
+        self.assertEqual(R.method_choices()[0]["id"], "builtin")
+        with self.assertRaises(R.ReviewError):
+            R.start("o/r", 7, method="no-such-skill")
+
+    def test_a_question_says_what_it_costs_and_steps_repeat_once(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "score": 71, "findings": [],
+                              "questions": [{"ask": "a?", "why": "w", "costs": 12}, {"ask": "b?", "costs": 7}]})
+        self.assertEqual([q["costs"] for q in R.load("o/r", 7)["passes"][0]["questions"]], [12, 0])
+        log = os.path.join(self.tmp_dir(), "job.log")
+        read = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read",
+                                                               "input": {"file_path": "/x/out.txt"}}]}}
+        with open(log, "w") as f:
+            f.write("\n".join(json.dumps(e) for e in [read, read, read]))
+        with mock.patch.object(R, "job", return_value={"log": log}):
+            self.assertEqual(R.progress("o/r", 7)["steps"], ["Read /x/out.txt ×3"])
+
     def test_a_pr_that_isnt_ready_never_scores_like_one_that_is(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "score": 100, "verdict": "almost", "findings": []})

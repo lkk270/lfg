@@ -374,7 +374,8 @@ def save(repo, number, data, ticket=None, meta=None):
         "approach_notes": [_text(x, "approach note", 4000) for x in data.get("approach_notes") or []],
         "questions": [{"id": "q%d" % k, "ask": _text(q.get("ask"), "question", 1000), "why": _text(q.get("why"), "why",
                                                                                                     1000),
-                       "answer": None} for k, q in enumerate([q for q in data.get("questions") or []
+                       "answer": None, "costs": q["costs"] if q.get("costs") in (4, 12, 25) else 0}
+                      for k, q in enumerate([q for q in data.get("questions") or []
                                                                if isinstance(q, dict) and q.get("ask")][:10], 1)],
         "findings": found, "prior": prior, "posted": None})
     store(rec)
@@ -579,6 +580,12 @@ def sources():
     defaults (point it at your own skill and references, read in place); ~/.lfg/overrides/review/ always comes last
     and wins on conflict."""
     cfg = C.config().get("review") or {}
+    run_own = os.environ.get("LFG_REVIEW_SOURCES")  # one run's method, picked on the PR page (JSON list)
+    if run_own:
+        try:
+            cfg = dict(cfg, sources=[x for x in json.loads(run_own) if isinstance(x, str)])
+        except ValueError:
+            pass
     base = cfg.get("sources") or [default_dir()]
     out, missing = [], []
     for s in base:
@@ -835,7 +842,23 @@ def _model(m=None):
     return ["--model", m] if m else []
 
 
-def start(repo, number, ticket=None, fresh=False, together=(), model=None):
+def method_choices():
+    """Methods one review can use instead of the saved one: LFG's built-in method and each of your own skills."""
+    out = [{"id": "builtin", "label": "LFG's built-in method", "sources": []}]
+    for d in sorted(glob.glob(os.path.join(C.HOME, ".claude", "skills", "*", "SKILL.md"))):
+        name = os.path.basename(os.path.dirname(d))
+        out.append({"id": name, "label": name, "sources": ["~/.claude/skills/%s" % name]})
+    return out
+
+
+def method_label(srcs):
+    """A method's name for people: the skill folder's name, or LFG's built-in method."""
+    if not srcs:
+        return "LFG's built-in method"
+    return ", ".join(os.path.basename(x.rstrip("/")) or x for x in srcs)
+
+
+def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None):
     """Start `lfg review run` detached (the dashboard's Review / Re-review / Review together buttons). together: more
     (repo, number) PRs to review in the same session."""
     import subprocess
@@ -850,6 +873,11 @@ def start(repo, number, ticket=None, fresh=False, together=(), model=None):
     args += ["--ticket", ticket] if ticket else []
     args += ["--fresh"] if fresh else []
     args += ["--model", model] if model else []
+    if method:
+        m = next((x for x in method_choices() if x["id"] == method), None)
+        if not m:
+            raise ReviewError("no review method %r" % method)
+        args += ["--method", json.dumps(m["sources"])]
     with open(os.devnull, "wb") as dn:
         subprocess.Popen(args, stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True,
                          close_fds=True)
@@ -864,7 +892,7 @@ def _passes(repo, number):
     return len((load(repo, number) or {}).get("passes") or [])
 
 
-def run(repo, number, ticket=None, fresh=False, together=(), model=None):
+def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None):
     """Review one PR with Claude Code in print mode, on your own login, and wait for it. together: more PRs reviewed
     in the same session as one change (a backend and the frontend that calls it): each gets its own review, and the
     session also checks they agree with each other. Every review it saves remembers the session, so you can resume it,
@@ -875,6 +903,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None):
         raise ReviewError("Claude Code (`claude`) is not on PATH")
     prs = [(repo, number)] + [tuple(x) for x in together if tuple(x) != (repo, number)]
     before = {x: _passes(*x) for x in prs}
+    label = method_label(json.loads(method) if method else (C.config().get("review") or {}).get("sources"))
     cwd = local_checkout(repo) or C.ensure_dir(reviews_dir())
     log = job_path(repo, number)[:-5] + ".log"
     refs = [ref(*x) for x in prs]
@@ -882,7 +911,8 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None):
         C.write_json(job_path(*x), {
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
-            "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model()})
+            "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model(),
+            "method": label})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     if len(prs) == 1:
         what = "to review %s" % refs[0]
@@ -910,6 +940,8 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None):
     with os.fdopen(fd, "w") as fh:
         # this code's own `lfg` first on PATH, so the session saves with the same version that started it
         env = dict(os.environ, PATH=os.path.join(C.PLUGIN_ROOT, "bin") + os.pathsep + os.environ.get("PATH", ""))
+        if method:
+            env["LFG_REVIEW_SOURCES"] = method  # `lfg review context` in that session reads this run's method
         cp = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
     sid = session_id(log)
     first = None
@@ -925,7 +957,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None):
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
             shutil.copyfile(log, kept)
             p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)],
-                        "used": used(log)}
+                        "used": used(log), "method": label}
             if fresh and p["n"] > 1:
                 p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)
@@ -1841,7 +1873,7 @@ def import_session(repo, number, path, ticket=None, convert=True):
     return rec
 
 
-def progress(repo, number, lines=8, j=None):
+def progress(repo, number, lines=400, j=None):
     """The last few things a running review (or fix: pass its job) did, in words, from its stream-json log."""
     j = j or job(repo, number)
     if not j:
@@ -1856,7 +1888,14 @@ def progress(repo, number, lines=8, j=None):
             if part.get("type") == "tool_use":
                 inp = part.get("input") or {}
                 what = inp.get("command") or inp.get("file_path") or inp.get("pattern") or ""
-                steps.append("%s %s" % (part.get("name"), str(what)[:140]))
+                if inp.get("offset"):
+                    what = "%s (from line %s)" % (what, inp["offset"])
+                step = "%s %s" % (part.get("name"), str(what)[:160])
+                m = re.match(r"^(.*?)(?: ×(\d+))?$", steps[-1]) if steps else None
+                if m and m.group(1) == step:  # the same step again: count it rather than list it twice
+                    steps[-1] = "%s ×%d" % (step, int(m.group(2) or 1) + 1)
+                else:
+                    steps.append(step)
         if ev.get("type") == "result":
             steps.append("finished: %s" % str(ev.get("result") or ev.get("subtype") or "")[:300])
     return dict(j, steps=steps[-lines:])
