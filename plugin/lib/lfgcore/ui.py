@@ -256,9 +256,11 @@ def api(view, q):
             return R.notices(int(_arg(q, "since") or 0))
         except ValueError:
             return {"last": 0, "items": []}
-    if view in ("prreviews", "prreview", "prreviewlog", "prsnippet"):
+    if view in ("prreviews", "prreview", "prreviewlog", "prsnippet", "prscores"):
         from . import review as R
         from . import sessions as SS
+        if view == "prscores":
+            return R.score_stats(only=_only(q))
         if view == "prreviews":
             return dict(R.dashboard(fresh=_arg(q, "fresh") == "1", only=_only(q)), method=R.method(),
                         ticket_titles=ticket_titles(), models=R.models(), model=R.chosen_model())

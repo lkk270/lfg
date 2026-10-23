@@ -2268,6 +2268,7 @@ function ghPanel(g) {
 }
 PAGES.prs = async arg => {
   if (arg && arg.startsWith("ticket/")) return prTicket(decodeURIComponent(arg.slice(7)));
+  if (arg === "scores") return prScores();
   if (arg) return prDetail(arg);
   const [d, unlocked] = await Promise.all([api("prreviews", scopeArgs("prs")), isUnlocked()]);
   state.prMethod = d.method;
@@ -2293,6 +2294,7 @@ PAGES.prs = async arg => {
     { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
   ];
   return `${head("PR reviews", `Pull requests waiting on your review, your own open ones, and the reviews you've run. Run one, decide what to keep, then post it to GitHub. Reviews run on your own Claude Code login. ${scopeLine("prs")}`)}
+    ${prTabs("list")}
     ${d.no_remote && !allRepos("prs") ? `<p class="muted small">${esc(repoName())} has no GitHub remote, so this shows PRs from every repo.</p>` : ""}
     ${lock}
     <div class="row pr-actions"><span class="grow"></span>${modelPick(d, unlocked)}</div>
@@ -2330,6 +2332,45 @@ function usedTags(u) {
 function modelPick(d, unlocked) {
   if (!d.models) return "";
   return `<label class="model-pick" title="The model every review, re-review, chat and fix runs on, from now on">Model<select data-review-model ${unlocked ? "" : "disabled"}>${d.models.map(m => `<option value="${esc(m.id)}" ${m.id === (d.model || "") ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>`;
+}
+const prTabs = on => `<div class="tabs page-tabs"><a class="tab ${on === "list" ? "on" : ""}" href="#prs">Pull requests</a><a class="tab ${on === "scores" ? "on" : ""}" href="#prs/scores">Scores</a></div>`;
+/* How PRs score, per person and per repo. The first review scores the code as it was handed in; later reviews
+   usually score higher after fixes, so the latest score and how many reviews it took to approve are shown apart. */
+async function prScores() {
+  const d = await api("prscores", scopeArgs("prs"));
+  crumbs("prs", "Scores");
+  const o = d.overall || {}, k = d.kinds || {};
+  const mini = v => (v == null ? '<span class="muted">–</span>' : `<span class="score-mini ${scoreTone(v)}" style="margin:0">${esc(Math.round(v))}</span>`);
+  const gain = v => (v == null ? "" : `<span class="trend ${v > 0 ? "up" : v < 0 ? "down" : "same"}">${v > 0 ? "↑" : v < 0 ? "↓" : "→"}${v ? Math.abs(v) : ""}</span>`);
+  const tile = (label, body, sub) => `<div class="stat-tile"><div class="k">${label}</div><div class="v">${body}</div>${sub ? `<div class="muted small">${sub}</div>` : ""}</div>`;
+  const ring = v => (v == null ? '<span class="muted">–</span>' : `<div class="score-ring ${scoreTone(v)}" style="--pct:${v}"><span>${esc(Math.round(v))}</span><small>avg</small></div>`);
+  const tiles = `<div class="stat-tiles">
+    ${tile("First review", ring(o.first), "the code as it was handed in")}
+    ${tile("Latest review", ring(o.latest), "after fixes")}
+    ${tile("Reviews to approval", `<span class="big-n">${o.to_approval ?? "–"}</span>`, "on PRs you approved")}
+    ${tile("Full reviews", `<span class="big-n">${k.full ? Math.round(k.full.avg) : "–"}</span>`, k.full ? `${plural(k.full.reviews, "review")}, average score` : "")}
+    ${tile("Re-reviews", `<span class="big-n">${k["re-review"] ? Math.round(k["re-review"].avg) : "–"}</span>`, k["re-review"] ? `${plural(k["re-review"].reviews, "review")}, average score` : "")}</div>`;
+  const gcols = who => [
+    { k: "name", label: who, html: x => `<span class="${who === "Repo" ? "mono" : ""}">${esc(x.name)}</span>` },
+    { k: "prs", label: "PRs", num: true },
+    { k: "first", label: "First review", html: x => mini(x.first), sort: x => x.first ?? -1 },
+    { k: "latest", label: "Latest", html: x => `<div class="merge-cell">${mini(x.latest)}${gain(x.gain)}</div>`, sort: x => x.latest ?? -1 },
+    { k: "to_approval", label: "Reviews to approval", html: x => (x.to_approval == null ? '<span class="muted small">none approved</span>' : `${esc(x.to_approval)}<span class="muted small"> · ${x.first_time} of ${x.approved} on the first</span>`), sort: x => x.to_approval ?? 99 },
+  ];
+  const pcols = [
+    { k: "title", label: "Pull request", html: x => `${esc(x.title)}<div class="sub mono">${esc(x.repo)}#${esc(x.number)} · ${esc(x.author)}</div>` },
+    { k: "first", label: "First", html: x => mini(x.first), sort: x => x.first },
+    { k: "latest", label: "Latest", html: x => `<div class="merge-cell">${verdictPill(x)}${mini(x.latest)}${trend(x.scores, true)}</div>`, sort: x => x.latest },
+    { k: "reviews", label: "Reviews", num: true },
+    { k: "approved_after", label: "Approved", html: x => (x.approved_after ? `after ${plural(x.approved_after, "review")}` : '<span class="muted small">not by you</span>'), sort: x => x.approved_after ?? 99 },
+    { k: "updated", label: "Updated", html: x => `<span class="nowrap">${ago(x.updated)}</span>` },
+  ];
+  return `${head("PR reviews", `How pull requests score. The first review scores the code as it was handed in; later reviews usually go up after fixes, so they're shown apart. ${scopeLine("prs")}`)}
+    ${prTabs("scores")}
+    ${(d.prs || []).length ? `${tiles}
+    ${section("By person", `<div class="box">${table(d.authors, gcols("Person"), { sort: "prs", filter: false })}</div>`, "average first-review score, then where they ended up")}
+    ${section("By repo", `<div class="box">${table(d.repos, gcols("Repo"), { sort: "prs", filter: false })}</div>`)}
+    ${section("Every PR", `<div class="box">${table(d.prs, pcols, { sort: "updated", onRow: x => (location.hash = `#prs/${x.repo}/${x.number}`) })}</div>`)}` : empty("No scores yet", "Reviews give each PR a score out of 100. Run one from Pull requests.")}`;
 }
 /* Linked PRs as tags. They can be in another repo than the one picked top left, so each says its repo, and opening
    one works whichever repo is picked. */
@@ -3213,11 +3254,11 @@ async function route(opts) {
   if (!soft) crumbs(key);  // a refresh keeps the page's own crumbs (e.g. the PR) instead of flashing back to the page
   document.title = `${TITLES[key]} · LFG`;
   const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
-  view.classList.toggle("wide", (key === "review" || key === "prs") && !!arg);  // the review screens are two panes: use the width
+  view.classList.toggle("wide", (key === "review" || key === "prs") && !!arg && arg !== "scores");  // the review screens are two panes: use the width
   const snap = soft ? uiSnapshot(view) : null;
   const seen = !soft && pageCache[location.hash];
   if (seen) { view.innerHTML = seen; view.classList.add("stale"); wireView(key, view); }  // last time's page, at once and usable; updated below
-  else if (!soft) view.innerHTML = skeletonPage(key, !!arg);
+  else if (!soft) view.innerHTML = skeletonPage(key, !!arg && arg !== "scores");
   const bar = soft ? null : setTimeout(() => document.body.classList.add("routing"), 120);  // a slow page shows the bar
   let html;
   try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); }
