@@ -514,6 +514,16 @@ def _git_sub(argv):
     return None, []
 
 
+def _git_dir(argv, cwd):
+    """The folder a git command runs in: cwd, moved by each `-C <dir>`."""
+    i = 1
+    while i < len(argv) - 1 and argv[i].startswith("-"):
+        if argv[i] == "-C":
+            cwd = os.path.join(cwd or os.getcwd(), os.path.expanduser(argv[i + 1]))
+        i += 2 if argv[i] in ("-C", "-c", "--git-dir", "--work-tree") else 1
+    return cwd
+
+
 def _branch(cwd):
     try:
         cp = subprocess.run(["git", "branch", "--show-current"], cwd=cwd or None, capture_output=True, text=True,
@@ -625,13 +635,17 @@ def check_command(cmd, values, cwd=None):
     """Why this shell command breaks a rule, or None."""
     for argv in _commands(cmd):
         base = os.path.basename(argv[0])
+        if base == "cd" and len(argv) > 1 and not argv[1].startswith("-"):  # `cd <worktree> && git commit --amend`
+            cwd = os.path.join(cwd or os.getcwd(), os.path.expanduser(argv[1]))
+            continue
         if base == "git":
+            here = _git_dir(argv, cwd)  # -C moves only this command, unlike cd
             sub, rest = _git_sub(argv)
             if sub == "commit":
                 if values["commits"] == "never":
                     return "your rule for this session is that you commit, not Claude"
                 if "--amend" in rest:
-                    why = _rewrite_allowed(values, cwd, amend_all=any(a in ("-a", "--all") or
+                    why = _rewrite_allowed(values, here, amend_all=any(a in ("-a", "--all") or
                                                                       (a.startswith("-") and not a.startswith("--")
                                                                        and "a" in a) for a in rest))
                     if why:
@@ -646,11 +660,11 @@ def check_command(cmd, values, cwd=None):
                     if values["rewrite"] == "never":
                         return "force-pushing is off for this session"
                     refs = [a.lstrip("+").split(":")[-1] for a in rest if not a.startswith("-")][1:]
-                    target = refs or [_branch(cwd)]
+                    target = refs or [_branch(here)]
                     if any(t.replace("refs/heads/", "") in PROTECTED_BRANCHES for t in target if t):
                         return "force-pushing main, master, qa or prod is never allowed"
                     if values["rewrite"] == "review":
-                        why = _rewrite_allowed(values, cwd, push=True)
+                        why = _rewrite_allowed(values, here, push=True)
                         if why:
                             return why
         if base == "gh" and argv[1:3] == ["pr", "merge"]:

@@ -2338,6 +2338,25 @@ class PrefsTest(unittest.TestCase):
             self.assertIn("own open PR", P.check_command("git commit --amend --no-edit", v, cwd=repo))
         self.assertIn("off", P.check_command("git commit --amend", dict(v, rewrite="never"), cwd=repo))
 
+    def test_amend_and_force_push_read_the_branch_of_the_folder_git_runs_in(self):
+        """A session opened in the main checkout (on main) that amends in a feature worktree, via `cd` or `git -C`."""
+        P = self.P
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        main, feat = tempfile.mkdtemp(), tempfile.mkdtemp()
+        for d in (main, feat):
+            self.addCleanup(__import__("shutil").rmtree, d, True)
+        for d, b in ((main, "main"), (feat, "lee/ato-4223-queue")):
+            subprocess.run(["git", "init", "-q", "-b", b], cwd=d, env=env, check=True)
+            subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "one"], cwd=d, env=env, check=True)
+        v = dict(P.effective(), rewrite="anytime")
+        self.assertIn("never allowed", P.check_command("git commit --amend --no-edit", v, cwd=main))
+        for cmd in ("cd %s && git commit --amend --no-edit" % feat, "git -C %s commit --amend --no-edit" % feat,
+                    "cd %s && git push --force-with-lease" % feat, "git -C %s push --force-with-lease" % feat):
+            self.assertIsNone(P.check_command(cmd, v, cwd=main), cmd)
+        self.assertIn("never allowed", P.check_command("cd %s && git commit --amend" % main, v, cwd=feat))
+        self.assertIn("never allowed", P.check_command("git -C %s push -f" % main, v, cwd=feat))
+
     def test_text_in_a_quoted_heredoc_is_not_a_command(self):
         v = self.P.effective()
         self.assertIsNone(self.P.check_command("python3 - <<'EOF'\nprint('use `gh pr merge 3`')\nEOF", v))
