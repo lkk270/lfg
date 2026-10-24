@@ -620,6 +620,19 @@ class UiTest(unittest.TestCase):
         self.assertEqual(dash.doc(rid, "playbooks", "../../config.json"), {"text": "not found"})
         self.assertEqual(dash.doc(rid, "nope", "x.md"), {"text": "not found"})
 
+    def test_a_checks_full_log_shows_its_end_with_secrets_hidden(self):
+        root, rid = git_repo()
+        rd = C.new_run(root, "x")
+        os.makedirs(os.path.join(rd, "gate-logs"))
+        key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        with open(os.path.join(rd, "gate-logs", "test.log"), "w") as fh:
+            fh.write("first line\n" + "x" * 500000 + "\nkey %s\nTests: 1 failed" % key)
+        text = dash.run_file(rid, os.path.basename(rd), "gate-logs/test.log")["text"]
+        self.assertTrue(text.startswith("(the first "))
+        self.assertTrue(text.endswith("Tests: 1 failed"))  # the summary at the end survives
+        self.assertNotIn("first line", text)
+        self.assertNotIn(key, text)
+
     def test_server_checks_host_and_header(self):
         import http.client
         import http.server
@@ -4458,3 +4471,135 @@ class SkillRunTest(unittest.TestCase):
             SR.start("../etc", say="x")
         with self.assertRaises(ui.S.Invalid):  # the page shows why
             ui.save("skill_run", {"session": self.SID})
+
+
+class StackTest(unittest.TestCase):
+    """Stacked PRs and the epic they belong to: read from gh, local git and dev-graph, never written anywhere."""
+
+    def setUp(self):  # no Linear team from another test: ticket ids here are ATO-
+        path = C.lfg_path("config.json")
+        old = C.read_text(path) if os.path.exists(path) else None
+        C.write_json(path, {})
+        self.addCleanup(lambda: C.write_text(path, old) if old is not None else os.remove(path))
+
+    @staticmethod
+    def pr(number, head, base, state="OPEN", **kw):
+        p = {"number": number, "title": "%s thing" % head.split("/")[-1].upper(), "url": "https://x/%d" % number,
+             "headRefName": head, "baseRefName": base, "state": state, "isDraft": False, "reviewDecision": "",
+             "statusCheckRollup": [], "body": "", "author": {"login": "lee"}, "updatedAt": "2026-10-2%dT00:00:00Z"
+             % (number % 10)}
+        p.update(kw)
+        return p
+
+    def rows(self):
+        return [self.pr(1753, "lee/ato-4212-service", "main"),
+                self.pr(1755, "lee/ato-4251-cleanup", "lee/ato-4212-service", reviewDecision="APPROVED"),
+                self.pr(1777, "lee/ato-4223-queue", "lee/ato-4251-cleanup", isDraft=True),
+                self.pr(1754, "lee/ato-4252-gcp", "main", "MERGED"),
+                self.pr(1769, "lee/ato-4282-ci", "lee/ato-4252-gcp", "MERGED"),
+                self.pr(1779, "nivid/ato-4294-logs", "main")]
+
+    def test_github_stacks_come_from_base_and_head_branches_in_order(self):
+        from lfgcore import stacks as SK
+        got = SK.chains(self.rows(), "main")
+        self.assertEqual([[p["number"] for p in s["prs"]] for s in got], [[1753, 1755, 1777]])
+        s = got[0]
+        self.assertEqual((s["kind"], s["base"]), ("github", "main"))
+        self.assertEqual([p["ticket"] for p in s["prs"]], ["ATO-4212", "ATO-4251", "ATO-4223"])
+        self.assertEqual([p["state"] for p in s["prs"]], ["open", "approved", "draft"])
+        self.assertEqual([p["parent"] for p in s["prs"]], ["main", "lee/ato-4212-service", "lee/ato-4251-cleanup"])
+
+    def test_states_tell_merged_into_parent_from_merged_into_main(self):
+        from lfgcore import stacks as SK
+        rows = self.rows()
+        rows[3]["state"] = "OPEN"  # the parent is still open, its child already merged into it
+        got = SK.chains(rows, "main")
+        other = next(s for s in got if s["prs"][0]["number"] == 1754)
+        self.assertEqual([p["state"] for p in other["prs"]], ["open", "merged_parent"])
+        rows[0]["state"] = "MERGED"
+        first = next(s for s in SK.chains(rows, "main") if s["prs"][0]["number"] == 1753)
+        self.assertEqual(first["prs"][0]["state"], "merged_main")
+        self.assertEqual(SK.summarize(self.pr(1, "a", "main", reviewDecision="CHANGES_REQUESTED"), "main")["state"],
+                         "changes")
+
+    def test_ci_and_coderabbit_are_told_apart(self):
+        from lfgcore import stacks as SK
+        roll = [{"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "lint", "status": "IN_PROGRESS", "conclusion": ""},
+                {"__typename": "StatusContext", "context": "CodeRabbit", "state": "SUCCESS"}]
+        s = SK.summarize(self.pr(1, "a", "main", statusCheckRollup=roll), "main")
+        self.assertEqual((s["ci"], s["coderabbit"]), ("pending", "pass"))
+        roll[1].update(status="COMPLETED", conclusion="FAILURE")
+        self.assertEqual(SK.summarize(self.pr(1, "a", "main", statusCheckRollup=roll), "main")["ci"], "fail")
+        self.assertEqual(SK.summarize(self.pr(1, "a", "main"), "main")["coderabbit"], None)
+
+    def test_a_branch_built_on_another_shows_as_a_preview_stack(self):
+        from lfgcore import stacks as SK
+        root, _ = git_repo()
+        def g(*a):
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t"] + list(a), cwd=root, check=True,
+                           capture_output=True)
+        def commit(name):
+            with open(os.path.join(root, name), "w") as fh:
+                fh.write(name)
+            g("add", name)
+            g("commit", "-qm", name)
+        commit("base")
+        g("checkout", "-qb", "lee/ato-1-a")
+        commit("a")
+        g("checkout", "-qb", "lee/ato-2-b")  # built on a, no PR yet
+        commit("b")
+        g("checkout", "-q", "main")
+        g("checkout", "-qb", "lee/ato-3-c")  # on main: no stack
+        commit("c")
+        g("checkout", "-q", "main")
+        rows = [self.pr(10, "lee/ato-1-a", "main")]
+        self.assertEqual(SK.infer_parents(root, rows, "main"), {"lee/ato-2-b": "lee/ato-1-a"})
+        got = SK.chains(rows, "main", SK.infer_parents(root, rows, "main"))
+        self.assertEqual(len(got), 1)
+        self.assertEqual([(p["number"], p["branch"], p["state"]) for p in got[0]["prs"]],
+                         [(10, "lee/ato-1-a", "open"), (None, "lee/ato-2-b", "no_pr")])
+        self.assertEqual(got[0]["kind"], "preview")
+        self.assertTrue(got[0]["prs"][1]["inferred"])
+
+    def test_behind_counts_commits_the_parent_has_that_the_pr_lacks(self):
+        from lfgcore import stacks as SK
+        SK._BEHIND.clear()
+        with mock.patch.object(R, "gh_json", return_value={"behind_by": 3, "ahead_by": 5}) as gh:
+            self.assertEqual(SK.behind("o/r", "lee/ato-4212-service", "lee/ato-4251-cleanup"), 3)
+        self.assertIn("repos/o/r/compare/lee/ato-4212-service...lee/ato-4251-cleanup", gh.call_args[0][0])
+        with mock.patch.object(R, "gh_json", side_effect=R.ReviewError("nope")):
+            self.assertIsNone(SK.behind("o/r", "x", "y"))
+
+    def test_epic_is_in_build_order_with_you_are_here_and_next(self):
+        from lfgcore import stacks as SK
+        issues = [{"key": "ATO-4223", "title": "Queue", "status": "todo"},
+                  {"key": "ATO-4212", "title": "Service", "status": "todo"},
+                  {"key": "ATO-4251", "title": "Cleanup", "status": "todo"},
+                  {"key": "ATO-4110", "title": "Old", "status": "done"},
+                  {"key": "ATO-4300", "title": "Later", "status": "backlog"}]
+        blocks = [("ATO-4223", "ATO-4300")]  # 4223 must land before 4300
+        stack = SK.chains(self.rows(), "main")[0]
+        runs = {"ATO-4223": {"run": "20261021-1249-ato-4223-x", "done": 6, "total": 8}}
+        got = SK.epic_items(issues, blocks, [stack], self.rows(), "main", runs, here="ATO-4251")
+        self.assertEqual([i["key"] for i in got], ["ATO-4110", "ATO-4212", "ATO-4251", "ATO-4223", "ATO-4300"])
+        by = {i["key"]: i for i in got}
+        self.assertEqual(by["ATO-4251"]["pr"]["number"], 1755)
+        self.assertEqual(by["ATO-4251"]["position"], [2, 3])
+        self.assertEqual(by["ATO-4223"]["run"]["done"], 6)
+        self.assertTrue(by["ATO-4251"]["here"])
+        self.assertEqual([i["key"] for i in got if i["next"]], ["ATO-4223"])
+        self.assertTrue(by["ATO-4110"]["done"])
+
+    def test_a_pr_merged_straight_to_main_counts_as_landed(self):
+        from lfgcore import stacks as SK
+        rows = [self.pr(5, "lee/ato-9-x", "main", "MERGED")]
+        got = SK.epic_items([{"key": "ATO-9", "title": "X", "status": "todo"}], [], [], rows, "main", {})
+        self.assertEqual((got[0]["pr"]["state"], got[0]["done"]), ("merged_main", True))
+
+    def test_the_dashboard_serves_the_stack_view(self):
+        from lfgcore import stacks as SK
+        root, rid = git_repo()
+        with mock.patch.object(SK, "view", return_value={"available": True, "stacks": []}) as v:
+            self.assertEqual(ui.api("stack", {"repo": [rid], "pr": ["1755"]})["available"], True)
+        self.assertEqual(v.call_args.kwargs.get("pr"), "1755")

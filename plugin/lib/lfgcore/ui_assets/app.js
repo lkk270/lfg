@@ -434,12 +434,15 @@ function taskItem(t) {
 /* A check that ran (tests, lint, ship check): failed ones open to show the error */
 const CHECK_NAMES = { lint: "Lint", types: "Type check", test: "Tests", build: "Build", secrets: "Secret scan",
   suppressions: "No new lint or test suppressions" };
-function checkItem(name, result, out, cmd) {
+function checkItem(name, result, out, cmd, log) {
   const [word, tone] = { pass: ["passed", "ok"], fail: ["failed", "bad"], skip: ["not run", ""], na: ["doesn't apply", ""], manual: ["for you to do", "warn"] }[result];
-  const body = !["pass", "skip", "na"].includes(result) && out ? `${cmd ? `<div class="muted small mono">${esc(cmd)}</div>` : ""}<pre class="out">${esc(out)}</pre>` : "";
+  // the saved output is only the last lines; the run folder keeps the whole log
+  const full = log ? `<div class="muted small">Last lines only. <a href="#" data-run-file="${esc(JSON.stringify(log))}" data-title="${esc(`Full log: ${CHECK_NAMES[name] || name}`)}">See the full log</a></div>` : "";
+  const body = !["pass", "skip", "na"].includes(result) && out ? `${cmd ? `<div class="muted small mono">${esc(cmd)}</div>` : ""}${full}<pre class="out">${esc(out)}</pre>` : "";
   return `<details class="item${body ? "" : " plain"}"><summary>${dot(tone)}<span class="grow">${esc(CHECK_NAMES[name] || (/\s/.test(name || "") ? name : (w => w.charAt(0).toUpperCase() + w.slice(1))(words(name || ""))))}</span><span class="muted small nowrap">${word}</span></summary>${body ? `<div class="item-body">${body}</div>` : ""}</details>`;
 }
-const readyChecks = cs => (cs || []).map(c => checkItem(c.name, c.exit === 0 ? "pass" : c.exit == null ? "skip" : "fail", c.tail, c.cmd)).join("");
+const readyChecks = (cs, run) => (cs || []).map(c => checkItem(c.name, c.exit === 0 ? "pass" : c.exit == null ? "skip" : "fail", c.tail, c.cmd,
+  run && c.cmd && c.exit ? [run, `gate-logs/${c.name}.log`] : null)).join("");
 const shipChecks = cs => (cs || []).map(c => checkItem(c.check || c.name, c.manual ? "manual" : c.status === "n/a" ? "na" : c.ok ? "pass" : c.ok == null ? "skip" : "fail", c.detail)).join("");
 /* 07-shipcheck.json: part A (container) checks + the shipping checklist, as one list (same as dash.shipcheck_items) */
 const shipItems = d => [].concat(((d.part_a || {}).checks || []).map(c => ({ check: c.check, ok: c.severity === "warn" && c.ok === false ? null : c.ok, detail: c.skip ? `Skipped (${words(c.skip)}). ${c.detail || ""}` : c.detail })),
@@ -492,7 +495,7 @@ function wire(root) {
     e.preventDefault();
     const [run, f] = JSON.parse(a.dataset.runFile);
     const d = await api("file", { run, f });
-    openDrawer(a.textContent, renderFile(f, d.text));
+    openDrawer(a.dataset.title || a.textContent, renderFile(f, d.text));
   });
   $$("[data-view]", root).forEach(b => b.onclick = async () => {
     const box = document.getElementById(b.dataset.target);
@@ -507,6 +510,7 @@ function wire(root) {
   });
   wireSettings(root);
   wireMap(root);
+  wireStacks(root);
   $$("[data-run-checks]", root).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
     const r = await save("run_checks", { repo: state.repo, run: b.dataset.runChecks });
@@ -1183,19 +1187,19 @@ function runLine(r, stages) {
   const p = runPlace(stages, r.stages, r);
   return p.finished ? "All steps done" : `${p.done} of ${p.total} steps · next: ${NEXT[p.next]}`;
 }
-/* Things on a run that need a person, as [tone, text] */
+/* Things on a run that need a person, as [tone, text, short label for the Runs table] */
 function runAttention(r) {
   const out = [];
-  if (r.review === "block") out.push(["bad", "The code review found something that must be fixed"]);
-  else if (r.review === "changes") out.push(["warn", "The code review asked for changes"]);
-  if (r.review && r.review_on_red) out.push(["warn", "The code review was written while checks were failing: if code changes to fix them, review again before shipping"]);
-  if (r.secure === "don't") out.push(["bad", "The security check found problems to fix"]);
-  if (r.ready === "red") out.push(["bad", "Tests or checks are failing"]);
-  else if (r.ready === "cant_run") out.push(["warn", `Some checks can't run on this computer: ${(r.cant_run || []).join(", ") || "a tool"} isn't installed. Nothing failed; install it to prove them here, or rely on CI`]);
-  else if (r.ready === "stale") out.push(["warn", "The last checks ran before the latest work, so their result is out of date: run /lfg:check"]);
-  if (r.shipcheck === "fail") out.push(["bad", "The ship check failed"]);
-  else if (r.shipcheck === "needs_config") out.push(["warn", "The ship check couldn't build the image: it needs build args in .lfg/shipcheck.json"]);
-  if (r.pentest === "refused") out.push(["warn", "The security test didn't run: open the Security test document to see why"]);
+  if (r.review === "block") out.push(["bad", "The code review found something that must be fixed", "Review: must fix"]);
+  else if (r.review === "changes") out.push(["warn", "The code review asked for changes", "Review: changes asked"]);
+  if (r.review && r.review_on_red) out.push(["warn", "The code review was written while checks were failing: if code changes to fix them, review again before shipping", "Reviewed on failing checks"]);
+  if (r.secure === "don't") out.push(["bad", "The security check found problems to fix", "Security problems"]);
+  if (r.ready === "red") out.push(["bad", "Tests or checks are failing", "Checks failing"]);
+  else if (r.ready === "cant_run") out.push(["warn", `Some checks can't run on this computer: ${(r.cant_run || []).join(", ") || "a tool"} isn't installed. Nothing failed; install it to prove them here, or rely on CI`, "Some checks can't run here"]);
+  else if (r.ready === "stale") out.push(["warn", "The last checks ran before the latest work, so their result is out of date: run /lfg:check", "Checks out of date"]);
+  if (r.shipcheck === "fail") out.push(["bad", "The ship check failed", "Ship check failed"]);
+  else if (r.shipcheck === "needs_config") out.push(["warn", "The ship check couldn't build the image: it needs build args in .lfg/shipcheck.json", "Ship check needs build args"]);
+  if (r.pentest === "refused") out.push(["warn", "The security test didn't run: open the Security test document to see why", "Security test didn't run"]);
   return out.sort((a, b) => (a[0] === "bad" ? 0 : 1) - (b[0] === "bad" ? 0 : 1));
 }
 
@@ -1248,7 +1252,7 @@ PAGES.runs = async arg => {
     <div class="box">${table(d.runs, [
       { k: "slug", label: "Work", html: r => `${esc(runName(r))}${r.current ? ' <span class="tag">current</span>' : ""}${r.about ? `<div class="about clamp">${txt(r.about)}</div>` : ""}<div class="sub">${r.owner ? `filed under ${esc(r.owner_name)} · ${plural(r.tasks_here, "task")} for this repo, ${n(r.tasks_here_done)} done` : r.branch ? `branch ${esc(r.branch)}` : ""}</div>`, sort: r => runName(r) },
       { k: "progress", label: "Where it is", html: r => esc(runLine(r, d.stages)), sort: r => r.progress },
-      { k: "attn", label: "Status", html: r => { const a = runAttention(r); return a.length ? `<span class="st">${dot(a[0][0])}${esc(a[0][1])}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
+      { k: "attn", label: "Status", html: r => { const a = runAttention(r); return a.length ? `<span class="st" title="${esc(a[0][1])}">${dot(a[0][0])}${esc(a[0][2])}${a.length > 1 ? ` +${a.length - 1}` : ""}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
       { k: "created", label: "Started", html: r => `<span class="nowrap">${ago(r.created)}</span>` },
     ], { onRow: r => (location.hash = "#runs/" + encodeURIComponent(r.run)), emptyTitle: "No runs yet", emptyBody: "Start one in Claude Code with <code>/lfg:lfg</code> and what you want built." })}</div>`;
 };
@@ -1261,6 +1265,72 @@ const fileName = f => FILE_NAMES[f] || (/^03-build-(.+)\.md$/.test(f) ? `Build n
 const FILE_ORDER = ["01-brief.md", "02-design.md", "tasks.json", "03-build-", "04-qa.md", "ready.json", "05-secure.json", "05-pentest.json",
   "06-review.json", "07-shipcheck.json", "COMMIT_MSG.md", "PR_BODY.md", "progress.md"];
 const fileRank = f => { const i = FILE_ORDER.findIndex(x => f === x || (x.endsWith("-") && f.startsWith(x))); return i < 0 ? 99 : i; };
+
+// ------------------------------------------------------------------ stacked PRs and their epic
+/* One component in two sizes: a strip (run page, PR page: this PR, its neighbors and a line about the epic) and the
+   full view (Issues: the epic in build order and every stack in the repo). It loads after the page shows, since the
+   first GitHub read can take several seconds. */
+const STACK_STATE = { draft: ["Draft", ""], open: ["Open", "on"], approved: ["Approved", "ok"], changes: ["Changes asked", "warn"],
+  merged_parent: ["Merged into the PR below", "ok"], merged_main: ["Merged into main", "ok"], closed: ["Closed", ""], no_pr: ["No PR yet", ""] };
+const CHECK_WORD = { pass: ["passing", "ok"], fail: ["failing", "bad"], pending: ["running", "warn"] };
+const stackBox = (params, mode) => `<div class="stack-box" data-stack="${esc(JSON.stringify([params, mode]))}"><div class="skeleton stack-skel"></div></div>`;
+function wireStacks(root) {
+  $$("[data-stack]", root).forEach(async el => {
+    const [params, mode] = JSON.parse(el.dataset.stack);
+    delete el.dataset.stack;
+    let d;
+    try { d = await api("stack", params); } catch (e) { d = { available: false, why: String(e.message || e) }; }
+    if (document.body.contains(el)) el.innerHTML = stackHtml(d, mode);
+  });
+}
+function stackTicket(d, key) {
+  const t = ((d.epic || {}).items || []).find(i => i.key === key) || (d.epic && d.epic.key === key ? d.epic : null);
+  const name = `${esc(key)}${t && t.title ? ` <span class="stack-tt">${esc(t.title)}</span>` : ""}`;
+  return d.linear_workspace ? `<a class="stack-tk" href="https://linear.app/${encodeURIComponent(d.linear_workspace)}/issue/${encodeURIComponent(key)}" target="_blank" rel="noopener noreferrer">${name} ↗</a>` : `<span class="stack-tk">${name}</span>`;
+}
+const stackRun = r => r ? `<a class="small" href="#runs/${encodeURIComponent(r.run)}">LFG run: ${r.done} of ${r.total} steps</a>` : "";
+const stackPr = (d, p) => p.number ? `<a class="mono" href="#prs/${esc(d.gh_repo)}/${p.number}">#${p.number}</a>${p.url ? ` <a class="small" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="Open on GitHub">↗</a>` : ""}` : `<span class="mono">${esc(p.branch)}</span>`;
+function stackRow(d, p, i) {
+  const [word, tone] = STACK_STATE[p.state] || [words(p.state), ""];
+  const check = (who, v) => v ? tagHtml(`${who} ${CHECK_WORD[v][0]}`, CHECK_WORD[v][1]) : "";
+  const below = p.parent === d.default ? d.default : p.inferred ? "the branch below" : "the PR below";
+  return `<li class="stack-row${p.here ? " here" : ""}"><span class="stack-n">${i + 1}</span><div class="grow">
+    <div class="stack-t">${stackPr(d, p)} ${esc(p.title || (p.number ? "" : "branch with no PR yet"))}${p.here ? ' <span class="tg on">You are here</span>' : ""}</div>
+    <div class="stack-m">${p.ticket ? stackTicket(d, p.ticket) : ""}${tagHtml(word, tone)}${check("CI", p.ci)}${check("CodeRabbit", p.coderabbit)}${p.behind ? tagHtml(`${plural(p.behind, "commit")} behind ${below}`, "warn") : ""}${p.inferred && p.number ? tagHtml(`its PR points at ${d.default}`, "warn") : ""}${stackRun(p.run)}</div></div></li>`;
+}
+function stackList(d, s) {
+  const head = s.kind === "preview" ? `Preview stack on <code>${esc(s.base)}</code>` : `Stack on <code>${esc(s.base)}</code>`;
+  const note = s.kind === "preview" ? `<p class="muted small">Not stacked on GitHub yet: LFG worked out from git which branch each one is built on.</p>` : "";
+  return `<div class="stack-h"><b>${head}</b><span class="muted small">${plural(s.prs.length, "PR")}, bottom first</span></div>${note}<ol class="stack-list">${s.prs.map((p, i) => stackRow(d, p, i)).join("")}</ol>`;
+}
+function epicLine(d) {
+  const e = d.epic, done = e.items.filter(i => i.done).length, nx = e.items.find(i => i.next);
+  return `<div class="stack-epic">Part of ${stackTicket(d, e.key)}: ${done} of ${plural(e.items.length, "ticket")} landed${nx ? ` · next: ${stackTicket(d, nx.key)}` : ""} · <a href="#issues">See the whole epic</a></div>`;
+}
+function epicFull(d) {
+  const e = d.epic, done = e.items.filter(i => i.done).length;
+  const row = (i, k) => {
+    const pr = i.pr, ps = pr && (STACK_STATE[pr.state] || [words(pr.state), ""]);
+    const where = !pr ? '<span class="muted small">no PR yet</span>' : `${stackPr(d, pr)}${tagHtml(ps[0], ps[1])}${i.position ? tagHtml(`${i.position[0]} of ${i.position[1]} in its stack`, "") : pr.state === "merged_main" ? tagHtml("merged on its own", "") : tagHtml("not stacked", "")}`;
+    return `<li class="stack-row${i.here ? " here" : ""}${i.done ? " done" : ""}"><span class="stack-n">${k + 1}</span><div class="grow">
+      <div class="stack-t">${stackTicket(d, i.key)}${i.here ? ' <span class="tg on">You are here</span>' : ""}${i.next ? ' <span class="tg warn">Next</span>' : ""}</div>
+      <div class="stack-m">${tagHtml(i.done ? "Done" : words(i.status || "unknown"), i.done ? "ok" : "")}${where}${i.run ? stackRun(i.run) : '<span class="muted small">no LFG run</span>'}</div></div></li>`;
+  };
+  return `<div class="stack-card"><div class="stack-h"><b>${e.kind === "parent" ? "Parent ticket" : "Epic"} ${stackTicket(d, e.key)}</b><span class="muted small">${done} of ${plural(e.items.length, "ticket")} landed</span></div>
+    <p class="muted small">${e.ordered_by_blocks ? "In build order: each ticket comes after the ones that block it." : "dev-graph has no blocking links for these tickets, so the order is where each PR sits in its stack, then ticket number."} Status is dev-graph's copy of Linear; a PR merged into ${esc(d.default)} counts as done.</p>
+    <ol class="stack-list">${e.items.map(row).join("")}</ol></div>`;
+}
+function stackHtml(d, mode) {
+  if (d.available === false) return mode === "full" ? `<p class="muted small">${fmtWhy(d.why)}</p>` : "";
+  if (mode !== "full") {
+    if (!d.stack && !d.epic) return "";
+    return `<div class="stack-card">${d.stack ? stackList(d, d.stack) : ""}${d.epic ? epicLine(d) : ""}</div>`;
+  }
+  const t = d.here.ticket;
+  const epic = d.epic ? epicFull(d) : `<p class="muted small">${t ? `${esc(t)} isn't in an epic or under a parent ticket that dev-graph knows about${d.epic_why ? ` (${fmtWhy(d.epic_why)})` : ""}.` : "Nothing in front of you: start a run or check out a ticket's branch to see its epic here."}</p>`;
+  const stacks = d.stacks.length ? d.stacks.map(s => `<div class="stack-card">${stackList(d, s)}</div>`).join("") : `<p class="muted small">No stacked PRs in ${esc(d.gh_repo)}.</p>`;
+  return `${epic}<div class="k mt">Stacks in ${esc(d.gh_repo)}</div>${stacks}`;
+}
 
 async function runDetail(run) {
   const [d, all] = await Promise.all([api("run", { run }), cachedRuns()]);
@@ -1282,10 +1352,11 @@ async function runDetail(run) {
   const recheck = d.owner_name || !d.current ? "" : d.checking
     ? `<p class="muted small" data-checks-running>Running the checks now (started ${ago(d.checking === true ? "" : d.checking)}). This page updates when they finish; a big project can take several minutes.</p>`
     : `<p><button class="btn small" data-run-checks="${esc(run)}">Run checks again</button> <span class="muted small">lint, types, tests and build, in the background</span></p>`;
-  const checks = d.checks.length ? `${recheck}<div class="box items">${readyChecks(d.checks)}</div>` : recheck;
+  const checks = d.checks.length ? `${recheck}<div class="box items">${readyChecks(d.checks, run)}</div>` : recheck;
   crumbs("runs", runName(d));
   return `${head(runName(d), `${d.ticket ? `<span class="tag mono">${esc(d.ticket)}</span> ` : ""}${d.owner_name ? `Filed under ${esc(d.owner_name)} · ` : ""}${d.branch ? `On branch ${esc(d.branch)} · ` : ""}started ${ago(d.created)}`, '<a class="back" href="#runs">← All runs</a>')}
     ${d.about ? `<p class="about lead">${txt(d.about)}</p>` : ""}
+    ${stackBox({ run }, "strip")}
     <div class="panel"><div class="row"><b>${p.finished ? "All steps done" : `${p.done} of ${p.total} steps done`}</b><span class="muted${p.blocked ? " stuck-text" : ""}">${p.finished ? "· the commit message is ready for you to review" : `· next: ${esc(NEXT[p.next])}`}</span></div>
       <div class="progress${p.blocked ? " stuck" : p.finished ? " done" : ""}"><span style="width:${pct(p.done, p.total)}%"></span></div>${steps}</div>
     ${attn.length ? section("Needs your attention", `<div class="callout ${attn.some(a => a[0] === "bad") ? "bad" : "warn"}"><ul class="attn">${attn.map(([tn, text]) => `<li>${dot(tn)}<span class="grow">${esc(text)}</span></li>`).join("")}</ul></div>`) : ""}
@@ -1321,6 +1392,7 @@ PAGES.issues = async () => {
   const where = `${esc(repoName())}${state.branch ? ` on <code>${esc(state.branch === "-" ? "no branch recorded" : state.branch)}</code>` : ""}`;
   return `${head("Issues", `Issues for ${where}: ${n(d.ready.length)} ready to start, ${n(d.blocked.length)} waiting on other work.`)}
     ${d.error ? `<div class="callout bad">Couldn't read the issues: ${esc(d.error)}</div>` : ""}
+    ${section("Your epic and stacks", stackBox({}, "full"), "where the work in front of you sits; read only, from GitHub, git and dev-graph")}
     ${d.hidden ? `<p class="muted small">${plural(d.hidden, "issue")} not shown: ${d.hidden === 1 ? "it belongs" : "they belong"} to another repo or branch, or no run or branch name ties ${d.hidden === 1 ? "it" : "them"} to one.</p>` : ""}
     ${tabs("issues", [
       ["ready", "Ready to start", d.ready.length, () => `<div class="box">${plain(d.ready)}</div>`],
@@ -2890,7 +2962,8 @@ async function prDetail(arg) {
   const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
     <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">${rec || d.linked.some(x => x.reviewed) ? "Re-review" : "Review"} together with linked PRs</button>${rec || d.linked.some(x => x.reviewed) ? `<button class="btn small" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' data-fresh="1" ${can ? "" : "disabled"} title="${FULL_TITLE}">Review together from scratch</button>` : ""}` : ""}</div>${(d.linked || []).length && (rec || d.linked.some(x => x.reviewed)) ? AGAIN_HELP : ""}`, "reviewed together, or linked by you; they can be in any repo");
-  if (!rec) return `${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${jobBox}${actions}${linkedBox}${sess}`;
+  const stack = stackBox({ gh: m[1], pr: m[2] }, "strip");
+  if (!rec) return `${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${stack}${jobBox}${actions}${linkedBox}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
   let pick = Number(sessionStorage.getItem(key)) || last.n;
@@ -2916,6 +2989,7 @@ async function prDetail(arg) {
   const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
   return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
     ${ghPanel(d.gh, passes.length)}
+    ${stack}
     ${jobBox}
     ${actions}
     ${passTabs}
