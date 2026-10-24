@@ -411,14 +411,18 @@ def workflow_touched(filters, files):
     return False
 
 
-def branch_files(root):
-    """Files this branch changes: committed since it left the default branch, plus uncommitted ones."""
-    base = ""
+def merge_base(root):
+    """The commit where this branch left the default branch, or ""."""
     for ref in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
         cp = _git(root, "merge-base", "HEAD", ref)
         if cp.returncode == 0 and cp.stdout.strip():
-            base = cp.stdout.strip()
-            break
+            return cp.stdout.strip()
+    return ""
+
+
+def branch_files(root):
+    """Files this branch changes: committed since it left the default branch, plus uncommitted ones."""
+    base = merge_base(root)
     committed = _git(root, "diff", "--name-only", base, "HEAD").stdout.split("\n") if base else []
     return sorted({f for f in committed if f} | set(changed_files(root)))
 
@@ -440,7 +444,7 @@ def _timed(cmd, root, on_tick, every=60):
         done.set()
 
 
-def ci_local(root, list_only=False, affected=False, files=None, progress=None):
+def ci_local(root, list_only=False, affected=False, files=None, progress=None, lint=True):
     """Replay the workflows' lint/type/test/build steps. affected: only workflows whose path filters match the
     branch's changed files (`files`, default branch_files). progress(event, n, total, step, extra): "start" and "done"
     for each step that runs (extra: its result), "tick" each minute it is still running (extra: seconds so far)."""
@@ -449,7 +453,7 @@ def ci_local(root, list_only=False, affected=False, files=None, progress=None):
         files = branch_files(root) if files is None else files
         out["changed_files"] = len(files)
     wdir = os.path.join(root, ".github", "workflows")
-    if os.path.isdir(wdir):
+    if os.path.isdir(wdir) and lint:  # lint=False: the caller lints the workflows itself (the ship check)
         for tool, argv in (("actionlint", ["actionlint"]), ("zizmor", ["zizmor", "--offline", wdir])):
             if C.which(tool):
                 cp = C.run(argv, cwd=root, timeout=300)

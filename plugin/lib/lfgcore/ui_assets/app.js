@@ -62,7 +62,7 @@ const SAY = {
   // security verdict
   safe: ["No problems", "ok"], "safe with caveats": ["Minor notes", "warn"], "don't": ["Problems to fix", "bad"],
   // ship check
-  pass: ["Passed", "ok"], fail: ["Failed", "bad"],
+  pass: ["Passed", "ok"], fail: ["Failed", "bad"], pass_with_skips: ["Passed with skips", "ok"], needs_config: ["Needs build settings", "warn"],
   // graphs
   fresh: ["Up to date", "ok"], stale: ["Out of date", "warn"], syncing: ["Updating", "warn"], missing: ["Not built yet", "warn"], error: ["Error", "bad"],
   // issues and knowledge
@@ -445,7 +445,7 @@ const readyChecks = (cs, run) => (cs || []).map(c => checkItem(c.name, c.exit ==
   run && c.cmd && c.exit ? [run, `gate-logs/${c.name}.log`] : null)).join("");
 const shipChecks = cs => (cs || []).map(c => checkItem(c.check || c.name, c.manual ? "manual" : c.status === "n/a" ? "na" : c.ok ? "pass" : c.ok == null ? "skip" : "fail", c.detail)).join("");
 /* 07-shipcheck.json: part A (container) checks + the shipping checklist, as one list (same as dash.shipcheck_items) */
-const shipItems = d => [].concat(((d.part_a || {}).checks || []).map(c => ({ check: c.check, ok: c.severity === "warn" && c.ok === false ? null : c.ok, detail: c.detail })),
+const shipItems = d => [].concat(((d.part_a || {}).checks || []).map(c => ({ check: c.check, ok: c.severity === "warn" && c.ok === false ? null : c.ok, detail: c.skip ? `Skipped (${words(c.skip)}). ${c.detail || ""}` : c.detail })),
   (d.checklist || (d.part_b || {}).checks || []).map(i => ({ check: i.requirement || i.check, detail: i.detail, manual: i.status === "manual", status: i.status,
     ok: "ok" in i ? i.ok : i.status === "pass" ? true : i.status === "fail" ? false : null })));
 const verdictOf = v => (v && typeof v === "object" ? v.overall : v);
@@ -460,7 +460,7 @@ const JSON_VIEWS = {
     ${(d.findings || []).length ? `<h3>Findings</h3>${findingList(d.findings)}` : ""}${moreDetails(d, ["status", "summary", "conclusion", "preflight_failures", "next_steps", "findings", "ts", "ran"])}`,
   "tasks.json": d => { const l = Array.isArray(d) ? d : d.tasks || []; return l.length ? l.map(taskItem).join("") : '<p class="muted">No tasks.</p>'; },
   "ready.json": d => `<p>${st(d.green ? "green" : "red")}</p>${readyChecks(d.checks)}`,
-  "07-shipcheck.json": d => `<p>${st(d.pass ? "pass" : "fail")}</p>${(d.part_a || {}).note ? `<p class="muted">${txt(d.part_a.note)}</p>` : ""}${shipChecks(shipItems(d))}${moreDetails(d, ["pass", "part_a", "part_b", "checklist", "ts", "run", "run_id"])}`,
+  "07-shipcheck.json": d => `<p>${st(d.status || (d.pass ? "pass" : "fail"))}</p>${(d.part_a || {}).note ? `<p class="muted">${txt(d.part_a.note)}</p>` : ""}${shipChecks(shipItems(d))}${moreDetails(d, ["pass", "part_a", "part_b", "checklist", "ts", "run", "run_id"])}`,
 };
 /* Skill and rule files start with a YAML header; show its description, not the YAML */
 function frontMatter(text) {
@@ -1198,6 +1198,7 @@ function runAttention(r) {
   else if (r.ready === "cant_run") out.push(["warn", `Some checks can't run on this computer: ${(r.cant_run || []).join(", ") || "a tool"} isn't installed. Nothing failed; install it to prove them here, or rely on CI`, "Some checks can't run here"]);
   else if (r.ready === "stale") out.push(["warn", "The last checks ran before the latest work, so their result is out of date: run /lfg:check", "Checks out of date"]);
   if (r.shipcheck === "fail") out.push(["bad", "The ship check failed", "Ship check failed"]);
+  else if (r.shipcheck === "needs_config") out.push(["warn", "The ship check couldn't build the image: it needs build args in .lfg/shipcheck.json", "Ship check needs build args"]);
   if (r.pentest === "refused") out.push(["warn", "The security test didn't run: open the Security test document to see why", "Security test didn't run"]);
   return out.sort((a, b) => (a[0] === "bad" ? 0 : 1) - (b[0] === "bad" ? 0 : 1));
 }
