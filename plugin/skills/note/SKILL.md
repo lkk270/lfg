@@ -37,6 +37,6 @@ The approved nodes, plus a one-line confirmation per item in chat. Nothing in th
 ## Rules
 
 - Never write before the user picked the graph for that item.
-- A `Principle` is enforced by `/expert`, so say that when proposing one.
+- A `Principle` is enforced by `/review-coach`, so say that when proposing one.
 - Never store secrets or credentials, even if asked.
 - Store what the user said, not your elaboration of it.

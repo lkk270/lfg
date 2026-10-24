@@ -57,7 +57,7 @@ LFG is built so that installing it can't disturb how you already use Claude Code
 
 | | |
 |---|---|
-| **Skills** (`/lfg:<name>`) | `lfg`, `wizard` (whole pipeline) · `grill` · `plan` · `build`, `fix` · `check`, `secure`, `pentest`, `expert` · `ship` · `learn` · helpers: `which`, `explain`, `why`, `impact`, `spike`, `research`, `map`, `inbox`, `handoff`, `note`, `health`, `review-coach`, `explain5`, `suggest-tests` |
+| **Skills** (`/lfg:<name>`) | `lfg`, `wizard` (whole pipeline) · `grill` · `plan` · `build`, `fix` · `check`, `secure`, `pentest`, `review-coach` · `ship` · `learn` · helpers: `which`, `explain`, `why`, `impact`, `spike`, `research`, `map`, `inbox`, `handoff`, `note`, `health`, `explain5`, `suggest-tests` |
 | **Agents** | product manager, architecture designer, software engineer, AI engineer, QA, security analyst, expert reviewer, lane triage. They hand work to each other through run-folder files, never chat history |
 | **Graphs** | [code-review-graph](https://pypi.org/project/code-review-graph/) and [graphify](https://pypi.org/project/graphifyy/) for code; Omnigraph **dev-graph** (decisions, issues, learnings) and **second-brain** (your notes) |
 | **Guard** | A PreToolUse hook that parses whole shell commands and blocks pushes, GitHub writes, secret reads, env dumps, deploys and more (18 rules, self-tested with `lfg doctor --selftest`). Commits are an approval prompt (Commit approval, on by default, switchable in Settings) |
@@ -74,7 +74,7 @@ Most code is now written by an agent, so the hard part is no longer typing it: i
 
 The questions also check your team's recorded decisions (decision records from `/lfg:grill`, and dev-graph when the Knowledge pack is on): "your team decided *money is integer cents*, and this changes `pay.py`: does it still follow that?"
 
-The same answers in Claude Code: `/lfg:why`, `/lfg:review-coach`, `/lfg:explain5`, `/lfg:suggest-tests`, and in the terminal: `lfg why <file>[:lines]`, `lfg hotspots`. They are pattern checks that tell you what to read, not a substitute for a review (`/lfg:expert`) or a security check (`/lfg:secure`, which covers vulnerable and end-of-life dependencies).
+The same answers in Claude Code: `/lfg:why`, `/lfg:review-coach`, `/lfg:explain5`, `/lfg:suggest-tests`, and in the terminal: `lfg why <file>[:lines]`, `lfg hotspots`. They are pattern checks that tell you what to read, not a substitute for a review (`/lfg:review-coach`) or a security check (`/lfg:secure`, which covers vulnerable and end-of-life dependencies).
 
 ## Feature packs
 
@@ -82,14 +82,14 @@ The same answers in Claude Code: `/lfg:why`, `/lfg:review-coach`, `/lfg:explain5
 lfg packs                 # what's on, what's missing
 lfg add security          # gitleaks, semgrep, osv-scanner, trivy, hadolint, actionlint, zizmor
 lfg add shipcheck         # Docker, for the container ship check
-lfg add pentest           # experimental: Ollama + Strix + LuLu (~10 GB), offline pentests; asks before any curl | bash
+lfg add pentest           # experimental: Ollama + a local model + Strix + LuLu (~12-27 GB), offline pentests; asks before any curl | bash
 lfg add knowledge         # dev-graph and second-brain (local Omnigraph servers)
 lfg add linear            # Linear MCP (reuses yours if you have one)
 lfg add headroom          # experimental: third-party proxy that rewrites context to compress it; LFG repos only by default
 lfg add dictate           # LFG Dictate: hold Option+Space anywhere on your Mac to dictate (on-device)
 ```
 
-Or use the dashboard: **Settings → Claude Code → Feature packs**.
+Or use the dashboard: **Settings → Claude Code → Feature packs**. How much disk each one takes: [docs/disk-space.md](docs/disk-space.md).
 
 ## LFG Dictate
 
@@ -105,6 +105,8 @@ Hold **Option+Space** anywhere on your Mac, in any app, speak, and let go: the w
 
 macOS only (Apple silicon or Intel), Python 3.9+, [Claude Code](https://claude.com/claude-code), and Homebrew for any tools you don't have yet. Linux support is on the roadmap.
 
+About 0.7 GB of disk for a fresh install, plus each project's code map; see [docs/disk-space.md](docs/disk-space.md) for every pack.
+
 ## Everyday commands
 
 ```bash
@@ -117,7 +119,8 @@ lfg uninstall     # undo all of it
 
 ## Docs
 
-- [docs/guide.html](docs/guide.html): the user guide (also in `lfg ui` → Help)
+- [docs/guide.html](docs/guide.html): the user guide
+- [docs/disk-space.md](docs/disk-space.md): disk space at install, as you use it, and per feature pack
 - [docs/sharing.md](docs/sharing.md): rolling LFG out to a team
 - [docs/dashboard.md](docs/dashboard.md): every dashboard page
 - [CONTRACT.md](CONTRACT.md): CLI reference, file layout, and exactly what LFG may change

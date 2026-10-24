@@ -426,13 +426,39 @@ def _run_set(rid, a):
 
 
 def cmd_worktree(a):
-    """`lfg worktree new <branch> [--from <ref>] | list | remove <name>`: see worktree.py."""
+    """`lfg worktree new <branch> [--from <ref>] | list | remove <name> | merge <name>|--all --into <base> [--remove]
+    [--merge-commit]`: see worktree.py."""
     from . import worktree as W
     root, rid = C.need_repo()
     if a.action == "list":
-        for w in W.listing(root):
-            print("%s %-28s %s  %s" % ("*" if w["lfg"] else " ", w["branch"] or "(detached)", w["head"], w["path"]))
+        for w in W.status(root):
+            line = "%s %-30s %-10s %s" % ("*" if w["lfg"] else " ", w["branch"] or "(detached)", w["head"], w["path"])
+            if w["base"]:
+                line += "  -> %s (%d ahead, %d behind%s)" % (w["base"], w["ahead"], w["behind"],
+                                                           ", %d uncommitted" % w["dirty"] if w["dirty"] else "")
+            print(line)
         print("(* = made by lfg worktree, in %s)" % W.base_dir(root))
+        return 0
+    if a.action == "merge":
+        try:
+            if a.all:
+                if not a.into:
+                    C.die("usage: lfg worktree merge --all --into <branch> [--remove]", 2)
+                done = W.merge_all(root, a.into, a.remove, a.merge_commit)
+            elif a.name:
+                done = [W.merge(root, a.name, a.into, a.remove, a.merge_commit)]
+            else:
+                C.die("usage: lfg worktree merge <name> [--into <branch>] [--remove] | --all --into <branch>", 2)
+        except W.NeedsMergeCommit as e:
+            C.die("%s Run again with --merge-commit." % e)
+        except (ValueError, RuntimeError) as e:
+            C.die(str(e))
+        for r in done:
+            print("%s: %s into %s (%s, %d commit%s)%s" % (r["name"], r["branch"], r["into"], r["how"], r["commits"],
+                                                         "" if r["commits"] == 1 else "s",
+                                                         ", worktree removed" if r["removed"] else ""))
+        if not done:
+            print("no LFG worktree forked from %s" % a.into)
         return 0
     if not a.name:
         C.die("usage: lfg worktree %s <%s>" % (a.action, "branch" if a.action == "new" else "name|branch"), 2)
@@ -1137,9 +1163,14 @@ def main(argv=None):
     r.add_argument("more", nargs="*", help="set: more key=value pairs")
     r.add_argument("--force", action="store_true", help="set: allow lowering the lane (only on the user's word)")
     wt = sp.add_parser("worktree", help="work on another branch in its own folder (shares this repo's graphs)")
-    wt.add_argument("action", choices=["new", "list", "remove"])
-    wt.add_argument("name", nargs="?", help="new: branch; remove: folder name or branch")
+    wt.add_argument("action", choices=["new", "list", "remove", "merge"])
+    wt.add_argument("name", nargs="?", help="new: branch; remove/merge: folder name or branch")
     wt.add_argument("--from", dest="base", help="new: start a new branch from this ref (default HEAD)")
+    wt.add_argument("--into", help="merge: the branch to merge into (default: the one it was forked from)")
+    wt.add_argument("--all", action="store_true", help="merge: every LFG worktree forked from --into")
+    wt.add_argument("--remove", action="store_true", help="merge: then remove the worktree and its merged branch")
+    wt.add_argument("--merge-commit", action="store_true",
+                    help="merge: allow a merge commit when the base moved on (default: fast-forward only)")
     iss = sp.add_parser("issue", help="mirror the run's issue into dev-graph (the Issues page)")
     iss.add_argument("action", choices=["sync", "show", "sync-tasks", "sync-brief"],
                      help="sync-tasks: one Issue per task in the current run's tasks.json (text, checks, done); "

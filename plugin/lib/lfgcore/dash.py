@@ -601,7 +601,6 @@ def _title(path):
     return os.path.splitext(os.path.basename(path))[0].replace("_", " ")
 
 
-MIN_AREA_NODES = 10
 THIRD_PARTY = D.THIRD_PARTY
 
 
@@ -644,16 +643,13 @@ def docs_index(rid):
     root = _doc_files(base)
     intro = [{"src": "intro", "path": n, "title": _title(os.path.join(INTRO_DIR, n))}
              for n in sorted(os.listdir(INTRO_DIR)) if n.endswith(".md")] if os.path.isdir(INTRO_DIR) else []
-    code = []  # graphify's wiki: its overview, then one page per area of the code, largest first
+    code = []  # graphify's wiki: its overview
     gw = _doc_base(rid, "{graphify}/wiki")
     if gw and os.path.isfile(os.path.join(gw, "index.md")):
         code.append({"src": "gwiki", "path": "index.md", "title": "Overview"})
-    code += [{"src": "gwiki", "path": pg["path"], "title": pg["title"]}
-             for pg in D.wiki_pages(rid) if pg["kind"] == "code" and pg["nodes"] >= MIN_AREA_NODES]
     gout = _doc_base(rid, "{graphify}")
-    views = [{"src": "view", "path": k, "title": t} for k, t, f in (("callflow", "How calls flow", "callflow.html"),
-                                                                     ("architecture", "Map of the code", "graph.html"))
-             if gout and os.path.isfile(os.path.join(gout, f))]
+    views = [{"src": "view", "path": "callflow", "title": "How calls flow"}] \
+        if gout and os.path.isfile(os.path.join(gout, "callflow.html")) else []
     gb = git_branches(repo_root(rid))
     out = []
     bdir = os.path.join(base, "branches")
@@ -1418,17 +1414,6 @@ def tools():
     return cached("tools", 300, get)
 
 
-def tools_quick():
-    """Cheap status for the overview (no subprocess-heavy checks)."""
-    hit = _CACHE.get("tools")
-    if hit:
-        return hit[1]["integrations"]
-    from . import setup as SU
-    off = not SU.pack_on("knowledge")
-    return [{"name": n, "ok": _og_ready(n), "optional": off, "problem": "%s isn't running: run `lfg omnigraph restart "
-             "%s`" % (n, n)} for n in ("dev-graph", "second-brain")] + [_headroom_row(True, False)]
-
-
 # ---------------------------------------------------------------- overview
 
 def _audit(n):
@@ -1459,26 +1444,3 @@ def graph_state(rid):
     return {"status": fresh or ("error" if st.get("last_error") else "unknown"), "synced_at": st.get("synced_at"),
             "mode": st.get("mode"), "seconds": st.get("last_sync_s"), "error": st.get("last_error"), "root": root,
             "docs": D.docs_state(rid)}
-
-
-def overview(rid, branch=None):
-    rs = runs(rid, branch)["runs"]
-    cur = next((r for r in rs if r.get("current")), rs[0] if rs else None)
-    u = usage(rid)
-    week = [d for d in u["days"] if d["day"] >= time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 86400))]
-    why = og_access("dev-graph")
-    if why:
-        work = {"why": why}
-    else:
-        iss = issues(rid, branch)
-        work = {"ready": len(iss["ready"]), "blocked": len(iss["blocked"]), "epics": len(iss["epics"])}
-    sec = security(rid, branch)
-    return {
-        "graphs": graph_state(rid), "code": code(rid, full=False), "architecture": architecture(rid, full=False),
-        "run": cur, "runs": len(rs), "work": work,
-        "security": (sec["secure"] or [None])[0] and {k: sec["secure"][0][k] for k in ("run", "verdict", "blocking")},
-        "tokens_7d": {k: sum(d[k] or 0 for d in week) for k in ("input", "output", "cache_read", "cache_write")},
-        "days": u["days"], "headroom": u["headroom"], "spend": u["spend"], "integrations": tools_quick(),
-        "activity": [{k: e.get(k) for k in ("ts", "event", "rule", "tool", "why", "repo_id")} for e in _audit(40)][:15],
-        "playbooks": [os.path.basename(p) for p in sorted(glob.glob(os.path.join(D.playbook_dir(rid), "*.md")))],
-    }

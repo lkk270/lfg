@@ -196,13 +196,37 @@ def _route_targets(sc):
     return []
 
 
+# Claude Code turns MCP tool search off when ANTHROPIC_BASE_URL isn't an Anthropic host, and then sends every MCP
+# tool's full schema with every request (100k+ tokens with a few servers). When Headroom forwards to Anthropic,
+# tool search works through it, so it's kept on there. (A company gateway upstream may not support it: left alone.)
+TOOL_SEARCH = ("ENABLE_TOOL_SEARCH", "true")
+
+
+def _to_anthropic():
+    return ((C.read_json(_state_path(), {}) or {}).get("upstream") or DEFAULT_UPSTREAM) == DEFAULT_UPSTREAM
+
+
+def run_env(env):
+    """An environment for a Claude Code run LFG starts through Headroom: tool search stays on (unless set)."""
+    if _to_anthropic():
+        env.setdefault(*TOOL_SEARCH)
+    return env
+
+
+def _route(path, why, **extra):
+    """Point one settings file at the proxy, with tool search kept on (unless the file already says)."""
+    out = CC.json_set(path, ["env", "ANTHROPIC_BASE_URL"], local_url(), why, "headroom", tag=ROUTE_TAG, **extra)
+    if _to_anthropic() and TOOL_SEARCH[0] not in ((C.read_json(path, {}) or {}).get("env") or {}):
+        CC.json_set(path, ["env", TOOL_SEARCH[0]], TOOL_SEARCH[1], "Keep MCP tool search on behind Headroom",
+                    "headroom", tag=ROUTE_TAG, **extra)
+    return out
+
+
 def route_repo(root):
     """Point one repo at the proxy (scope `repos`, called by `lfg enable`). No-op unless the proxy is up."""
     if scope() != "repos" or not live():
         return None
-    return CC.json_set(_local_settings(root), ["env", "ANTHROPIC_BASE_URL"], local_url(),
-                       "Route this repo's Claude Code traffic through Headroom", "headroom", tag=ROUTE_TAG,
-                       repo=root)
+    return _route(_local_settings(root), "Route this repo's Claude Code traffic through Headroom", repo=root)
 
 
 def setup(upstream=None, new_scope=None):
@@ -241,8 +265,7 @@ def setup(upstream=None, new_scope=None):
     try:
         _unroute(keep=sc)
         for p in _route_targets(sc):
-            CC.json_set(p, ["env", "ANTHROPIC_BASE_URL"], local_url(), "Route Claude Code through Headroom (%s)" % sc,
-                        "headroom", tag=ROUTE_TAG)
+            _route(p, "Route Claude Code through Headroom (%s)" % sc)
     except ValueError as e:  # a settings file that isn't valid JSON: left exactly as it was
         C.die(str(e))
     return {"live": True, "routed_where": sc, "upstream": up, "proxy": local_url(), "scope": sc}

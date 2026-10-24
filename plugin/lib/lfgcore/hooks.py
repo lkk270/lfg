@@ -145,7 +145,7 @@ CONTEXT = [
 TAG_RULE = (
     "Use LFG without being asked: when a request fits an LFG skill, use it even if the user didn't type the command "
     "(a bug or failing test: /lfg:fix; a feature or change: /lfg:lfg; how does X work: /lfg:explain; what does this "
-    "change touch: /lfg:impact; review: /lfg:expert; checks: /lfg:check; security: /lfg:secure; ship: /lfg:ship; "
+    "change touch: /lfg:impact; review: /lfg:review-coach; checks: /lfg:check; security: /lfg:secure; ship: /lfg:ship; "
     "save a fact: /lfg:note; not sure: /lfg:which). Start every reply to the user with one line saying whether you "
     "used LFG, so they can see when you deviate from it: `**LFG:** /lfg:<skill>` when you followed an LFG skill or "
     "agent; `**LFG:** tools only (<which>)` when you used LFG's code graphs, dev-graph, second-brain or `lfg` "

@@ -38,7 +38,7 @@ preflight: graphs
 | Brief but no `02-design.md`/`tasks.json` (Standard/Full) | `/lfg:plan` |
 | Open unblocked tasks in `tasks.json` | `/lfg:build` |
 | Code changed, no `ready.json` or it is red | `/lfg:check` |
-| Green, no `06-review.json` | `/lfg:expert` |
+| Green, no `06-review.json` | `/lfg:review-coach` |
 | Verdict `changes` | `/lfg:fix`, then `/lfg:check` |
 | Verdict `approve`, no `07-shipcheck.json`/`COMMIT_MSG.md` | `/lfg:ship` |
 | Ship packet written, uncommitted | You commit and push; then `lfg watch` |

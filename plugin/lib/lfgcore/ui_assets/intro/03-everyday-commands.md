@@ -9,7 +9,7 @@
 | `/lfg:explain <question>` | How does this part of the code work? |
 | `/lfg:why <file:lines>` | Why does this code look like this? |
 | `/lfg:impact <symbol>` | What could this change break? |
-| `/lfg:expert` | A senior review of the current change |
+| `/lfg:review-coach` | A senior review of the current change |
 | `/lfg:secure` | Dependency, secret and code security checks |
 | `/lfg:note <thing to remember>` | Save a decision or lesson |
 

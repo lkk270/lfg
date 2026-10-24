@@ -298,7 +298,7 @@ def legacy_fix(item_id):
 
 # ---------------------------------------------------------------- guided tours (shown once, skippable)
 
-TOURS = ("dictate", "dictate-intro", "dictate-banner", "news-welcome")
+TOURS = ("dictate", "dictate-intro", "dictate-banner", "news-welcome", "setup-guide")
 
 
 def tours_view():
@@ -312,7 +312,8 @@ def tours_view():
     return {"dictate": {"ready": on, "on": on, "done": full,
                         "intro_done": bool(done.get("dictate-intro") or done.get("dictate")),
                         "banner_closed": bool(done.get("dictate-banner"))},
-            "news_welcome_closed": bool(done.get("news-welcome"))}
+            "news_welcome_closed": bool(done.get("news-welcome")),
+            "setup_guide_done": bool(done.get("setup-guide"))}  # the first-run setup guide, finished once
 
 
 def tour_done(name, how="finished"):

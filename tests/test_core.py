@@ -3,6 +3,7 @@
 Tests run with LFG_HOME pointed at a temp dir so they never touch ~/.lfg."""
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -442,6 +443,7 @@ class HeadroomTest(unittest.TestCase):
         self.write({"permissions": {}})
         with mock.patch.object(HR, "wait_live", return_value=True):
             self.assertEqual(HR.setup(new_scope="everywhere")["upstream"], HR.DEFAULT_UPSTREAM)
+        self.assertEqual(self.read()["env"]["ENABLE_TOOL_SEARCH"], "true")  # MCP tool search kept on behind it
         with mock.patch.object(C, "run"):
             HR.off()
         self.assertEqual(self.read(), {"permissions": {}})
@@ -1331,7 +1333,7 @@ class PrReviewTest(unittest.TestCase):
                                         text=True).stdout.strip(), "main")  # the user's checkout didn't move
         self.assertEqual(self.runs, [("review", False)])
         # the AI's answer arrives: chat + draft
-        res = {"result": "**LFG:** /lfg:expert\n\nLooks fine.\n```json\n" + json.dumps({
+        res = {"result": "**LFG:** /lfg:review-coach\n\nLooks fine.\n```json\n" + json.dumps({
             "summary": "Adds a fourth line.", "verdict": "changes",
             "ratings": [{"area": "Tests", "score": 2, "why": "no test"}],
             "questions": [{"id": "Q1", "ask": "Why four?", "why": "scope"}],
@@ -1344,7 +1346,7 @@ class PrReviewTest(unittest.TestCase):
         d = PR.detail(rid, root, 1)
         self.assertEqual(d["review"]["status"], "ready")
         self.assertEqual(d["review"]["worktree_name"], "review-pr-1")
-        self.assertEqual(d["chat"][-1]["text"], "**LFG:** /lfg:expert\n\nLooks fine.")
+        self.assertEqual(d["chat"][-1]["text"], "**LFG:** /lfg:review-coach\n\nLooks fine.")
         self.assertEqual([(c["id"], c["inline"]) for c in d["draft"]["comments"]], [("C1", True), ("C2", False)])
         # the reviewer's own edits survive and decide what is posted
         PR.save_draft(rid, 1, {"summary": "Please add a test.", "event": "REQUEST_CHANGES",
@@ -1469,6 +1471,7 @@ class PrReviewTest(unittest.TestCase):
             with mock.patch.object(H, "base_url", lambda root=None, use_env=True: "http://127.0.0.1:8787/"):
                 env, via = PR._child_env(self.root)
                 self.assertEqual((env["ANTHROPIC_BASE_URL"], via), ("http://127.0.0.1:8787/", "headroom"))
+                self.assertEqual(env["ENABLE_TOOL_SEARCH"], "true")
             with mock.patch.object(H, "base_url", lambda root=None, use_env=True: ""):  # Headroom not routed
                 env, via = PR._child_env(self.root)
                 self.assertEqual((env["ANTHROPIC_BASE_URL"], via), ("https://gateway.example.test", "direct"))
@@ -2046,6 +2049,360 @@ class RunTagsAndSearchTest(unittest.TestCase):
             os.utime(os.path.join(b, "02-design.md"), (time.time() + 5, time.time() + 5))
             RS.search(self.rid, "billing", dirs)
             self.assertEqual(calls[-2:], [1, 1])  # the changed run is embedded again
+
+
+FAKE_CLAUDE = r"""#!/usr/bin/env python3
+import json, sys, os
+argv = sys.argv
+sid = argv[argv.index("--session-id") + 1] if "--session-id" in argv else argv[argv.index("--resume") + 1]
+if os.environ.get("FAKE_ARGS"):
+    open(os.environ["FAKE_ARGS"], "a").write(json.dumps(argv[1:]) + "\n" + json.dumps(
+        {"ckpt": os.environ.get("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING")}) + "\n")
+REPLIES = {"rewind_files": {"canRewind": True, "filesChanged": ["/r/a.txt"], "insertions": 1, "deletions": 2},
+           "rewind_conversation": {"rewound": True, "prefillText": "the old prompt"},
+           "get_context_usage": {"percentage": 18, "totalTokens": 36000, "maxTokens": 200000,
+                                 "isAutoCompactEnabled": True, "autoCompactThreshold": 167000, "categories": [
+                                     {"name": "Messages", "tokens": 5000, "kind": "used"},
+                                     {"name": "Free space", "tokens": 160000, "kind": "free"}]}}
+def out(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    ev = json.loads(line)
+    if ev.get("type") == "control_request" and ev["request"]["subtype"] == "initialize":
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": ev["request_id"]}})
+        out({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "session_id": sid})
+    elif ev.get("type") == "control_request" and ev["request"]["subtype"] in REPLIES:
+        r = dict(REPLIES[ev["request"]["subtype"]])
+        if ev["request"].get("dry_run") is None and "filesChanged" in r:
+            r = {"canRewind": True}
+        if os.environ.get("FAKE_ARGS"):
+            open(os.environ["FAKE_ARGS"], "a").write(json.dumps(ev["request"]) + "\n")
+        out({"type": "control_response",
+             "response": {"subtype": "success", "request_id": ev["request_id"], "response": r}})
+    elif ev.get("type") == "user":
+        out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Write",
+                                                           "input": {"file_path": "x.txt", "content": "hi"}}]}})
+        out({"type": "control_request", "request_id": "r1", "request": {"subtype": "can_use_tool", "tool_name": "Write",
+             "input": {"file_path": "x.txt", "content": "hi"}, "description": "x.txt"}})
+        ans = json.loads(sys.stdin.readline())
+        ok = ans["response"]["response"]["behavior"] == "allow"
+        open(os.environ["FAKE_LOG"], "a").write(json.dumps({"said": ev["message"]["content"], "allowed": ok}) + "\n")
+        text = "Wrote it." if ok else "Skipped."
+        out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+        out({"type": "result", "subtype": "success", "total_cost_usd": 0.01})
+"""
+
+
+class ClaudeSessionsTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import claudesess as CS
+        self.CS = CS
+        self.root = tempfile.mkdtemp(prefix="lfg-sess-")
+        self.proj = tempfile.mkdtemp(prefix="lfg-projects-")
+
+    def _transcript(self, sid, lines):
+        d = C.ensure_dir(os.path.join(self.proj, re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(self.root))))
+        C.write_text(os.path.join(d, sid + ".jsonl"), "".join(json.dumps(x) + "\n" for x in lines))
+
+    def test_transcripts_read_as_cards_and_list_with_where_they_came_from(self):
+        CS, sid = self.CS, "11111111-2222-3333-4444-555555555555"
+        base = {"cwd": self.root, "gitBranch": "feat/x", "entrypoint": "cli", "timestamp": "2026-10-24T10:00:00Z"}
+        self._transcript(sid, [
+            dict(base, type="user", message={"role": "user", "content": "<command-name>/lfg:fix</command-name>"
+                                                                        "<command-args>the login test</command-args>"}),
+            dict(base, type="user", isMeta=True, message={"role": "user", "content": "skill text"}),
+            dict(base, type="assistant", message={"model": "claude-sonnet-5-5", "content": [
+                {"type": "text", "text": "Looking."}, {"type": "tool_use", "id": "a", "name": "Bash",
+                                                       "input": {"command": "npm test"}}]}),
+            dict(base, type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "a", "content": "1 failing", "is_error": True}]}),
+            dict(base, type="assistant", message={"model": "claude-sonnet-5-5", "content": [
+                {"type": "tool_use", "id": "w1", "name": "Write", "input": {"file_path": "/r/denied.ts"}},
+                {"type": "tool_use", "id": "w2", "name": "Edit", "input": {"file_path": "/r/done.ts"}}]}),
+            dict(base, type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "w1", "content": "The user said no", "is_error": True},
+                {"type": "tool_result", "tool_use_id": "w2", "content": "ok"}]}),
+            dict(base, type="user", message={"role": "user", "content": "<system-reminder>x</system-reminder>"}),
+            dict(base, type="user", isSidechain=True, message={"role": "user", "content": "subagent chatter"}),
+            {"type": "custom-title", "customTitle": "Flaky login test"}])
+        review = "PR mode review for the dashboard. Review pull request #42 now"
+        self._transcript("66666666-2222-3333-4444-555555555555",
+                         [dict(base, type="user", entrypoint="sdk-cli", message={"role": "user", "content": review})])
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            items, meta = CS.read(CS.transcript(sid, self.root))
+            self.assertEqual([i["k"] for i in items], ["skill", "ai", "tool", "tool", "tool"])
+            self.assertEqual(meta["files"], ["/r/done.ts"])  # a denied write changed nothing
+            self.assertEqual((items[0]["name"], items[0]["args"]), ("lfg:fix", "the login test"))
+            self.assertEqual((items[2]["result"], items[2]["error"]), ("1 failing", True))
+            self.assertEqual((meta["title"], meta["branch"], meta["skills"]),
+                             ("Flaky login test", "feat/x", ["lfg:fix"]))
+            got = {x["id"]: x for x in CS.listing("r1", self.root)["sessions"]}
+            self.assertEqual((got[sid]["title"], got[sid]["source"], got[sid]["state"]),
+                             ("Flaky login test", "terminal", "saved"))
+            self.assertEqual(got["66666666-2222-3333-4444-555555555555"]["title"], "AI review of PR #42")
+            self.assertEqual(got["66666666-2222-3333-4444-555555555555"]["source"], "background")
+
+    def test_tags_suggestions_and_file_mentions(self):
+        CS = self.CS
+        self.assertEqual(CS._issues("varun/ato-4251-x B8F13E1F-3579 SHA-256 then ATO-12"), ["ATO-4251", "ATO-12"])
+        subprocess.run(["git", "init", "-q", self.root], check=True)
+        for f in ("src/device-inventory.query.ts", "src/other.ts", "README.md"):
+            C.write_text(os.path.join(self.root, f), "x\n")
+        subprocess.run(["git", "-C", self.root, "add", "."], check=True)
+        got = CS.files(self.root, "inventory query")["files"]
+        self.assertEqual(got, ["src/device-inventory.query.ts"])
+        sug = CS.suggestions("nope-1", self.root)["suggestions"]
+        self.assertTrue(any(x["skill"] == "/lfg:check" and "3 uncommitted" in x["title"] for x in sug))
+        self.assertEqual(sug[-1]["skill"], "/lfg:explain")
+        self.assertTrue(all(x["prompt"].startswith("/lfg:") for x in sug))
+
+    def test_always_allow_saves_the_rule_and_messages_wait_for_an_answer(self):
+        CS, sent = self.CS, []
+        live = CS.Live.__new__(CS.Live)  # no process: just the answering logic
+        live.pending, live.allowed, live.queued, live.state, live.error = {}, set(), [], "needs-you", None
+        live._write = lambda obj: sent.append(obj) or True
+        rule = [{"type": "addRules", "rules": [{"toolName": "mcp__graph__overview"}], "behavior": "allow",
+                 "destination": "localSettings"}]
+        live.pending["r1"] = {"id": "r1", "tool": "mcp__graph__overview", "input": {}, "raw": {
+            "tool_name": "mcp__graph__overview", "input": {}, "permission_suggestions": rule}}
+        self.assertEqual(live.say("and then?"), "queued")  # never written while a prompt is open
+        self.assertEqual(sent, [])
+        live.decide("r1", "always")
+        resp = sent[-1]["response"]["response"]
+        self.assertEqual((resp["behavior"], resp["updatedPermissions"]), ("allow", rule))
+        self.assertIn("mcp__graph__overview", live.allowed)
+
+    def test_a_live_session_asks_before_writing_and_the_page_answers(self):
+        from lfgcore import notify as N
+        CS = self.CS
+        fake = os.path.join(self.root, "claude")
+        C.write_text(fake, FAKE_CLAUDE)
+        os.chmod(fake, 0o755)
+        log = os.path.join(self.root, "fake.log")
+        with mock.patch.object(C, "which", lambda n: fake if n == "claude" else None), \
+                mock.patch.dict(os.environ, {"FAKE_LOG": log}), mock.patch.object(CS, "PROJECTS", self.proj):
+            sid = CS.start("r1", self.root, "Write x.txt", mode="default")["id"]
+            live = CS._LIVE[sid]
+            for _ in range(100):
+                if live.pending:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(live.state, "needs-you")
+            (req,) = list(live.pending.values())
+            self.assertEqual((req["tool"], req["input"]["file_path"]), ("Write", "x.txt"))
+            self.assertEqual(N.recent()["events"][0]["href"], "#sessions/" + sid)  # "Claude needs your OK"
+            live.decide(req["id"], "always")
+            for _ in range(100):
+                if live.state == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(live.state, "idle")
+            self.assertEqual(json.loads(open(log).read().splitlines()[-1]), {"said": "Write x.txt", "allowed": True})
+            live.say("again")  # "Allow Write for this session": not asked again
+            for _ in range(100):
+                if len(open(log).read().splitlines()) == 2 and live.state == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(json.loads(open(log).read().splitlines()[-1]), {"said": "again", "allowed": True})
+            self.assertEqual(live.pending, {})
+            with self.assertRaises(CS.Invalid):
+                live.decide("r1", "once")  # already answered
+            live.stop()
+            self.assertEqual(live.state, "ended")
+            with self.assertRaises(CS.Invalid):
+                CS.start("r1", self.root, "   ")
+
+
+    def test_rewound_turns_compaction_and_images_read_like_claude_code_shows_them(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-555555555555"
+        b = {"cwd": self.root, "entrypoint": "cli", "timestamp": "2026-10-24T10:00:00Z"}
+        png = "iVBORw0KGgo="
+        lines = [
+            dict(b, type="user", uuid="u1", parentUuid=None, message={"role": "user", "content": "first"}),
+            dict(b, type="assistant", uuid="a1", parentUuid="u1",
+                 message={"content": [{"type": "text", "text": "ok 1"}]}),
+            dict(b, type="user", uuid="u2", parentUuid="a1", message={"role": "user", "content": "edit it"}),
+            dict(b, type="assistant", uuid="a2", parentUuid="u2", message={"content": [
+                {"type": "tool_use", "id": "e", "name": "Edit", "input": {"file_path": "/r/x.ts"}}]}),
+            dict(b, type="user", uuid="r2", parentUuid="a2", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "e", "content": "ok"}]}),
+            {"type": "attachment", "uuid": "at1", "parentUuid": "r2"},
+            dict(b, type="user", uuid="u3", parentUuid="a1", message={"role": "user", "content": [  # rewound to a1
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": png}},
+                {"type": "text", "text": "[Image #1] this instead"}]}),
+            {"type": "system", "subtype": "compact_boundary", "uuid": "cb", "parentUuid": None,
+             "logicalParentUuid": "u3"},
+            dict(b, type="user", uuid="cs", parentUuid="cb", isCompactSummary=True,
+                 message={"role": "user", "content": "This session is being continued from a previous conversation"}),
+            dict(b, type="user", uuid="c1", parentUuid="cs", message={"role": "user", "content":
+                                                                      "<command-name>/compact</command-name>"})]
+        self._transcript(sid, lines)
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            items, meta = CS.read(CS.transcript(sid, self.root))
+            self.assertEqual([(i["k"], i.get("text") or i.get("name")) for i in items], [
+                ("me", "first"), ("ai", "ok 1"), ("me", "[Image #1] this instead"), ("note", "Conversation compacted"),
+                ("skill", "compact")])
+            self.assertEqual(meta["files"], [])  # the edit was rewound
+            self.assertEqual(meta["skills"], [])  # /compact is Claude Code's own, not a skill tag
+            self.assertEqual((items[2]["u"], items[2]["p"], items[2]["images"]), ("u3", "a1", [{"u": "u3", "i": 0}]))
+            self.assertEqual(CS.image(sid, self.root, "u3", "0"), {"src": "data:image/png;base64," + png})
+            with self.assertRaises(CS.Invalid):
+                CS.image(sid, self.root, "u3", "1")
+            # rewound without a new prompt yet: Claude Code's marker says where the conversation now ends
+            self._transcript(sid, lines[:5] + [{"type": "last-prompt", "leafUuid": "a1", "rewound": True}])
+            items, meta = CS.read(CS.transcript(sid, self.root))
+            self.assertEqual([i["k"] for i in items], ["me", "ai"])
+            self.assertEqual(meta["files"], [])
+
+    def test_attachments_go_in_as_image_blocks_and_file_mentions(self):
+        import base64
+        CS = self.CS
+        img = CS.upload("shot one.png", "image/png", base64.b64encode(b"\x89PNG fake").decode())
+        doc = CS.upload("../../notes.pdf", "application/pdf", base64.b64encode(b"%PDF").decode())
+        self.assertTrue(img["image"] and not doc["image"])
+        self.assertTrue(os.path.realpath(doc["path"]).startswith(os.path.realpath(C.lfg_path("uploads"))))
+        self.assertTrue(os.path.basename(doc["path"]).endswith("-notes.pdf"))  # no way out of the uploads folder
+        self.assertEqual(os.stat(doc["path"]).st_mode & 0o777, 0o600)
+        content = CS._content("what's wrong here?", [{"path": img["path"], "type": "image/png"},
+                                                     {"path": doc["path"], "type": ""}])
+        self.assertEqual(content[0], {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                                  "data": base64.b64encode(b"\x89PNG fake").decode()}})
+        self.assertEqual(content[1], {"type": "text", "text": "[Image #1] what's wrong here?\n@" + doc["path"]})
+        self.assertEqual(CS._content("plain", None), "plain")
+        for bad in ([{"path": "/etc/passwd", "type": ""}], [{"path": img["path"]}] * 11):
+            with self.assertRaises(CS.Invalid):
+                CS._content("x", bad)
+        with self.assertRaises(CS.Invalid):
+            CS.upload("x.png", "image/png", "not base64!")
+        self.assertEqual(CS._check("", [{"path": img["path"]}]), "")  # an image alone is a message
+
+    def test_rewind_fork_and_context_through_claude_codes_control_channel(self):
+        CS = self.CS
+        fake = os.path.join(self.root, "claude")
+        C.write_text(fake, FAKE_CLAUDE)
+        os.chmod(fake, 0o755)
+        args = os.path.join(self.root, "args.log")
+        env = {"FAKE_LOG": os.path.join(self.root, "fake.log"), "FAKE_ARGS": args}
+        with mock.patch.object(C, "which", lambda n: fake if n == "claude" else None), \
+                mock.patch.dict(os.environ, env), mock.patch.object(CS, "PROJECTS", self.proj):
+            sid = "88888888-2222-3333-4444-555555555555"
+            self._transcript(sid, [{"type": "user", "uuid": "u1", "cwd": self.root,
+                                    "message": {"role": "user", "content": "hello"}}])
+            CS.resume("r1", self.root, sid)
+            live = CS._LIVE[sid]
+            for _ in range(100):
+                if live.state == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(live.rewind_preview("u1"), {"can": True, "why": "", "files": ["/r/a.txt"],
+                                                         "insertions": 1, "deletions": 2})
+            self.assertEqual(live.rewind("u1", "both"), {"code": True, "chat": True, "prefill": "the old prompt"})
+            self.assertEqual(live.context()["percent"], 18)
+            self.assertEqual(live.context()["parts"], [{"name": "Messages", "tokens": 5000}])
+            with self.assertRaises(CS.Invalid):
+                live.rewind("u1", "everything")
+            sent = [json.loads(x) for x in C.read_text(args).splitlines()]
+            self.assertIn({"subtype": "rewind_files", "user_message_id": "u1"}, sent)
+            self.assertIn({"subtype": "rewind_conversation", "target_message_uuid": "u1"}, sent)
+            self.assertIn({"ckpt": "1"}, sent)  # file checkpoints on, so Rewind can put files back
+            at = "99999999-2222-3333-4444-555555555555"
+            new = CS.fork("r1", self.root, sid, at, "try it another way")["id"]
+            self.assertNotEqual(new, sid)
+            for _ in range(100):  # the fork's process starts in the background
+                if "--fork-session" in C.read_text(args):
+                    break
+                time.sleep(0.05)
+            argv = [json.loads(x) for x in C.read_text(args).splitlines() if "--fork-session" in x][-1]
+            self.assertEqual(argv[argv.index("--resume") + 1:argv.index("--resume") + 7],
+                             [sid, "--fork-session", "--session-id", new, "--resume-session-at", at])
+            self.assertEqual(CS._index()[new]["forked_from"], sid)
+            for l_ in (live, CS._LIVE[new]):
+                l_.stop()
+
+
+class WorktreeMergeTest(unittest.TestCase):
+    """Worktrees made for sessions, and merging them back into the branch they were forked from (committed work
+    only, fast-forward first, a merge commit only when asked, conflicts aborted)."""
+
+    def setUp(self):
+        from lfgcore import worktree as W
+        self.W = W
+        self.root = os.path.join(tempfile.mkdtemp(prefix="lfg-wt-"), "app")
+        self.git("init", "-q", "-b", "main", self.root, cwd=None)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            self.git("config", k, v)
+        C.write_text(os.path.join(self.root, "a.txt"), "one\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+
+    def git(self, *a, cwd=""):
+        return subprocess.run(["git", *a], cwd=self.root if cwd == "" else cwd, check=True, capture_output=True,
+                              text=True).stdout
+
+    def commit_in(self, path, name, text):
+        C.write_text(os.path.join(path, name), text)
+        self.git("add", ".", cwd=path)
+        self.git("commit", "-qm", "change " + name, cwd=path)
+
+    def test_merge_back_fast_forward_and_remove(self):
+        W = self.W
+        wt = W.new(self.root, "lfg/feature")["path"]
+        self.assertEqual(W.base_of(self.root, "lfg/feature"), "main")  # recorded when LFG made it
+        C.write_text(os.path.join(wt, "b.txt"), "draft\n")
+        with self.assertRaises(RuntimeError):  # uncommitted work is never merged (LFG never commits for you)
+            W.merge(self.root, "lfg-feature")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "b", cwd=wt)
+        row = next(x for x in W.status(self.root) if x["name"] == "lfg-feature")
+        self.assertEqual((row["kind"], row["base"], row["ahead"], row["dirty"]), ("lfg", "main", 1, 0))
+        out = W.merge(self.root, "lfg-feature", remove_after=True)
+        self.assertEqual((out["how"], out["commits"], out["removed"]), ("fast-forward", 1, True))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "b.txt")))  # main has it now
+        self.assertFalse(os.path.isdir(wt))
+        self.assertNotIn("lfg/feature", self.git("branch"))
+
+    def test_base_moved_on_needs_a_yes_and_conflicts_abort(self):
+        W = self.W
+        wt = W.new(self.root, "lfg/x")["path"]
+        self.commit_in(wt, "x.txt", "x\n")
+        self.commit_in(self.root, "m.txt", "m\n")  # main moved on
+        with self.assertRaises(W.NeedsMergeCommit):
+            W.merge(self.root, "lfg/x")
+        self.assertEqual(W.merge(self.root, "lfg/x", merge_commit=True)["how"], "merge commit")
+        wt2 = W.new(self.root, "lfg/y")["path"]
+        self.commit_in(wt2, "a.txt", "theirs\n")
+        self.commit_in(self.root, "a.txt", "ours\n")
+        with self.assertRaises(RuntimeError) as e:
+            W.merge(self.root, "lfg/y", merge_commit=True)
+        self.assertIn("a.txt", str(e.exception))
+        self.assertEqual(self.git("status", "--porcelain").strip(), "")  # aborted: nothing half merged
+        self.assertEqual(open(os.path.join(self.root, "a.txt")).read(), "ours\n")
+
+    def test_merge_all_forked_from_a_branch(self):
+        W = self.W
+        for b in ("lfg/one", "lfg/two"):
+            self.commit_in(W.new(self.root, b)["path"], b.split("/")[1] + ".txt", "x\n")
+        with self.assertRaises(W.NeedsMergeCommit):  # the first fast-forwards; main moved on, so the next needs a yes
+            W.merge_all(self.root, "main")
+        self.assertEqual([x["kind"] for x in W.status(self.root)], ["main", "lfg"])  # the first is merged and gone
+        done = W.merge_all(self.root, "main", merge_commit=True)  # yes: the rest, with a merge commit
+        self.assertEqual([(d["how"], d["removed"]) for d in done], [("merge commit", True)])
+        self.assertTrue(os.path.exists(os.path.join(self.root, "one.txt")) and
+                        os.path.exists(os.path.join(self.root, "two.txt")))
+        self.assertEqual([x["kind"] for x in W.status(self.root)], ["main"])
+
+    def test_sessions_start_where_asked(self):
+        from lfgcore import claudesess as CS
+        self.assertEqual(CS.workdir(self.root, {"kind": "here"}), self.root)
+        path = CS.workdir(self.root, {"kind": "new", "branch": "lfg/s", "base": "main"})
+        self.assertTrue(path.endswith("lfg-s") and os.path.isdir(path))
+        self.assertEqual(CS.workdir(self.root, {"kind": "branch", "branch": "lfg/s"}), path)  # reuses its worktree
+        self.assertEqual(CS.workdir(self.root, {"kind": "worktree", "path": path}), path)
+        with self.assertRaises(CS.Invalid):
+            CS.workdir(self.root, {"kind": "worktree", "path": "/etc"})
+        with self.assertRaises(CS.Invalid):
+            CS.workdir(self.root, {"kind": "new", "branch": "bad name.."})
+        self.assertEqual(CS._issues("AEGINV-000 and ATO-7"), ["ATO-7"])
 
 
 class SonarTest(unittest.TestCase):

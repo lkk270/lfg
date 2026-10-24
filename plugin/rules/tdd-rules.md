@@ -19,7 +19,7 @@ Red → green, one slice at a time, with tests worth keeping. Applies to `/build
 2. Write only enough code to pass it. No speculative features, no anticipating the next test.
 3. Run it; see it pass. Type-check and re-run the touched test files.
 4. Repeat. Each test is a tracer bullet that reacts to what the last cycle taught you.
-- Refactoring is not part of this loop; it belongs to `/expert` feedback.
+- Refactoring is not part of this loop; it belongs to `/review-coach` feedback.
 - At the end: affected tests (`tests_for` on changed nodes), then the full suite once.
 
 ## A good test

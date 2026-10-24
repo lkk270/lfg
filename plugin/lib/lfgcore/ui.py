@@ -13,7 +13,9 @@ import html
 import http.server
 import json
 import os
+import re
 import threading
+import time
 import urllib.parse
 import webbrowser
 
@@ -128,7 +130,10 @@ def api(view, q):
     if view == "notifications":
         from . import notify as N
         N.page_seen(_arg(q, "visible") == "1")
-        return N.recent(_arg(q, "since"))
+        from . import claudesess as CS
+        live = [x for x in CS._LIVE.values() if x.state != "ended"]
+        return dict(N.recent(_arg(q, "since")), sessions={"live": len(live),
+                                                          "needs_you": sum(x.state == "needs-you" for x in live)})
     if view == "linear_options":  # Linear's teams, projects and people for the Create Linear ticket sheet
         from . import todos as T
         try:
@@ -157,8 +162,6 @@ def api(view, q):
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
                                            "on the first session."}
-    if view == "overview":
-        return dash.overview(rid, _arg(q, "branch"))
     if view == "issues":
         return dash.issues(rid, _arg(q, "branch"))
     if view == "sonar_cloud":
@@ -190,6 +193,25 @@ def api(view, q):
             return PR.outgoing(rid, _arg(q, "n"))
         except PR.Invalid as e:
             return {"available": False, "why": str(e)}
+    if view in ("sessions", "session"):  # Claude Code sessions run from the dashboard
+        from . import claudesess as CS
+        root = dash.repo_root(rid)
+        return CS.listing(rid, root) if view == "sessions" else CS.detail(rid, root, _arg(q, "id"))
+    if view == "session_where":
+        from . import claudesess as CS
+        return CS.where(rid, dash.repo_root(rid))
+    if view in ("session_image", "session_context"):  # an image from a transcript; how full the context is
+        from . import claudesess as CS
+        try:
+            if view == "session_image":
+                return CS.image(_arg(q, "id"), dash.repo_root(rid), _arg(q, "u"), _arg(q, "i") or "0")
+            return CS.live(_arg(q, "id")).context()
+        except (CS.Invalid, ValueError) as e:
+            return {"available": False, "why": str(e)}
+    if view in ("session_suggest", "session_files"):
+        from . import claudesess as CS
+        root = dash.repo_root(rid)
+        return CS.suggestions(rid, root) if view == "session_suggest" else CS.files(root, _arg(q, "q"))
     if view == "runs":
         return dash.runs(rid, _arg(q, "branch"))
     if view == "runs_search":  # vector search over what each run is about (local only)
@@ -228,6 +250,7 @@ def api(view, q):
 
 
 MAX_BODY = 600_000
+MAX_UPLOAD = 28_000_000  # a file dropped on a session's composer, base64 in JSON (files up to 20 MB)
 
 
 def save(what, body):
@@ -251,6 +274,8 @@ def save(what, body):
         return pr_action(what, body)
     if what.startswith("todo_"):
         return todo_action(what, body)
+    if what.startswith("sess_"):
+        return session_action(what, body)
     if what == "sonar_scan":
         return sonar_scan(str(body.get("repo") or ""))
     if what == "run_needed":
@@ -298,6 +323,81 @@ def save(what, body):
         res = actions[what]()
         return res if isinstance(res, dict) else {"result": res}
     raise S.Invalid("unknown setting")
+
+
+def session_action(what, body):
+    """The Sessions page: start, continue, message, answer a permission prompt, change mode, stop or end a session.
+    Each runs Claude Code in the project's checkout, as you would in a terminal there."""
+    from . import claudesess as CS
+    rid = _rid({"repo": [str(body.get("repo") or "")]})
+    root = dash.repo_root(rid) if rid else None
+    sid = str(body.get("id") or "")
+    try:
+        if what == "sess_start":
+            return CS.start(rid, root, body.get("text"), body.get("model"), body.get("mode") or "default",
+                            where=body.get("where"), attachments=body.get("attachments"))
+        if what == "sess_upload":
+            return CS.upload(body.get("name"), str(body.get("type") or ""), body.get("data"))
+        if what == "sess_fork":
+            return CS.fork(rid, root, sid, str(body.get("at") or ""), body.get("text"), body.get("attachments"))
+        if what in ("sess_rewind", "sess_rewind_preview"):  # a saved session is started again to rewind it
+            CS.resume(rid, root, sid)
+            live = CS.live(sid)
+            for _ in range(50):  # it's ready once Claude Code has answered `initialize`
+                if live.state != "starting":
+                    break
+                time.sleep(0.1)
+            msg = str(body.get("message") or "")
+            if not re.match(r"^[0-9a-f-]{36}$", msg):
+                raise CS.Invalid("pick a message to rewind to")
+            if what == "sess_rewind_preview":
+                return live.rewind_preview(msg)
+            return live.rewind(msg, str(body.get("what") or ""))
+        if what == "sess_compact":
+            return {"status": CS.live(sid).say("/compact " + CS._one_line(body.get("focus"))[:300]
+                                               if body.get("focus") else "/compact")}
+        if what == "sess_resume":
+            return CS.resume(rid, root, sid)
+        if what == "sess_say":
+            att = body.get("attachments")
+            return {"status": CS.live(sid).say(CS._check(body.get("text"), att), att)}
+        if what == "sess_decide":
+            CS.live(sid).decide(str(body.get("request") or ""), str(body.get("decision") or ""))
+            return {"saved": True}
+        if what == "sess_mode":
+            CS.live(sid).set_mode(str(body.get("mode") or ""))
+            return {"saved": True}
+        if what == "sess_interrupt":
+            CS.live(sid).interrupt()
+            return {"saved": True}
+        if what == "sess_end":
+            CS.live(sid).stop()
+            return {"saved": True}
+        if what in ("wt_merge", "wt_merge_all", "wt_remove"):  # the worktrees on the Sessions page
+            from . import worktree as W
+            try:
+                if what == "wt_remove":
+                    return W.remove(root, str(body.get("name") or ""))
+                if what == "wt_merge_all":
+                    into = str(body.get("into") or "")
+                    return {"done": W.merge_all(root, into, True, bool(body.get("merge_commit")))}
+                return W.merge(root, str(body.get("name") or ""), None, bool(body.get("remove")),
+                               bool(body.get("merge_commit")))
+            except W.NeedsMergeCommit as e:
+                return {"needs_merge_commit": True, "why": str(e)}
+            except (ValueError, RuntimeError) as e:
+                raise CS.Invalid(str(e)) from None
+        if what == "sess_rename":
+            title = CS._one_line(body.get("title"))[:90]
+            if not title:
+                raise CS.Invalid("give it a name")
+            CS._remember(sid, title=title)
+            if sid in CS._LIVE:
+                CS._LIVE[sid].title = title
+            return {"saved": True}
+    except CS.Invalid as e:
+        raise S.Invalid(str(e)) from None
+    raise S.Invalid("unknown action")
 
 
 def todo_action(what, body):
@@ -487,7 +587,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not u.path.startswith("/api/save/"):
             return no(404, "not found")
         size = int(self.headers.get("Content-Length") or 0)
-        if not (self.headers.get("Content-Type") or "").startswith("application/json") or not 0 < size <= MAX_BODY:
+        limit = MAX_UPLOAD if u.path == "/api/save/sess_upload" else MAX_BODY
+        if not (self.headers.get("Content-Type") or "").startswith("application/json") or not 0 < size <= limit:
             return no(400, "expected a JSON body")
         try:
             body = json.loads(self.rfile.read(size))
@@ -640,3 +741,6 @@ def serve(port, open_browser=True):
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        from . import claudesess as CS
+        CS.stop_all()  # live sessions end with the dashboard; each can be continued later

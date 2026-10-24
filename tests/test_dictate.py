@@ -196,6 +196,12 @@ class TourTest(DictatePackTest):
         with self.assertRaises(K.Invalid):
             K.tour_done("nope")
 
+    def test_setup_guide_is_shown_until_it_is_finished_once(self):
+        from lfgcore import control as K
+        self.assertFalse(K.tours_view()["setup_guide_done"])
+        K.tour_done("setup-guide")
+        self.assertTrue(K.tours_view()["setup_guide_done"])
+
 
 class WhatsNewAndIntroTourTest(DictatePackTest):
     def test_update_prints_whats_new_once_first_install_does_not(self):

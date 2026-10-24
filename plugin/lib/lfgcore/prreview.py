@@ -2,7 +2,7 @@
 
 Each review gets its own worktree next to the repo (`<repo>.worktrees/review-pr-<n>`, detached at the PR head, which
 is fetched into `refs/lfg-review/pr-<n>`), so the user's checkout and branches are never touched. A background
-`claude -p` session in that worktree runs the lfg:expert skill in PR mode (graphs + dev-graph + second-brain) and
+`claude -p` session in that worktree runs the lfg:review-coach skill in PR mode (graphs + dev-graph + second-brain) and
 returns a grilling review; the user then talks it through in the same session and edits a draft. Nothing reaches
 GitHub until the user presses Post, which sends one review through `gh api`.
 
@@ -317,7 +317,7 @@ def _first_prompt(pr, sha, mb):
     body = (pr.get("body") or "").strip()[:6000] or "(no description)"
     return (
         "PR mode review for the dashboard. Review pull request #%d \"%s\" by @%s in this worktree: it is detached at "
-        "the PR head %s; the base is %s and the change is `git diff %s..HEAD` (merge-base). Load the lfg:expert "
+        "the PR head %s; the base is %s and the change is `git diff %s..HEAD` (merge-base). Load the lfg:review-coach "
         "skill and follow its PR mode: review Standards, Spec (against the PR description below) and Blast radius "
         "with the code graphs, and check dev-graph (Principles, Invariants, Decisions, Gaps for the components it "
         "touches) and second-brain notes so no known context is missed.\n\n"
@@ -363,7 +363,7 @@ def _child_env(root):
     target = H.base_url(C.main_root(root), use_env=False)
     if target and target.rstrip("/") == H.local_url():
         env["ANTHROPIC_BASE_URL"] = target
-        return env, "headroom"
+        return H.run_env(env), "headroom"
     return env, "direct"
 
 
@@ -1013,7 +1013,7 @@ def _triage_prompt(pr, meta, ths):
               for t in ths]
     return (
         "Comment triage mode for the dashboard. This is my own pull request #%d \"%s\"; the worktree is detached "
-        "at its head %s and the change is `git diff %s..HEAD`. Load the lfg:expert skill and follow its comment "
+        "at its head %s and the change is `git diff %s..HEAD`. Load the lfg:review-coach skill and follow its comment "
         "triage mode. For each comment thread below, check the comment against the actual code, the code graphs "
         "and what dev-graph and second-brain know (Principles, Invariants, Decisions for the touched components), "
         "then say how likely it is worth fixing (0-100) and why, and draft the replies I would post either way. "

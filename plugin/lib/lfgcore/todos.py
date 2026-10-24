@@ -139,6 +139,7 @@ def _env():
     target = H.base_url(None, use_env=False)
     if target and target.rstrip("/") == H.local_url():
         env["ANTHROPIC_BASE_URL"] = target
+        H.run_env(env)
     return env
 
 

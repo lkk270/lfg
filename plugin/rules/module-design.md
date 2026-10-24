@@ -2,7 +2,7 @@ Rule module: module-design · LFG · author Varun Singh · adapted from mattpoco
 
 # Module design: deep modules at clean seams
 
-Shared vocabulary for `/plan`, `/build`, `/expert` and `/health`. Use these words exactly.
+Shared vocabulary for `/plan`, `/build`, `/review-coach` and `/health`. Use these words exactly.
 
 ## Vocabulary
 

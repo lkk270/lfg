@@ -2,7 +2,7 @@
 name: wizard
 description: >
   Guided start-to-finish run of the whole pipeline on an idea or a Linear issue. Runs
-  every stage (grill, plan, build, check, secure, pentest, expert, ship check, ship
+  every stage (grill, plan, build, check, secure, pentest, review, ship check, ship
   packet, learn), explains each one in plain words before and after, and loops failures
   through /fix until all 8 gates are green (max 3 loops per gate). Use when the user types
   "/wizard <idea>", "/wizard LIN-123", "/wizard resume", "walk me through everything",
@@ -27,7 +27,7 @@ disable-model-invocation: true
    input: <idea | LIN-123>
    stage: <0-9>
    lane: <lane>            # recorded for the packet; /wizard still runs every stage
-   loops: {check: 0, secure: 0, pentest: 0, expert: 0, shipcheck: 0}
+   loops: {check: 0, secure: 0, pentest: 0, review: 0, shipcheck: 0}
    history: [<one line per stage / loop>]
    ```
 4. **Record the issue** exactly as `/lfg` Step 0.5 does: `lfg issue sync …`, then `lfg run set issue=… stage=grill`.
@@ -44,7 +44,7 @@ disable-model-invocation: true
 | 3 | `/build` | Test-first, parallel where possible | — |
 | 4 | `/check` | Lint, types, tests, build, CI replay. Failure → `/fix` → re-check | — |
 | 5 | `/secure` + `/pentest` | Every new package/URL/image vetted; full offline Strix run. Blocking finding → `/fix` → back to 4 | Decide only if a fix isn't possible ✋ |
-| 6 | `/expert` | Three-axis review. `changes` → `/fix` → back to 4 | Read the verdict |
+| 6 | `/review-coach` | Three-axis review. `changes` → `/fix` → back to 4 | Read the verdict |
 | 7 | Ship check | Docker build → run → smoke test → delete, plus every shipping requirement. Failure → `/fix` → back to 4 | — |
 | 8 | Ship packet | `COMMIT_MSG.md`, `PR_BODY.md`, summary of every loop it went through | **Commit, push, open the PR** ✋ |
 | 9 | After the push | `lfg watch` on CI; after merge, proposes moving LIN-482 to Done, then `/learn` | Approve the status change ✋ |
@@ -59,13 +59,13 @@ disable-model-invocation: true
 8. **Stage 8.** Write `COMMIT_MSG.md` and `PR_BODY.md` as `/ship` does, adding a "Fix loops" section from `history`. Checkpoint 5: the user commits, pushes and opens the PR.
 9. **Stage 9.** After the user says it's pushed: `lfg watch`. After merge: propose the Linear status change as exact text (checkpoint 7), then run `/learn`.
 
-**Fix loop (stages 4–7).** Any of: red `/check` or `lfg gate`, a blocking `/secure` finding, a high/critical `/pentest` finding, an `/expert` verdict of `changes`, or a red `lfg shipcheck`:
+**Fix loop (stages 4–7).** Any of: red `/check` or `lfg gate`, a blocking `/secure` finding, a high/critical `/pentest` finding, an `/review-coach` verdict of `changes`, or a red `lfg shipcheck`:
 1. Increment `loops.<gate>` and add a `history` line (what failed, file + finding id).
 2. If `loops.<gate>` > 3: stop, explain in plain words what was tried in each loop, and ask the user how to proceed.
 3. Run `/fix` inline with the failing file as the symptom (`04-qa.md`, `05-secure.json`, `05-pentest.json`, `06-review.json` or `07-shipcheck.json`).
 4. Re-run from stage 4 (`/check`) onward, never from the failed stage alone.
 - A `/secure`/`/pentest` finding `/fix` cannot fix (e.g. no safe version exists) → checkpoint 3: the user picks replace / accept with an `Issue`.
-- `/expert` verdict `block` → checkpoint 4; never auto-fixed.
+- `/review-coach` verdict `block` → checkpoint 4; never auto-fixed.
 
 ## Output
 
@@ -74,7 +74,7 @@ After each stage, one short plain-language paragraph. At stage 8:
 ```
 Run: RUN     Lane: <lane>     Input: <idea | LIN-123>
 Gates 1–8: all green (ready.json, 07-shipcheck.json)
-Fix loops: check 1 · secure 0 · pentest 0 · expert 1 · shipcheck 0  (details in progress.md)
+Fix loops: check 1 · secure 0 · pentest 0 · review 1 · shipcheck 0  (details in progress.md)
 Your turn: review the unstaged diff, commit, push, gh pr create --body-file RUN/PR_BODY.md
 ```
 

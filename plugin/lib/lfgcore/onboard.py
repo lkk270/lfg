@@ -16,7 +16,7 @@ FEATURES = {  # id -> what it is and the dashboard pages it adds (page keys are 
     "coding": {"name": "Building and fixing code", "description": "Plan, build, fix and ship changes with /lfg:lfg.",
                "skills": ["lfg", "build", "fix", "spike", "explain5", "suggest-tests"], "pages": ["insights"]},
     "reviews": {"name": "Code reviews", "description": "Review pull requests and AI chats before they merge.",
-                "skills": ["expert", "review-coach"], "pages": ["review", "insights"]},
+                "skills": ["review-coach"], "pages": ["review", "insights"]},
     "security": {"name": "Security checks", "description": "Dependency, secret and code scans; optional pentests.",
                  "skills": ["secure", "pentest"], "pages": ["checks"]},
     "knowledge": {"name": "Docs and knowledge", "description": "Project docs, decisions and what LFG remembers.",
@@ -24,8 +24,8 @@ FEATURES = {  # id -> what it is and the dashboard pages it adds (page keys are 
     "planning": {"name": "Planning and the code map", "description": "Issues, briefs, plans and the code graph.",
                  "skills": ["grill", "plan", "map"], "pages": ["issues", "code"]},
 }
-ALWAYS = ["home", "todos", "runs", "usage", "skills", "integrations", "settings", "help"]
-NAV_ORDER = ["home", "todos", "runs", "issues", "review", "checks", "code", "insights", "docs", "knowledge", "usage",
+ALWAYS = ["todos", "runs", "usage", "skills", "integrations", "settings", "help"]
+NAV_ORDER = ["todos", "runs", "issues", "review", "checks", "code", "insights", "docs", "knowledge", "usage",
              "skills", "integrations", "settings", "help"]
 DEFAULT = ["coding"]
 
