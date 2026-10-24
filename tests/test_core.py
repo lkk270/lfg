@@ -427,6 +427,19 @@ class UiTest(unittest.TestCase):
         self.assertEqual(dash.doc(rid, "playbooks", "../../config.json"), {"text": "not found"})
         self.assertEqual(dash.doc(rid, "nope", "x.md"), {"text": "not found"})
 
+    def test_a_checks_full_log_shows_its_end_with_secrets_hidden(self):
+        root, rid = git_repo()
+        rd = C.new_run(root, "x")
+        os.makedirs(os.path.join(rd, "gate-logs"))
+        key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        with open(os.path.join(rd, "gate-logs", "test.log"), "w") as fh:
+            fh.write("first line\n" + "x" * 500000 + "\nkey %s\nTests: 1 failed" % key)
+        text = dash.run_file(rid, os.path.basename(rd), "gate-logs/test.log")["text"]
+        self.assertTrue(text.startswith("(the first "))
+        self.assertTrue(text.endswith("Tests: 1 failed"))  # the summary at the end survives
+        self.assertNotIn("first line", text)
+        self.assertNotIn(key, text)
+
     def test_server_checks_host_and_header(self):
         import http.client
         import http.server

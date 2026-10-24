@@ -441,8 +441,18 @@ def run_file(rid, run, name):
     p = os.path.realpath(os.path.join(base, name)) if base else ""
     if not base or not p.startswith(base + os.sep) or not os.path.isfile(p):
         return {"text": "not found"}
-    with open(p, errors="replace") as fh:
-        return {"text": fh.read(400000), "name": name}
+    log = name.endswith(".log")
+    with open(p, "rb") as fh:
+        size = fh.seek(0, os.SEEK_END)
+        fh.seek(max(0, size - 400000) if log else 0)  # a log's failures are at its end, so keep the end
+        text = fh.read(400000).decode(errors="replace")
+    if log:  # a check's full output: hide secrets the same way its saved tail does
+        from .hooks import SECRET_OUTPUT_RX
+        for _k, rx in SECRET_OUTPUT_RX:
+            text = rx.sub("[REDACTED]", text)
+        if size > 400000:
+            text = "(the first %d KB are left out: only the end is shown)\n\n%s" % ((size - 400000) // 1000, text)
+    return {"text": text, "name": name}
 
 
 # ---------------------------------------------------------------- code-review-graph

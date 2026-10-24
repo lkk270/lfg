@@ -434,12 +434,15 @@ function taskItem(t) {
 /* A check that ran (tests, lint, ship check): failed ones open to show the error */
 const CHECK_NAMES = { lint: "Lint", types: "Type check", test: "Tests", build: "Build", secrets: "Secret scan",
   suppressions: "No new lint or test suppressions" };
-function checkItem(name, result, out, cmd) {
+function checkItem(name, result, out, cmd, log) {
   const [word, tone] = { pass: ["passed", "ok"], fail: ["failed", "bad"], skip: ["not run", ""], na: ["doesn't apply", ""], manual: ["for you to do", "warn"] }[result];
-  const body = !["pass", "skip", "na"].includes(result) && out ? `${cmd ? `<div class="muted small mono">${esc(cmd)}</div>` : ""}<pre class="out">${esc(out)}</pre>` : "";
+  // the saved output is only the last lines; the run folder keeps the whole log
+  const full = log ? `<div class="muted small">Last lines only. <a href="#" data-run-file="${esc(JSON.stringify(log))}" data-title="${esc(`Full log: ${CHECK_NAMES[name] || name}`)}">See the full log</a></div>` : "";
+  const body = !["pass", "skip", "na"].includes(result) && out ? `${cmd ? `<div class="muted small mono">${esc(cmd)}</div>` : ""}${full}<pre class="out">${esc(out)}</pre>` : "";
   return `<details class="item${body ? "" : " plain"}"><summary>${dot(tone)}<span class="grow">${esc(CHECK_NAMES[name] || (/\s/.test(name || "") ? name : (w => w.charAt(0).toUpperCase() + w.slice(1))(words(name || ""))))}</span><span class="muted small nowrap">${word}</span></summary>${body ? `<div class="item-body">${body}</div>` : ""}</details>`;
 }
-const readyChecks = cs => (cs || []).map(c => checkItem(c.name, c.exit === 0 ? "pass" : c.exit == null ? "skip" : "fail", c.tail, c.cmd)).join("");
+const readyChecks = (cs, run) => (cs || []).map(c => checkItem(c.name, c.exit === 0 ? "pass" : c.exit == null ? "skip" : "fail", c.tail, c.cmd,
+  run && c.cmd && c.exit ? [run, `gate-logs/${c.name}.log`] : null)).join("");
 const shipChecks = cs => (cs || []).map(c => checkItem(c.check || c.name, c.manual ? "manual" : c.status === "n/a" ? "na" : c.ok ? "pass" : c.ok == null ? "skip" : "fail", c.detail)).join("");
 /* 07-shipcheck.json: part A (container) checks + the shipping checklist, as one list (same as dash.shipcheck_items) */
 const shipItems = d => [].concat(((d.part_a || {}).checks || []).map(c => ({ check: c.check, ok: c.severity === "warn" && c.ok === false ? null : c.ok, detail: c.detail })),
@@ -492,7 +495,7 @@ function wire(root) {
     e.preventDefault();
     const [run, f] = JSON.parse(a.dataset.runFile);
     const d = await api("file", { run, f });
-    openDrawer(a.textContent, renderFile(f, d.text));
+    openDrawer(a.dataset.title || a.textContent, renderFile(f, d.text));
   });
   $$("[data-view]", root).forEach(b => b.onclick = async () => {
     const box = document.getElementById(b.dataset.target);
@@ -1281,7 +1284,7 @@ async function runDetail(run) {
   const recheck = d.owner_name || !d.current ? "" : d.checking
     ? `<p class="muted small" data-checks-running>Running the checks now (started ${ago(d.checking === true ? "" : d.checking)}). This page updates when they finish; a big project can take several minutes.</p>`
     : `<p><button class="btn small" data-run-checks="${esc(run)}">Run checks again</button> <span class="muted small">lint, types, tests and build, in the background</span></p>`;
-  const checks = d.checks.length ? `${recheck}<div class="box items">${readyChecks(d.checks)}</div>` : recheck;
+  const checks = d.checks.length ? `${recheck}<div class="box items">${readyChecks(d.checks, run)}</div>` : recheck;
   crumbs("runs", runName(d));
   return `${head(runName(d), `${d.ticket ? `<span class="tag mono">${esc(d.ticket)}</span> ` : ""}${d.owner_name ? `Filed under ${esc(d.owner_name)} · ` : ""}${d.branch ? `On branch ${esc(d.branch)} · ` : ""}started ${ago(d.created)}`, '<a class="back" href="#runs">← All runs</a>')}
     ${d.about ? `<p class="about lead">${txt(d.about)}</p>` : ""}
