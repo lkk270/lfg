@@ -1183,18 +1183,18 @@ function runLine(r, stages) {
   const p = runPlace(stages, r.stages, r);
   return p.finished ? "All steps done" : `${p.done} of ${p.total} steps · next: ${NEXT[p.next]}`;
 }
-/* Things on a run that need a person, as [tone, text] */
+/* Things on a run that need a person, as [tone, text, short label for the Runs table] */
 function runAttention(r) {
   const out = [];
-  if (r.review === "block") out.push(["bad", "The code review found something that must be fixed"]);
-  else if (r.review === "changes") out.push(["warn", "The code review asked for changes"]);
-  if (r.review && r.review_on_red) out.push(["warn", "The code review was written while checks were failing: if code changes to fix them, review again before shipping"]);
-  if (r.secure === "don't") out.push(["bad", "The security check found problems to fix"]);
-  if (r.ready === "red") out.push(["bad", "Tests or checks are failing"]);
-  else if (r.ready === "cant_run") out.push(["warn", `Some checks can't run on this computer: ${(r.cant_run || []).join(", ") || "a tool"} isn't installed. Nothing failed; install it to prove them here, or rely on CI`]);
-  else if (r.ready === "stale") out.push(["warn", "The last checks ran before the latest work, so their result is out of date: run /lfg:check"]);
-  if (r.shipcheck === "fail") out.push(["bad", "The ship check failed"]);
-  if (r.pentest === "refused") out.push(["warn", "The security test didn't run: open the Security test document to see why"]);
+  if (r.review === "block") out.push(["bad", "The code review found something that must be fixed", "Review: must fix"]);
+  else if (r.review === "changes") out.push(["warn", "The code review asked for changes", "Review: changes asked"]);
+  if (r.review && r.review_on_red) out.push(["warn", "The code review was written while checks were failing: if code changes to fix them, review again before shipping", "Reviewed on failing checks"]);
+  if (r.secure === "don't") out.push(["bad", "The security check found problems to fix", "Security problems"]);
+  if (r.ready === "red") out.push(["bad", "Tests or checks are failing", "Checks failing"]);
+  else if (r.ready === "cant_run") out.push(["warn", `Some checks can't run on this computer: ${(r.cant_run || []).join(", ") || "a tool"} isn't installed. Nothing failed; install it to prove them here, or rely on CI`, "Some checks can't run here"]);
+  else if (r.ready === "stale") out.push(["warn", "The last checks ran before the latest work, so their result is out of date: run /lfg:check", "Checks out of date"]);
+  if (r.shipcheck === "fail") out.push(["bad", "The ship check failed", "Ship check failed"]);
+  if (r.pentest === "refused") out.push(["warn", "The security test didn't run: open the Security test document to see why", "Security test didn't run"]);
   return out.sort((a, b) => (a[0] === "bad" ? 0 : 1) - (b[0] === "bad" ? 0 : 1));
 }
 
@@ -1247,7 +1247,7 @@ PAGES.runs = async arg => {
     <div class="box">${table(d.runs, [
       { k: "slug", label: "Work", html: r => `${esc(runName(r))}${r.current ? ' <span class="tag">current</span>' : ""}${r.about ? `<div class="about clamp">${txt(r.about)}</div>` : ""}<div class="sub">${r.owner ? `filed under ${esc(r.owner_name)} · ${plural(r.tasks_here, "task")} for this repo, ${n(r.tasks_here_done)} done` : r.branch ? `branch ${esc(r.branch)}` : ""}</div>`, sort: r => runName(r) },
       { k: "progress", label: "Where it is", html: r => esc(runLine(r, d.stages)), sort: r => r.progress },
-      { k: "attn", label: "Status", html: r => { const a = runAttention(r); return a.length ? `<span class="st">${dot(a[0][0])}${esc(a[0][1])}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
+      { k: "attn", label: "Status", html: r => { const a = runAttention(r); return a.length ? `<span class="st" title="${esc(a[0][1])}">${dot(a[0][0])}${esc(a[0][2])}${a.length > 1 ? ` +${a.length - 1}` : ""}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
       { k: "created", label: "Started", html: r => `<span class="nowrap">${ago(r.created)}</span>` },
     ], { onRow: r => (location.hash = "#runs/" + encodeURIComponent(r.run)), emptyTitle: "No runs yet", emptyBody: "Start one in Claude Code with <code>/lfg:lfg</code> and what you want built." })}</div>`;
 };
