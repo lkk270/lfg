@@ -328,7 +328,8 @@ class ShipcheckHonestTest(unittest.TestCase):
     def test_a_stacked_branch_is_measured_from_its_prs_base(self):
         root, _ = git_repo()
         def g(*a):
-            return subprocess.run(["git"] + list(a), cwd=root, check=True, capture_output=True, text=True).stdout
+            return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t"] + list(a), cwd=root,
+                                  check=True, capture_output=True, text=True).stdout
         def commit(name):
             os.makedirs(os.path.dirname(os.path.join(root, name)) or root, exist_ok=True)
             with open(os.path.join(root, name), "w") as fh:
