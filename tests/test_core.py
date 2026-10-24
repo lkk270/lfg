@@ -216,6 +216,198 @@ class ShipcheckTest(unittest.TestCase):
         self.assertTrue(info["healthcheck"])
 
 
+class ShipcheckHonestTest(unittest.TestCase):
+    """A ship check fails only on what the branch did: build args and credentials the repo declares, hadolint below
+    warning level and findings already on main don't fail it."""
+
+    def dockerfile(self, text):
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        with open(os.path.join(d, "Dockerfile"), "w") as fh:
+            fh.write(text)
+        return d
+
+    MONO = ("ARG BASE=node:22-slim\nFROM $BASE AS builder\nARG SERVICE_NAME\nARG COPY_TEMPLATES=false\n"
+            "FROM node:22-slim\nARG SERVICE_NAME\nARG START_SCRIPT\nARG TARGETPLATFORM\nENV PORT=8080\n"
+            "CMD npm run \"$START_SCRIPT\"\n")
+
+    # 1. one Dockerfile, many services: build args from shipcheck.json, or "needs build args"
+    def test_args_with_no_default_are_needed_and_passed_from_shipcheck_json(self):
+        d = self.dockerfile(self.MONO)
+        info = SC.dockerfile_info(os.path.join(d, "Dockerfile"))
+        self.assertEqual(info["args"], ["SERVICE_NAME", "START_SCRIPT"])  # defaults and Docker's own are fine
+        self.assertEqual(SC.missing_args(info, {}), ["SERVICE_NAME", "START_SCRIPT"])
+        self.assertEqual(SC.missing_args(info, {"SERVICE_NAME": "terraform", "START_SCRIPT": "x"}), [])
+        argv = SC.build_argv(d, "Dockerfile", "t:1", "run1", {}, {"SERVICE_NAME": "terraform", "START_SCRIPT": "s"})
+        self.assertIn("--build-arg", argv)
+        self.assertIn("SERVICE_NAME=terraform", argv)
+        self.assertIn("START_SCRIPT=s", argv)
+
+    def test_images_list_one_per_service_over_the_shared_settings(self):
+        spec = {"build_args": {"COPY_TEMPLATES": "false"}, "port": 8080,
+                "images": [{"name": "terraform", "build_args": {"SERVICE_NAME": "terraform"},
+                            "boot": {"needs_credential": True, "expect_log": "server.js"}},
+                           {"name": "portal", "build_args": {"SERVICE_NAME": "portal"}}]}
+        got = SC.images(spec)
+        self.assertEqual([i["name"] for i in got], ["terraform", "portal"])
+        self.assertEqual(got[0]["build_args"], {"COPY_TEMPLATES": "false", "SERVICE_NAME": "terraform"})
+        self.assertEqual((got[0]["port"], got[1]["boot"]), (8080, {}))
+        self.assertEqual([i["name"] for i in SC.images({"build_args": {"A": "1"}})], [""])
+
+    def test_missing_build_args_say_so_and_never_build(self):
+        root, rid = git_repo()
+        with open(os.path.join(root, "Dockerfile"), "w") as fh:
+            fh.write(self.MONO)
+        calls = []
+
+        def docker(*a, **kw):
+            calls.append(a)
+            return subprocess.CompletedProcess(a, 0, "", "")
+        with mock.patch.object(SC, "docker_ok", return_value=(True, "29")), \
+                mock.patch.object(SC, "_docker", side_effect=docker), \
+                mock.patch.object(SC, "lint_dockerfile", return_value=[]), \
+                mock.patch.object(SC, "checklist", return_value=[]), \
+                mock.patch.object(SC, "cleanup", return_value={"clean": True, "leftovers": {}}):
+            res = SC.shipcheck(root, rid)
+        self.assertFalse([a for a in calls if a and a[0] == "build"])
+        need = [c for c in res["part_a"]["checks"] if c.get("needs") == "build_args"]
+        self.assertEqual(len(need), 1)
+        self.assertIn("SERVICE_NAME", need[0]["detail"])
+        self.assertIsNone(need[0]["ok"])
+        self.assertEqual(res["status"], "needs_config")
+        self.assertFalse(res["pass"])
+
+    # 2. a service that reads secrets at startup: the entry point starting is the pass
+    def test_needs_credential_passes_when_the_entry_point_starts(self):
+        boot = {"needs_credential": True, "expect_log": "node build/terraform/src/server.js"}
+        routes = [{"path": "/health", "status": [200]}]
+        logs = ("> external-api@1.0.0 startTerraformService\n> node build/terraform/src/server.js\n"
+                "Error: could not read SUPABASE_API_ANON_KEY from the vault\n    at main (server.js:10)\n")
+        got = {c["check"]: c for c in SC.boot_checks(logs, boot, routes)}
+        start = got["entry point started (node build/terraform/src/server.js)"]
+        self.assertTrue(start["ok"])
+        route = got["route /health"]
+        self.assertEqual((route["ok"], route["skip"]), (None, "needs_credential"))
+        errs = got["no errors or stack traces in logs"]
+        self.assertEqual((errs["ok"], errs["skip"]), (None, "needs_credential"))  # after startup: expected
+        self.assertIn("SUPABASE_API_ANON_KEY", errs["detail"])
+        self.assertFalse(SC.boot_checks("> node other.js\n", boot, routes)[0]["ok"])
+        early = "FATAL: bad config\n> node build/terraform/src/server.js\n"
+        self.assertFalse({c["check"]: c for c in SC.boot_checks(early, boot, routes)}[
+            "no errors or stack traces in logs"]["ok"])  # before the entry point: still a failure
+
+    # 3. hadolint fails at warning or above, or the configured level
+    def test_hadolint_info_is_not_a_failure(self):
+        d = self.dockerfile("FROM node:22-slim\nUSER app\n")
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "Dockerfile:38 DL3066 info: Non-numeric user-id\n", "")
+        info = {"from": [], "user": "app", "healthcheck": True}
+        with mock.patch.object(C, "which", side_effect=lambda t: "/x" if t == "hadolint" else None), \
+                mock.patch.object(C, "run", side_effect=run):
+            checks = {c["check"]: c for c in SC.lint_dockerfile(d, "Dockerfile", info)}
+            self.assertTrue(checks["hadolint"]["ok"])
+            self.assertEqual(seen[-1][1:3], ["--failure-threshold", "warning"])
+            self.assertIn("DL3066", checks["hadolint"]["detail"])
+            SC.lint_dockerfile(d, "Dockerfile", info, threshold="error")
+            self.assertEqual(seen[-1][1:3], ["--failure-threshold", "error"])
+
+        def warn(argv, **kw):
+            out = "Dockerfile:3 DL3066 info: x\nDockerfile:9 DL3008 warning: pin"
+            return subprocess.CompletedProcess(argv, 1, out, "")
+        with mock.patch.object(C, "which", side_effect=lambda t: "/x" if t == "hadolint" else None), \
+                mock.patch.object(C, "run", side_effect=warn):
+            mine = SC.lint_dockerfile(d, "Dockerfile", info, changed=["Dockerfile"])[0]
+            old = SC.lint_dockerfile(d, "Dockerfile", info, changed=["src/app.ts"])[0]
+        self.assertFalse(mine["ok"])  # a warning in a Dockerfile the branch changed fails
+        self.assertTrue(mine["detail"].startswith("Dockerfile:9 DL3008 warning"))  # worst first, never cut off
+        self.assertEqual((old["ok"], old["skip"]), (None, "on_main"))  # the branch didn't touch it
+
+    def test_a_stacked_branch_is_measured_from_its_prs_base(self):
+        root, _ = git_repo()
+        def g(*a):
+            return subprocess.run(["git"] + list(a), cwd=root, check=True, capture_output=True, text=True).stdout
+        def commit(name):
+            os.makedirs(os.path.dirname(os.path.join(root, name)) or root, exist_ok=True)
+            with open(os.path.join(root, name), "w") as fh:
+                fh.write(name)
+            g("add", name)
+            g("commit", "-qm", name)
+        commit("base")
+        g("checkout", "-qb", "parent")
+        commit(".github/workflows/deploy.yml")  # the PR below changed a workflow
+        g("checkout", "-qb", "child")
+        commit("src/queue.ts")
+        with mock.patch.object(SC, "_pr_base", return_value="parent"):
+            base, what, files = SC.branch_changes(root)
+        self.assertEqual(files, ["src/queue.ts"])
+        self.assertIn("parent", what)
+        with mock.patch.object(SC, "_pr_base", return_value=""):
+            self.assertIn(".github/workflows/deploy.yml", SC.branch_changes(root)[2])  # no PR: from main
+
+    # 4. findings already on main are reported, not failed
+    REPORT = {"Results": [
+        {"Target": "debian 12.7", "Class": "os-pkgs", "Vulnerabilities": [
+            {"VulnerabilityID": "CVE-1", "PkgName": "openssl", "InstalledVersion": "3.0.15", "Severity": "CRITICAL"}]},
+        {"Target": "app/package-lock.json", "Class": "lang-pkgs", "Type": "npm", "Vulnerabilities": [
+            {"VulnerabilityID": "CVE-2", "PkgName": "lodash", "InstalledVersion": "4.17.20", "Severity": "HIGH"},
+            {"VulnerabilityID": "CVE-3", "PkgName": "axios", "InstalledVersion": "1.6.0", "Severity": "HIGH"}]},
+        {"Target": "/app/src/new.ts", "Class": "secret",
+         "Secrets": [{"RuleID": "aws-access-key", "Severity": "CRITICAL"}]},
+        {"Target": "/app/src/old.ts", "Class": "secret", "Secrets": [{"RuleID": "github-pat", "Severity": "HIGH"}]}]}
+    BASE_LOCK = {"package-lock.json": json.dumps({"packages": {"": {}, "node_modules/lodash": {"version": "4.17.20"},
+                                                              "node_modules/axios": {"version": "1.5.0"}}})}
+
+    def test_image_vulns_only_fail_when_the_branch_brought_them(self):
+        new, old = SC.split_image_findings(self.REPORT, self.BASE_LOCK, ["package-lock.json", "src/new.ts"])
+        self.assertEqual(sorted(x["id"] for x in new), ["CVE-3", "aws-access-key"])  # axios bumped, secret added
+        self.assertEqual(sorted(x["id"] for x in old), ["CVE-1", "CVE-2", "github-pat"])
+        new, old = SC.split_image_findings(self.REPORT, self.BASE_LOCK, ["src/other.ts"])
+        self.assertEqual(new, [])  # no lockfile or Dockerfile changed: every vuln was already there
+        new, _ = SC.split_image_findings(self.REPORT, self.BASE_LOCK, ["Dockerfile"])
+        self.assertIn("CVE-1", [x["id"] for x in new])  # a changed Dockerfile can bring OS packages
+
+    def test_only_workflows_the_branch_changed_can_fail(self):
+        root, _ = git_repo()
+        wdir = os.path.join(root, ".github", "workflows")
+        os.makedirs(wdir)
+        for f in ("a.yml", "b.yml"):
+            with open(os.path.join(wdir, f), "w") as fh:
+                fh.write("on: push\n")
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 1, "finding\n", "")
+        with mock.patch.object(C, "which", return_value="/x"), mock.patch.object(C, "run", side_effect=run):
+            got = SC.workflow_lint(root, [".github/workflows/b.yml", "src/app.ts"])
+        self.assertEqual(sorted(r["tool"] for r in got["introduced"]), ["actionlint", "zizmor"])
+        self.assertEqual(sorted(r["tool"] for r in got["on_main"]), ["actionlint", "zizmor"])
+        mine = [a for a in seen if any(x.endswith("b.yml") for x in a)]
+        self.assertTrue(mine and all(not any(x.endswith("a.yml") for x in a) for a in mine))
+        with mock.patch.object(C, "which", return_value="/x"), mock.patch.object(C, "run", side_effect=run):
+            got = SC.workflow_lint(root, ["src/app.ts"])
+        self.assertEqual(got["introduced"], [])
+        self.assertEqual(len(got["on_main"]), 2)
+
+    # the dashboard: every non-pass a declared skip -> "passed with skips", not red
+    def test_status_passes_with_skips_when_every_non_pass_is_declared(self):
+        ok = {"check": "build", "ok": True}
+        skip = {"check": "route /", "ok": None, "skip": "needs_credential"}
+        self.assertEqual(SC.status_of([ok], [{"status": "pass"}]), "pass")
+        self.assertEqual(SC.status_of([ok, skip], [{"status": "n/a"}]), "pass_with_skips")
+        self.assertEqual(SC.status_of([ok, {"check": "x", "ok": False}], []), "fail")
+        self.assertEqual(SC.status_of([ok, {"check": "x", "ok": False, "severity": "warn"}], []), "pass")
+        self.assertEqual(SC.status_of([ok, {"check": "b", "ok": None, "needs": "build_args"}], []), "needs_config")
+        self.assertEqual(SC.status_of([ok, skip], [{"status": "fail"}]), "fail")
+        root, rid = git_repo()
+        rd = C.new_run(root, "x")
+        C.write_json(os.path.join(rd, "07-shipcheck.json"), {"pass": True, "status": "pass_with_skips"})
+        self.assertEqual(dash._run_summary(rd)["shipcheck"], "skips")
+
+
 class OmnigraphTest(unittest.TestCase):
     def test_tokens_private_and_stable(self):
         t = OG.tokens()

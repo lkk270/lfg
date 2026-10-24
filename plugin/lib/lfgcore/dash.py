@@ -294,8 +294,17 @@ def _run_summary(d):
             "cant_run": sorted({t for c in (rd or {}).get("checks") or [] for t in c.get("cant_run") or []}),
             "secure": _verdict((se or {}).get("verdict")), "secure_on_main": (se or {}).get("on_main") or 0,
             "pentest": (pt or {}).get("status") if isinstance(pt, dict) else None,
-            "shipcheck": None if sc is None else ("pass" if sc.get("pass") else "fail"),
+            "shipcheck": _ship_state(sc),
             "tasks": {"total": len(tl), "done": sum(1 for t in tl if isinstance(t, dict) and t.get("passes"))}}
+
+
+def _ship_state(sc):
+    """07-shipcheck.json as one word: pass, skips (passed, with checks skipped for reasons the repo declared),
+    needs_config (the repo must say how to build its image) or fail."""
+    if sc is None:
+        return None
+    return {"pass_with_skips": "skips", "needs_config": "needs_config"}.get(sc.get("status")) or \
+        ("pass" if sc.get("pass") else "fail")
 
 
 def checks_running(d):
@@ -342,7 +351,7 @@ def _for_repo(summary, mine, d=None, rid=None):
     return dict(summary, stages=stages, progress=sum(stages.values()),
                 ready=None if rd is None else ("green" if rd.get("green") else "red"),
                 review=(rv or {}).get("verdict"), secure=_verdict((se or {}).get("verdict")), pentest=None,
-                shipcheck=None if sc is None else ("pass" if sc.get("pass") else "fail"),
+                shipcheck=_ship_state(sc),
                 tasks={"total": len(mine), "done": sum(bool(t.get("passes")) for t in mine)})
 
 
