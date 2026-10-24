@@ -294,6 +294,9 @@ def api(view, q):
                     "method_now": R.method_label((C.config().get("review") or {}).get("sources"))}
         except R.ReviewError as e:
             return {"available": False, "why": str(e)}
+    if view == "stack":  # stacked PRs and their epic; from a PR page there may be no repo picked
+        from . import stacks as SK
+        return SK.view(rid=_rid(q), gh=_arg(q, "gh"), pr=_arg(q, "pr"), run=_arg(q, "run"), ticket=_arg(q, "ticket"))
     rid = _rid(q)
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
