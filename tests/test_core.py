@@ -4331,7 +4331,8 @@ class StackTest(unittest.TestCase):
         from lfgcore import stacks as SK
         root, _ = git_repo()
         def g(*a):
-            subprocess.run(["git"] + list(a), cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t"] + list(a), cwd=root, check=True,
+                           capture_output=True)
         def commit(name):
             with open(os.path.join(root, name), "w") as fh:
                 fh.write(name)
