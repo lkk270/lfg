@@ -1069,3 +1069,6 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .stack-tk { font-size: 13px; }
 .stack-tt { color: var(--text-2); }
 .stack-epic { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; }
+
+/* Insights */
+.ins-pick { gap: 8px; margin: 8px 0 12px; } .ins-pick #ins-file { flex: 1; min-width: 260px; }

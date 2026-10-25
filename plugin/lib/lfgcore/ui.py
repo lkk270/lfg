@@ -301,6 +301,22 @@ def api(view, q):
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
                                            "on the first session."}
+    if view in ("insight_hotspots", "insight_why", "insight_files"):  # read-only git, only files git knows
+        from . import insights as IN
+        root = dash.repo_root(rid)
+        if not root or not os.path.isdir(root):
+            return {"error": "this project's folder isn't known yet; open Claude Code in it once"}
+        try:
+            if view == "insight_hotspots":
+                return dash.cached("hotspots:%s:%s" % (root, C.git_head(root)), 600, lambda: IN.hotspots(root))
+            if view == "insight_files":
+                q = (_arg(q, "q") or "").lower()
+                return {"files": [f for f in IN.files(root) if q in f.lower()][:40]}
+            s, e = _arg(q, "start"), _arg(q, "end")
+            return IN.why(root, IN.tracked(root, _arg(q, "file")), int(s) if s.isdigit() else None,
+                          int(e) if e.isdigit() else None)
+        except ValueError as e:
+            return {"error": str(e)}
     if view == "overview":
         return dash.overview(rid, _arg(q, "branch"))
     if view == "issues":

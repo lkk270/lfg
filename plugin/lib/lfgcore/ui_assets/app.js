@@ -1171,7 +1171,7 @@ async function offerTours() {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["docs", "Docs"],
+const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["insights", "Insights"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["integrations", "Integrations"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 const PAGES = {};
@@ -1401,6 +1401,57 @@ PAGES.issues = async () => {
       ["all", "All", d.issues.length, () => `<div class="box">${table(d.issues, cols, { onRow: open, emptyTitle: "No issues yet", emptyBody: "Run <code>/lfg:inbox</code> in Claude Code to bring in your Linear issues." })}</div>`],
     ])}`;
 };
+
+/* Insights: where this project keeps breaking (Hotspots) and why a file or some lines look the way they do (Why),
+   from git history only. Ported from upstream LFG. */
+PAGES.insights = async arg => {
+  const file = arg ? decodeURIComponent(arg) : "";
+  if (file) sessionStorage.setItem("lfg.tab.insights", "why");  // a file link opens on Why
+  const d = await api("insight_hotspots");
+  if (d.error) return `${head("Insights", "Where this project keeps breaking, and why code is the way it is.")}${unavailable({ why: d.error })}`;
+  const tag = f => tagHtml(f.level === "high" ? "Fix-prone" : "Watch", f.level === "high" ? "bad" : "warn");
+  const row = f => `<li><div class="grow"><div class="title">${tag(f)} <a class="mono" href="#insights/${encodeURIComponent(f.path)}">${esc(f.path)}</a>${f.trend === "rising" ? ` ${tagHtml("fixes rising", "warn")}` : ""}</div>
+    <div class="meta">${esc(f.reasons.join(" · "))}${f.tests.length ? ` · tested by <span class="mono">${esc(f.tests.slice(0, 2).join(", "))}</span>` : ""}</div>
+    ${f.recent_fixes.length ? `<details class="more"><summary class="small">Recent fixes</summary><ul class="small">${f.recent_fixes.map(x => `<li><span class="mono muted">${esc(x.date)}</span> ${esc(x.subject)}</li>`).join("")}</ul></details>` : ""}</div></li>`;
+  const areas = (d.areas || []).map(a => `<tr><td class="mono">${esc(a.area)}</td><td>${n(a.fixes)}</td><td>${n(a.changes)}</td><td>${n(a.files)}</td><td>${a.trend === "rising" ? tagHtml("rising", "warn") : a.trend === "falling" ? tagHtml("falling", "ok") : '<span class="muted">steady</span>'}</td></tr>`).join("");
+  const hot = `<p class="muted small">From ${plural(d.commits, "commit")} in the last ${d.days} days. Fixes are commits whose message says they fixed something; generated files are left out. Click a file to see why it's there.</p>
+    ${d.files.length ? `<ul class="items box">${d.files.map(row).join("")}</ul>` : empty("Nothing stands out", "No file changed twice or more in this window.")}
+    ${areas ? `<div class="k mt">By folder</div><div class="box"><table><thead><tr><th>Folder</th><th>Fixes</th><th>Changes</th><th>Files</th><th>Trend (last ${d.half} days)</th></tr></thead><tbody>${areas}</tbody></table></div>` : ""}`;
+  const why = `<div class="row wrap ins-pick"><input type="search" id="ins-file" list="ins-files" placeholder="A file in this project, e.g. src/app.py" value="${esc(file)}" autocomplete="off"><datalist id="ins-files"></datalist>
+    <input type="text" id="ins-lines" placeholder="Lines, e.g. 40-60 (optional)" size="18"><button class="btn primary" id="ins-go">Why is this here?</button></div><div id="ins-why"></div>`;
+  return `${head("Insights", "Where this project keeps breaking, and why code is the way it is. From git history only; nothing leaves this computer.")}
+    ${tabs("insights", [["hot", "Hotspots", d.files.length || null, () => hot], ["why", "Why is this here", null, () => why]])}`;
+};
+function insightWhy(d) {
+  if (d.error) return `<p class="muted">${esc(d.error)}</p>`;
+  if (!d.commits.length) return '<p class="muted">No commits found for that.</p>';
+  return `<p class="muted small">${plural(d.commits.length, "commit")} shaped ${esc(d.path)}${d.start ? `, lines ${d.start}-${d.end}` : ""}, newest first · ${plural(d.authors, "author")}${d.fixes ? ` · ${n(d.fixes)} ${d.fixes === 1 ? "fix" : "fixes"}` : ""}</p>
+    <ul class="items box">${d.commits.map(c => `<li><div class="grow"><div class="title">${c.fix ? tagHtml("fix", "warn") + " " : ""}${esc(c.subject)}</div>
+      <div class="meta">${c.url ? `<a class="mono" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.sha.slice(0, 8))} ↗</a>` : `<span class="mono">${esc(c.sha.slice(0, 8))}</span>`} · ${esc(c.author)} · ${esc(c.date)}${c.refs.map(r => ` · ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.label)} ↗</a>` : esc(r.label)}`).join("")}</div>
+      ${c.body ? `<details class="more"><summary class="small">The full message</summary><div class="pre-wrap small">${esc(c.body)}</div></details>` : ""}</div></li>`).join("")}</ul>`;
+}
+function wireInsights(root) {
+  const go = async () => {
+    const f = $("#ins-file", root), box = $("#ins-why", root);
+    if (!f || !box || !f.value.trim()) return;
+    const [s, e] = ($("#ins-lines", root).value.match(/\d+/g) || []);
+    box.innerHTML = '<div class="skeleton"></div>';
+    box.innerHTML = insightWhy(await api("insight_why", { file: f.value.trim(), ...(s ? { start: s, end: e || s } : {}) }));
+  };
+  const mount = () => {
+    const f = $("#ins-file", root);
+    if (!f || f.dataset.wired) return;
+    f.dataset.wired = "1";
+    let t;
+    f.oninput = () => { clearTimeout(t); t = setTimeout(async () => { const r = await api("insight_files", { q: f.value.trim() }); $("#ins-files", root).innerHTML = (r.files || []).map(x => `<option value="${esc(x)}">`).join(""); }, 200); };
+    f.onkeydown = e => { if (e.key === "Enter") go(); };
+    $("#ins-lines", root).onkeydown = e => { if (e.key === "Enter") go(); };
+    $("#ins-go", root).onclick = go;
+    if (f.value) go();
+  };
+  mount();
+  $$('[data-tabs="insights"] .tab', root).forEach(t => t.addEventListener("click", () => setTimeout(mount, 0)));
+}
 
 /* Local SonarQube: what SonarCloud would flag, found before you push */
 function sonarTab(q) {
@@ -3383,7 +3434,7 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "usage", "skills", "integrations", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "insights", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "usage", "skills", "integrations", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
@@ -3396,6 +3447,7 @@ const ICON = {
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
   prs: "M6 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 7v10M6 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17V9a3 3 0 0 0-3-3h-4M13 3.5 10.5 6 13 8.5",
   code: "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14",
+  insights: "M3 17l6-6 4 4 8-8M15 7h6v6",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
   folder: "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z",
   knowledge: "M4 5.5C6.5 4 9.5 4 12 6c2.5-2 5.5-2 8-.5V19c-2.5-1.5-5.5-1.5-8 .5-2.5-2-5.5-2-8-.5zM12 6v13.5",
@@ -3557,6 +3609,7 @@ function wireView(key, view) {
   if (key === "environment") wireEnvironment(view);
   if (key === "checks") { $$('[data-tabs="checks"] .tab', view).forEach(t => t.addEventListener("click", () => setTimeout(() => wireSonar(view), 0))); wireSonar(view); }
   if (key === "usage") { wireUsage(view); loadHeadroom(); }
+  if (key === "insights") wireInsights(view);
 }
 /* What shows while a page loads the first time: its shape, shimmering, and what it's waiting on when that's slow. */
 const SLOW = { prs: "Asking GitHub for your pull requests…", usage: "Adding up every session's usage…", environment: "Checking your setup…", sessions: "Reading your sessions…" };
