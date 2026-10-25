@@ -1080,3 +1080,7 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .sess-work:empty { display: none; }
 .sess-bg { list-style: none; margin: 4px 0 6px; padding: 0; }
 .sess-bg li { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+
+
+/* Insights */
+.ins-pick { gap: 8px; margin: 8px 0 12px; } .ins-pick #ins-file { flex: 1; min-width: 260px; }

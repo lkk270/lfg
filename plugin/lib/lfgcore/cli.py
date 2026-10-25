@@ -664,6 +664,41 @@ def cmd_rule(a):
     return 0
 
 
+def cmd_hotspots(a):
+    from . import insights as IN
+    root, _rid = C.need_repo()
+    d = IN.hotspots(root, days=a.days)
+    if a.json:
+        print(json.dumps(d, indent=2))
+        return 0
+    print("Files that keep needing fixes, last %d days (%d commits):" % (d["days"], d["commits"]))
+    for f in d["files"]:
+        print("  %-5s %s: %s" % (f["level"], f["path"], "; ".join(f["reasons"])))
+    if d["rising"]:
+        print("Fixes rising in: %s" % ", ".join(d["rising"]))
+    return 0
+
+
+def cmd_why(a):
+    from . import insights as IN
+    root, _rid = C.need_repo()
+    path, _, span = a.target.partition(":")
+    start, _, end = span.partition("-")
+    try:
+        d = IN.why(root, IN.tracked(root, path), int(start) if start.isdigit() else None,
+                   int(end) if end.isdigit() else None)
+    except ValueError as e:
+        C.die(str(e), 2)
+    if a.json:
+        print(json.dumps(d, indent=2))
+        return 0
+    for c in d["commits"]:
+        print("%s %s %s%s: %s" % (c["sha"][:8], c["date"], c["author"], " (fix)" if c["fix"] else "", c["subject"]))
+        for r in c["refs"]:
+            print("    %s %s" % (r["label"], r["url"]))
+    return 0
+
+
 def cmd_repo(a):
     root, rid = C.need_repo()
     if a.action == "root":
@@ -1318,6 +1353,12 @@ def main(argv=None):
     iss.add_argument("--json", action="store_true")
     ru = sp.add_parser("rule")
     ru.add_argument("name")
+    ho = sp.add_parser("hotspots", help="files that keep needing fixes, from git history")
+    ho.add_argument("--days", type=int, default=180)
+    ho.add_argument("--json", action="store_true")
+    wy = sp.add_parser("why", help="the commits that shaped a file or lines: why is this here")
+    wy.add_argument("target", metavar="FILE[:START-END]")
+    wy.add_argument("--json", action="store_true")
     rp = sp.add_parser("repo")
     rp.add_argument("action", choices=["docs", "id", "root", "graph"],
                     help="root: main checkout (also from a worktree); graph: graphify graph.json path")
@@ -1497,6 +1538,7 @@ def main(argv=None):
         a.action = a.cmd
         return cmd_packs(a)
     return {"init": cmd_init, "graphs": cmd_graphs, "run": cmd_run, "rule": cmd_rule, "repo": cmd_repo,
+            "hotspots": cmd_hotspots, "why": cmd_why,
             "lane": cmd_lane, "gate": cmd_gate, "ci-local": cmd_ci_local, "secure": cmd_secure,
             "pentest": cmd_pentest, "shipcheck": cmd_shipcheck, "watch": cmd_watch, "feedback": cmd_feedback,
             "usage": cmd_usage, "sessions": cmd_sessions, "update": cmd_update, "knowledge": cmd_knowledge,
