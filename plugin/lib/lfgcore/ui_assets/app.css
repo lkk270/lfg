@@ -1928,3 +1928,17 @@ body.sg-open { overflow: hidden; }
 .sg-a { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
 @keyframes sg-pulse { 50% { box-shadow: 0 0 0 2px var(--blue), 0 0 0 11px color-mix(in srgb, var(--blue) 12%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .sg-ring { animation: none; transition: none; } .sg-card { transition: none; } }
+
+/* the launch film, on the home page for watching again */
+.lp-film-v { position: relative; border-radius: 6px; overflow: hidden; background: #000; border: 1px solid var(--line);
+  box-shadow: 0 24px 60px -24px color-mix(in srgb, var(--blue) 45%, transparent); }
+.lp-film-v video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+
+/* launch film popup (home page, once): only the video, on a dim backdrop; click outside or Esc closes it */
+.lv { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; }
+.lv-shade { position: absolute; inset: 0; background: rgba(5, 9, 20, .72); backdrop-filter: blur(4px); animation: lv-in .2s ease-out; cursor: pointer; }
+.lv-v { position: relative; display: block; width: min(1040px, 100%, calc((100vh - 48px) * 16 / 9)); aspect-ratio: 16 / 9; background: #000; border-radius: 4px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .5), 0 0 0 1px color-mix(in srgb, var(--blue) 25%, transparent); animation: lv-up .24s ease-out; cursor: pointer; }
+@keyframes lv-in { from { opacity: 0; } }
+@keyframes lv-up { from { opacity: 0; transform: scale(.98); } }
+@media (prefers-reduced-motion: reduce) { .lv-shade, .lv-v { animation: none; } }

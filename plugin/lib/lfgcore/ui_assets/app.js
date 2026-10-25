@@ -2,8 +2,14 @@
 (h => { if (!h || h === "#" || /^#(lfg|onboarding|unlock=)/.test(h)) document.body.classList.add("bare"); })(location.hash);
 /* Appearance (Settings → Appearance), kept per browser: mode, a light and a dark theme, accent, density, text size,
    glow and motion. Applied before the first paint, and again when the system switches light/dark. */
-const AP_DEFAULT = { mode: "system", light: "lfg", dark: "midnight", accent: "blue", density: "comfortable", text: "m", glow: "on", motion: "on" };
-function apRead() { try { return Object.assign({}, AP_DEFAULT, JSON.parse(localStorage.getItem("lfg.appearance") || "{}")); } catch (e) { return Object.assign({}, AP_DEFAULT); } }
+const AP_DEFAULT = { mode: "system", light: "lfg", dark: "midnight", accent: "orange", density: "comfortable", text: "m", glow: "on", motion: "on" };
+function apRead() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("lfg.appearance") || "{}");
+    if (!saved.v && saved.accent === "blue") delete saved.accent;  // blue was the default before v2, not a choice
+    return Object.assign({}, AP_DEFAULT, saved);
+  } catch (e) { return Object.assign({}, AP_DEFAULT); }
+}
 function apApply(a) {
   a = a || apRead();
   const dark = a.mode === "dark" || (a.mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
@@ -11,7 +17,7 @@ function apApply(a) {
   r.mode = dark ? "dark" : "light"; r.theme = dark ? a.dark : a.light;
   r.accent = a.accent; r.density = a.density; r.text = a.text; r.glow = a.glow; r.motion = a.motion;
 }
-function apSet(k, v) { const a = apRead(); a[k] = v; try { localStorage.setItem("lfg.appearance", JSON.stringify(a)); } catch (e) { /* private window: this visit only */ } apApply(a); apFavicon(); return a; }
+function apSet(k, v) { const a = apRead(); a[k] = v; a.v = 2; try { localStorage.setItem("lfg.appearance", JSON.stringify(a)); } catch (e) { /* private window: this visit only */ } apApply(a); apFavicon(); return a; }
 /* The logo, drawn in the accent colour (inline, so it follows the theme); the favicon is rebuilt to match. */
 let LOGO_N = 0;
 function logoSvg(size) {
@@ -692,7 +698,7 @@ const AP_THEMES = {
     ["graphite", "Graphite", "Neutral grey, no tint", ["#111214", "#18191c", "#ececee", "#3b82f6", "#141518"]],
     ["carbon", "Carbon", "True black for OLED screens", ["#000000", "#0a0a0b", "#f2f2f3", "#3b82f6", "#050506"]]],
 };
-const AP_ACCENTS = [["blue", "#2563eb"], ["violet", "#7c3aed"], ["green", "#059669"], ["orange", "#ea580c"], ["rose", "#e11d48"]];
+const AP_ACCENTS = [["orange", "#ea580c"], ["blue", "#2563eb"], ["violet", "#7c3aed"], ["green", "#059669"], ["rose", "#e11d48"]];
 function settingsAppearance() {
   const a = apRead();
   const seg = (k, opts) => `<div class="seg">${opts.map(([v, t]) => `<button class="pill${a[k] === v ? " on" : ""}" data-ap="${k}" data-v="${v}">${t}</button>`).join("")}</div>`;
@@ -1577,7 +1583,7 @@ PAGES.lfg = async () => {
   let n = 0;
   try { n = ((await api("guide")).skills || []).length; } catch (e) { n = 0; }
   return `<div class="lp">
-  <header class="lp-nav"><a href="#lfg" class="lp-home" data-scroll="top" aria-label="Back to the top">${lfgMark()}</a><nav><a href="#lfg" data-scroll="lp-features">Features</a><a href="#lfg" data-scroll="lp-reviews">Reviews</a><a href="#lfg" data-scroll="lp-thanks">Open source</a><a href="#onboarding">Intro</a></nav>
+  <header class="lp-nav"><a href="#lfg" class="lp-home" data-scroll="top" aria-label="Back to the top">${lfgMark()}</a><nav><a href="#lfg" data-scroll="lp-film">Film</a><a href="#lfg" data-scroll="lp-features">Features</a><a href="#lfg" data-scroll="lp-reviews">Reviews</a><a href="#lfg" data-scroll="lp-thanks">Open source</a><a href="#onboarding">Intro</a></nav>
     <a class="btn primary" href="#sessions">Open dashboard →</a></header>
   <section class="lp-hero">
     <span class="wl-pill"><span class="tag">New</span> Insights and talk-to-the-diff reviews</span>
@@ -1599,6 +1605,8 @@ PAGES.lfg = async () => {
     <div><b>Read intent,<br>not diffs.</b><p>Every change arrives with why it was made, what it touches and what to ask before you approve it.</p></div>
     <div><b>Ship with proof,<br>not hope.</b><p>Lint, types, tests, security and a review on every change, judged from exit codes, never an agent's claim.</p></div>
   </section>
+  <section class="lp-sec lp-film lp-reveal" id="lp-film"><div class="lp-k">The launch film</div><h2>See it in <em>a minute and a half.</em></h2>
+    <div class="lp-film-v"><video src="${LAUNCH_VIDEO}" controls playsinline preload="metadata" aria-label="The LFG launch film"></video></div></section>
   <section class="lp-sec lp-feats" id="lp-features"><div class="lp-k">What you get</div><h2>Everything you'd open an editor for. <em>Without one.</em></h2>
     ${SHOWCASE.map(([k, ico, punch, d, v, href], i) => `<div class="lp-row lp-reveal${i % 2 ? " flip" : ""}"${k === "Reviews" ? ' id="lp-reviews"' : ""}><div class="lp-copy"><span class="lp-kick">${icon(ico)}${k}</span><h3>${punch}</h3><p>${d}</p><a href="${href}" class="lp-link">Open ${k} →</a></div><div class="lp-vis" aria-hidden="true">${v()}</div></div>`).join("")}
   </section>
@@ -1619,11 +1627,47 @@ function wireLanding(root) {
   if (!("IntersectionObserver" in window) || matchMedia("(prefers-reduced-motion: reduce)").matches) {
     parts.forEach(x => x.classList.add("in"));
     if (win) { $$(".lp-win-steps li", win).forEach(li => { li.className = "done"; }); $(".lp-win-ask", win).classList.add("on", "ok"); $(".lp-win-done", win).classList.add("on"); }
+    launchVideo();
     return;
   }
   if (win) heroRun(win);
+  launchVideo();
   const io = new IntersectionObserver(es => es.forEach(x => { if (x.isIntersecting) { x.target.classList.add("in"); io.unobserve(x.target); } }), { threshold: 0.2 });
   parts.forEach(x => io.observe(x));
+}
+
+/* The launch film, offered once on the home page. Watching it to the end or closing it marks it seen (tours.json),
+   so it never comes back; it waits until the first-run setup guide is done so the two never stack. */
+const LAUNCH_VIDEO = "https://github.com/user-attachments/assets/bcc10777-99ec-4f32-9b55-19702dbade8f";
+async function launchVideo() {
+  if ($(".lv")) return;
+  let t;
+  try { t = await api("tours"); } catch (e) { return; }
+  if (!t || t.launch_video_seen || !t.setup_guide_done || (location.hash.slice(1).split("/")[0] || "lfg") !== "lfg") return;
+  const box = document.createElement("div");
+  box.className = "lv";
+  box.innerHTML = `<div class="lv-shade"></div><video class="lv-v" src="${LAUNCH_VIDEO}" playsinline preload="auto" aria-label="The LFG launch film"></video>`;
+  document.body.appendChild(box);
+  const v = $(".lv-v", box);
+  let gone = false;
+  const close = () => {
+    if (gone) return;
+    gone = true;
+    try { v.pause(); } catch (e) { /* ignore */ }
+    box.remove();
+    document.removeEventListener("keydown", onKey, true);
+    document.removeEventListener("pointerdown", unmute, true);
+    save("tour_done", { name: "launch-video", how: v.currentTime > 0 ? "finished" : "skipped" });
+  };
+  // Browsers only autoplay with sound after the page has had a click or key press. If this one refuses, play muted
+  // and turn the sound on at the first click or key press, which then also counts as permission to play.
+  const unmute = () => { v.muted = false; v.play().catch(() => {}); document.removeEventListener("pointerdown", unmute, true); };
+  const onKey = e => { if (e.key === "Escape") close(); else unmute(); };
+  document.addEventListener("keydown", onKey, true);
+  box.addEventListener("click", e => { if (e.target === v) { if (v.muted) return; v.paused ? v.play() : v.pause(); } else close(); });
+  v.addEventListener("ended", close);
+  window.addEventListener("hashchange", close, { once: true });
+  v.play().catch(() => { v.muted = true; v.play().catch(() => {}); document.addEventListener("pointerdown", unmute, true); });
 }
 
 /* The hero's window plays a whole run: each stage works, then is done; the permission prompt shows up during Build

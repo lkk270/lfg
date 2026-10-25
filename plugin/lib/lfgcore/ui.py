@@ -28,6 +28,7 @@ ASSET_TYPES = {"html": "text/html", "js": "text/javascript", "css": "text/css", 
 
 # The dashboard itself loads nothing from outside 127.0.0.1.
 PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "media-src 'self' https://github.com https://github-production-user-asset-6210df.s3.amazonaws.com; "
             "connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; "
             "frame-ancestors 'none'")
 # Tool-generated views (graphify graph/call-flow, code-review-graph graph) pull their chart libraries from

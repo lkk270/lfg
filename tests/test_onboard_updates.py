@@ -652,6 +652,12 @@ class InsightsTest(unittest.TestCase):
         K.tour_done("news-welcome", "closed")
         self.assertTrue(K.tours_view()["news_welcome_closed"])
 
+    def test_launch_video_popup_is_shown_once(self):
+        from lfgcore import control as K
+        self.assertFalse(K.tours_view()["launch_video_seen"])
+        K.tour_done("launch-video", "skipped")
+        self.assertTrue(K.tours_view()["launch_video_seen"])
+
 
 class ReviewCoachRulesTest(unittest.TestCase):
     def test_comments_strings_and_plain_lookups_are_not_findings(self):
