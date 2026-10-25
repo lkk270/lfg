@@ -691,10 +691,10 @@ function settingsGroups(cfg, unlocked) {
   return out;
 }
 const AP_THEMES = {
-  light: [["lfg", "LFG", "Soft white and blue", ["#f6f8fc", "#ffffff", "#0e1729", "#2563eb", "#f1f4fa"]],
+  light: [["lfg", "LFG", "Soft white, cool ink", ["#f6f8fc", "#ffffff", "#0e1729", "#2563eb", "#f1f4fa"]],
     ["paper", "Paper", "Warm neutral, easy on the eyes", ["#fbfaf7", "#ffffff", "#2b2a26", "#2563eb", "#f6f4ef"]],
     ["mist", "Mist", "Cool grey, crisp contrast", ["#f4f5f7", "#ffffff", "#111318", "#2563eb", "#eceef2"]]],
-  dark: [["midnight", "Midnight", "Deep navy with a blue glow", ["#070b14", "#0d1424", "#e6ebf5", "#3b82f6", "#0a101e"]],
+  dark: [["midnight", "Midnight", "Deep navy with an accent glow", ["#070b14", "#0d1424", "#e6ebf5", "#3b82f6", "#0a101e"]],
     ["graphite", "Graphite", "Neutral grey, no tint", ["#111214", "#18191c", "#ececee", "#3b82f6", "#141518"]],
     ["carbon", "Carbon", "True black for OLED screens", ["#000000", "#0a0a0b", "#f2f2f3", "#3b82f6", "#050506"]]],
 };
@@ -702,8 +702,8 @@ const AP_ACCENTS = [["orange", "#ea580c"], ["blue", "#2563eb"], ["violet", "#7c3
 function settingsAppearance() {
   const a = apRead();
   const seg = (k, opts) => `<div class="seg">${opts.map(([v, t]) => `<button class="pill${a[k] === v ? " on" : ""}" data-ap="${k}" data-v="${v}">${t}</button>`).join("")}</div>`;
-  const card = (kind, [id, name, about, [pg, sf, tx, ac, sd]]) => `<button class="ap-theme${a[kind] === id ? " on" : ""}" data-ap="${kind}" data-v="${id}" style="--p:${pg}">
-    <span class="ap-prev" style="background:${pg}"><i class="s" style="background:${sd}"></i><span class="c" style="background:${sf};box-shadow:0 0 0 1px ${tx}1a"><b style="background:${tx}"></b><b style="background:${tx}55"></b><b class="a" style="background:${ac}"></b></span></span>
+  const card = (kind, [id, name, about, [pg, sf, tx, , sd]]) => `<button class="ap-theme${a[kind] === id ? " on" : ""}" data-ap="${kind}" data-v="${id}" style="--p:${pg}">
+    <span class="ap-prev" style="background:${pg}"><i class="s" style="background:${sd}"></i><span class="c" style="background:${sf};box-shadow:0 0 0 1px ${tx}1a"><b style="background:${tx}"></b><b style="background:${tx}55"></b><b class="a" style="background:var(--blue)"></b></span></span>
     <span class="ap-name">${esc(name)}<span class="muted">${esc(about)}</span></span></button>`;
   const row = (label, help, ctl) => `<div class="set-row"><div><div class="set-label">${label}</div>${help ? `<div class="set-help">${help}</div>` : ""}</div><div class="set-input">${ctl}</div></div>`;
   return `<div class="set-section"><h4>Mode</h4>${row("Light or dark", "System follows your computer's setting.", seg("mode", [["system", "System"], ["light", "Light"], ["dark", "Dark"]]))}</div>

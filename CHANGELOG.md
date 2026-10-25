@@ -5,6 +5,7 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 ## Unreleased
 
 ### Added
+- **README gallery**: six screenshots of the dashboard (`docs/gallery/`) in a 3 × 2 grid. Theme previews in Appearance now draw in your accent colour.
 - **Orange is LFG's accent colour now** (logo, favicon, heroes, buttons). Blue and the others are still in Settings → Appearance. A blue saved before this change was just the old default, so it switches to orange; blue picked from now on stays.
 - **Launch film** on the home page: a "The launch film" section (and a Film link in the top nav) to watch it any time, plus a popup that plays it once, until you watch it or close it (remembered in `~/.lfg/state/tours.json` as `launch-video`). The video streams from GitHub; the page's CSP allows media from GitHub's asset hosts only.
 - **Star LFG, only if you want to**: `lfg setup` asks once in a terminal when the GitHub CLI is signed in (Enter means no), and the dashboard's Star buttons star it in one click from your account (or open GitHub when `gh` isn't signed in). LFG never stars or writes to GitHub on its own. Remembered in `~/.lfg/state/github.json`.

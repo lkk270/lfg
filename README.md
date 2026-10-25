@@ -14,6 +14,19 @@ https://github.com/user-attachments/assets/bcc10777-99ec-4f32-9b55-19702dbade8f
 grill → plan → build → check ∥ secure ∥ pentest → expert review → ship packet → you commit
 ```
 
+<table>
+  <tr>
+    <td width="33%" align="center"><a href="docs/gallery/01-home.jpg"><img src="docs/gallery/01-home.jpg" alt="Home"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/02-insights-hotspots.jpg"><img src="docs/gallery/02-insights-hotspots.jpg" alt="Insights: hotspots"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/03-code-map.jpg"><img src="docs/gallery/03-code-map.jpg" alt="Code: where changes are riskiest"></a></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/gallery/04-checks-guard.jpg"><img src="docs/gallery/04-checks-guard.jpg" alt="Checks: actions the guard stopped"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/05-docs.jpg"><img src="docs/gallery/05-docs.jpg" alt="Docs and the code wiki"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/06-appearance.jpg"><img src="docs/gallery/06-appearance.jpg" alt="Appearance: six themes, five accents"></a></td>
+  </tr>
+</table>
+
 ## Install
 
 One command installs and sets up LFG (macOS, Python 3.9+, Claude Code installed):
