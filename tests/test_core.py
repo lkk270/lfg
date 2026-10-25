@@ -2680,3 +2680,13 @@ class RunSummaryTest(unittest.TestCase):
         self.assertEqual(dash._blocking({"blocking": 3}), 3)
         self.assertEqual(dash._blocking({"verdict": {"overall": "don't", "blocking": ["a", "b"]}}), 2)
         self.assertEqual(dash._blocking({"findings": [{"blocking": True}, {"blocking": False}]}), 1)
+
+
+class PentestSummaryTest(unittest.TestCase):
+    def test_structured_summary_reads_as_a_sentence(self):
+        from lfgcore import dash as D
+        s = D._pentest_summary({"critical": 1, "high": 2, "medium": 0, "low": 1, "info": 0, "total": 4,
+                                "blocking": ["P-2"], "recommendation": "Fix P-2 first."})
+        self.assertEqual(s, "Found 1 critical, 2 high, 1 low. Fix P-2 first.")
+        self.assertEqual(D._pentest_summary("All clear."), "All clear.")
+        self.assertIsNone(D._pentest_summary({"total": 0}))

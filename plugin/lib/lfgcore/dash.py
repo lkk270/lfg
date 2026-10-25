@@ -1092,6 +1092,17 @@ def reviews(rid, branch=None):
     return {"findings": findings, "verdicts": verdicts, "blocked": blocked[:200], "blocked_by_rule": rules}
 
 
+def _pentest_summary(v):
+    """A pentest report's summary as one sentence. Agents write it as text, or as counts plus a recommendation:
+    {"critical": 1, "high": 2, ..., "recommendation": "..."} reads as "1 critical, 2 high. <recommendation>"."""
+    if not isinstance(v, dict):
+        return v
+    sev = ", ".join("%d %s" % (v[k], k) for k in ("critical", "high", "medium", "low") if isinstance(v.get(k), int) and v[k])
+    rest = v.get("recommendation") or v.get("verdict") or v.get("text") or ""
+    out = ". ".join(x for x in (("Found " + sev) if sev else "", str(rest).strip()) if x)
+    return out or None
+
+
 def security(rid, branch=None):
     sec, pen = [], []
     for p in stage_files(rid, "05-secure.json", branch):
@@ -1107,8 +1118,10 @@ def security(rid, branch=None):
     for p in stage_files(rid, "05-pentest.json", branch):
         s = C.read_json(p, {}) or {}
         keep = ("mode", "model", "status", "next_steps", "preflight_failures")
-        pen.append({"run": os.path.basename(os.path.dirname(p)), **{k: s.get(k) for k in keep},
-                    "summary": s.get("summary") or s.get("conclusion")})
+        row = {"run": os.path.basename(os.path.dirname(p)), **{k: s.get(k) for k in keep},
+               "summary": _pentest_summary(s.get("summary") or s.get("conclusion"))}
+        row["status"] = row["status"] or s.get("tool_status")
+        pen.append(row)
     ships = []
     for p in stage_files(rid, "07-shipcheck.json", branch)[:10]:
         s = C.read_json(p, {}) or {}

@@ -401,7 +401,25 @@ function renderFile(name, text) {
 }
 
 // ------------------------------------------------------------------ readable views (never raw JSON)
-const txt = v => inline(typeof v === "string" ? v : v == null ? "" : String(v));
+/* Agents sometimes write a field as structured data ({criterion, seam}, a list, counts) where a sentence was expected:
+   flatten it to readable text instead of "[object Object]". */
+const human = k => String(k).replace(/[_-]+/g, " ").replace(/^\w/, c => c.toUpperCase());
+function plain(v) {
+  if (v == null) return "";
+  if (typeof v !== "object") return String(v);
+  if (Array.isArray(v)) return v.map(plain).filter(Boolean).join("; ");
+  return Object.entries(v).filter(([, x]) => x != null && x !== "" && !(Array.isArray(x) && !x.length))
+    .map(([k, x]) => `${human(k)}: ${plain(x)}`).join(" · ");
+}
+const txt = v => inline(plain(v));
+/* A task's verification: a sentence, or {criterion, seam} (what must hold, and where it's proved) */
+function verifyHtml(v) {
+  if (v && typeof v === "object" && !Array.isArray(v) && (v.criterion || v.seam)) {
+    const rest = Object.fromEntries(Object.entries(v).filter(([k]) => k !== "criterion" && k !== "seam"));
+    return `${v.criterion ? `<p>${txt(v.criterion)}</p>` : ""}${v.seam ? `<p class="muted small">Proved by: ${txt(v.seam)}</p>` : ""}${Object.keys(rest).length ? `<p class="muted small">${txt(rest)}</p>` : ""}`;
+  }
+  return `<p>${txt(v)}</p>`;
+}
 const label = k => { const s = words(k).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); };
 /* Any JSON as headings, lists and sentences */
 function readable(v) {
@@ -445,7 +463,7 @@ function taskItem(t) {
   if (!t || typeof t !== "object") return "";
   const steps = Array.isArray(t.steps) ? t.steps : [], deps = Array.isArray(t.depends_on) ? t.depends_on : [];
   const body = `${steps.length ? `<div class="k">Steps</div><ol>${steps.map(s => `<li>${txt(s)}</li>`).join("")}</ol>` : ""}
-    ${t.verification ? `<div class="k">How we know it works</div><p>${txt(t.verification)}</p>` : ""}
+    ${t.verification ? `<div class="k">How we know it works</div>${verifyHtml(t.verification)}` : ""}
     ${t.notes ? `<div class="k">Notes</div><p>${txt(t.notes)}</p>` : ""}
     ${deps.length ? `<p class="muted small">Waits for: ${esc(deps.join(", "))}</p>` : ""}`;
   return `<details class="item"><summary>${dot(t.passes ? "ok" : "")}<span class="grow">${txt(t.description || t.id || "Task")}</span><span class="muted small nowrap">${t.passes ? "done" : "to do"}</span></summary><div class="item-body">${body}</div></details>`;
