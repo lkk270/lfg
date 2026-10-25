@@ -1070,5 +1070,17 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .stack-tt { color: var(--text-2); }
 .stack-epic { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; }
 
+/* a session's own changes and its background work */
+.sc-file { border: 1px solid var(--line); border-radius: 6px; margin: 10px 0; }
+.sc-file > summary { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+.sc-file .pr-snip { margin: 0 8px 8px; }
+.sc td.pick { cursor: pointer; } .sc td.pick:hover { color: var(--text); }
+.sc tr.sel td { background: var(--blue-bg); } .sc tr.sel td.ln { color: var(--blue-tx, var(--blue)); font-weight: 600; }
+.sc-ask { position: sticky; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); padding: 10px 0; }
+.sess-work:empty { display: none; }
+.sess-bg { list-style: none; margin: 4px 0 6px; padding: 0; }
+.sess-bg li { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+
+
 /* Insights */
 .ins-pick { gap: 8px; margin: 8px 0 12px; } .ins-pick #ins-file { flex: 1; min-width: 260px; }

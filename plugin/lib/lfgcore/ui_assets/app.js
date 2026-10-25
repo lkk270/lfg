@@ -1822,8 +1822,10 @@ PAGES.sessions = async () => {
   }
   const line = s => `<li class="sess" data-sid="${esc(s.id)}"><button class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${unlocked ? "" : "disabled"} title="${s.starred ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away"}" aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'}</div>
       <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div>
+      ${Date.now() - Date.parse(s.modified) < 6 * 36e5 ? `<div class="sess-work" data-sess-work="${esc(s.id)}"></div>` : ""}
       <details class="more" data-sess-recent="${esc(s.id)}"><summary class="small">Recent messages and what it used</summary><div class="sess-recent small muted"><span class="loading-inline">Loading…</span></div></details>${skillRuns(runsOf[s.id], unlocked)}</div>
       <div class="sess-actions"><button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
+      <button class="btn small" data-sess-changes='${esc(JSON.stringify([s.id, s.name]))}' title="Every file this session edited, as diffs, from its own transcript. Pick lines to ask about them or have it change them">What it changed</button>
       <button class="btn small" data-sess-skill='${esc(JSON.stringify([s.id, s.name]))}' ${unlocked ? "" : "disabled"} title="Run a skill or an instruction on this session, once or in a loop; Claude knows everything said in it">Run a skill…</button>
       <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
       <button class="btn small" data-sess-remind="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once">Remind it of my style</button>
@@ -1870,6 +1872,70 @@ function skillRuns(runs, unlocked) {
       ${j.used ? `<details class="more"><summary class="small">What it used</summary>${usedTags(j.used)}</details>` : ""}</div>`;
   }).join("")}</div>`;
 }
+/* What a session changed: its own edits as diffs, read from its transcript (not git). Click a line number, then
+   shift-click another, to pick lines; Ask or Make this change sends them to the session through a skill run. */
+async function sessionChanges(sid, name, unlocked) {
+  openDrawer(`What ${name} changed`, '<div class="skeleton"></div>');
+  const d = await api("sessionchanges", { id: sid });
+  const body = $("#drawer-body");
+  if (d.available === false) { body.innerHTML = `<p class="muted">${fmtWhy(d.why)}</p>`; return; }
+  const where = f => `${f.worktree ? `<span class="tag mono" title="Edited in this worktree">${esc(f.worktree)}</span> ` : ""}${esc(f.outside ? homePath(f.path) : f.path)}`;
+  const row = (fi, hi, li, x) => `<tr class="${x.t === "+" ? "add" : x.t === "-" ? "del" : ""}" data-l="${fi}.${hi}.${li}"><td class="ln pick">${esc(x.old ?? "")}</td><td class="ln pick">${esc(x.new ?? "")}</td><td class="sg">${x.t === " " ? "" : esc(x.t)}</td><td class="tx">${esc(x.text)}</td></tr>`;
+  const file = (f, fi) => `<details class="sc-file" ${d.files.length <= 6 ? "open" : ""}><summary><span class="grow mono small">${where(f)}${f.outside ? ' <span class="tag" title="Outside this session\'s project: a scratch file or another repo">outside</span>' : ""}</span><span class="diffstat"><b class="add">+${f.additions}</b><b class="del">−${f.deletions}</b></span><span class="muted small nowrap">${plural(f.edits, "edit")}${f.status === "added" ? " · new file" : ""}</span></summary>
+    ${f.too_big ? '<p class="muted small">Too big to draw here.</p>' : f.hunks.map((h, hi) => `<div class="pr-snip"><div class="pr-snip-h mono">${esc(h.header)} <span class="muted">· edited ${ago(h.at)}</span></div><div class="pr-snip-b"><table>${h.lines.map((x, li) => row(fi, hi, li, x)).join("")}</table></div></div>`).join("")}</details>`;
+  const shell = (d.shell || []).length ? `<details class="more"><summary class="small">${plural(d.shell.length, "shell command")} that may also have changed files (not shown above)</summary><ul class="mono small">${d.shell.map(x => `<li>${esc(x.command)}</li>`).join("")}</ul></details>` : "";
+  body.innerHTML = `<div class="readable sc">
+    <p class="muted small">${d.files.length ? `${plural(d.files.length, "file")} · <span class="diffstat"><b class="add">+${d.additions}</b><b class="del">−${d.deletions}</b></span> · what this session itself did, from its transcript; denied and rewound edits are left out.` : "This session hasn't edited any files."} Click a line number, then shift-click another, to pick lines.</p>
+    ${shell}${d.files.map(file).join("")}
+    <div class="sc-ask" hidden><div class="small"><b id="sc-what"></b></div>
+      <div class="pr-compose"><textarea id="sc-say" data-grow rows="2" placeholder="Ask about these lines, or say what to change"></textarea></div>
+      <label class="row small"><input type="checkbox" id="sc-in"> In the session itself (close it in your terminal first). Otherwise in a copy you can resume.</label>
+      <div class="set-actions"><button class="btn" id="sc-ask" ${unlocked ? "" : "disabled"}>Ask</button><button class="btn primary" id="sc-change" ${unlocked ? "" : "disabled"}>Make this change</button><span class="save-msg" id="sc-msg"></span></div></div></div>`;
+  $$("textarea[data-grow]", body).forEach(grow);
+  let pick = null;  // {fi, from: [hi, li], to: [hi, li]}
+  const lineOf = k => { const [fi, hi, li] = k.split(".").map(Number); return { fi, hi, li, x: d.files[fi].hunks[hi].lines[li] }; };
+  const picked = () => {
+    if (!pick) return [];
+    const f = d.files[pick.fi], all = f.hunks.flatMap((h, hi) => h.lines.map((x, li) => ({ hi, li, x })));
+    const at = ([hi, li]) => all.findIndex(y => y.hi === hi && y.li === li);
+    const [a, b] = [at(pick.from), at(pick.to)].sort((m, n) => m - n);
+    return all.slice(a, b + 1);
+  };
+  const paint = () => {
+    const keys = new Set(picked().map(y => `${pick.fi}.${y.hi}.${y.li}`));
+    $$("tr[data-l]", body).forEach(tr => tr.classList.toggle("sel", keys.has(tr.dataset.l)));
+    const box = $(".sc-ask", body);
+    box.hidden = !keys.size;
+    if (keys.size) {
+      const nums = picked().map(y => y.x.new ?? y.x.old).filter(v => v != null);
+      $("#sc-what").textContent = `${d.files[pick.fi].path}, ${nums.length > 1 ? `lines ${Math.min(...nums)}-${Math.max(...nums)}` : `line ${nums[0]}`}`;
+    }
+  };
+  $$("td.pick", body).forEach(td => td.onclick = e => {
+    const { fi, hi, li } = lineOf(td.parentNode.dataset.l);
+    pick = e.shiftKey && pick && pick.fi === fi ? { ...pick, to: [hi, li] } : { fi, from: [hi, li], to: [hi, li] };
+    paint();
+  });
+  const send = kind => async () => {
+    const said = $("#sc-say").value.trim();
+    if (!said) { $("#sc-msg").textContent = kind === "ask" ? "Say what you want to know." : "Say what to change."; return; }
+    const r = await save("session_lines", { session: sid, path: d.files[pick.fi].path, lines: picked().map(y => y.x), said, kind, fork: !$("#sc-in").checked });
+    if (!r.ok) return saidMsg($("#sc-msg"), r, "");
+    closeDrawer(); prefToast(kind === "ask" ? "Asked. The answer shows under the session when it's done." : "It's making the change. You'll see it under the session."); softRoute();
+  };
+  $("#sc-ask").onclick = send("ask");
+  $("#sc-change").onclick = send("change");
+}
+/* What a session has running besides the conversation: subagents and background commands. */
+const WORK_ST = { running: ["Running", "on"], quiet: ["No news for 15 min", "warn"], done: ["Done", "ok"], failed: ["Failed", "bad"], stopped: ["Stopped", ""] };
+function sessionWork(d) {
+  if (!d || d.available === false || !(d.items || []).length) return "";
+  return `<div class="k small">Background work</div><ul class="sess-bg">${d.items.slice().reverse().map(a => {
+    const [w, tone] = WORK_ST[a.status] || [a.status, ""];
+    return `<li>${dot(tone)}<span class="grow"><b>${esc(a.label)}</b> <span class="muted small">${a.kind === "agent" ? `${esc(a.type || "subagent")}${a.steps ? ` · ${plural(a.steps, "step")}` : ""}` : "background command"} · ${esc(w)}${a.ended ? ` ${ago(a.ended)}` : ` · started ${ago(a.started)}`}</span>${a.status === "running" && a.now ? `<div class="mono small muted">now: ${esc(a.now)}</div>` : ""}${a.summary ? `<div class="small muted">${esc(a.summary)}</div>` : ""}</span></li>`;
+  }).join("")}</ul>`;
+}
+
 /* Pick a skill (or say what to do) and run it on a session, once or in a loop. */
 async function sessionSkill(sid, name) {
   openDrawer(`Run a skill on ${name}`, '<div class="loading">Loading your skills…</div>');
@@ -1921,6 +1987,10 @@ function wireSessions(root) {
     route();
   });
   $$("[data-sess-skill]", root).forEach(b => b.onclick = () => { const [sid, name] = JSON.parse(b.dataset.sessSkill); sessionSkill(sid, name); });
+  $$("[data-sess-changes]", root).forEach(b => b.onclick = async () => { const [sid, name] = JSON.parse(b.dataset.sessChanges); sessionChanges(sid, name, await isUnlocked()); });
+  const work = $$("[data-sess-work]", root);
+  work.forEach(async el => { const d = await api("sessionwork", { id: el.dataset.sessWork }).catch(() => null); if (document.body.contains(el)) el.innerHTML = sessionWork(d); });
+  if (work.length) setTimeout(() => { if (document.body.contains(root) && $$("[data-sess-work] .dot.on", root).length) softRoute(); }, 15000);
   $$("[data-run-stop]", root).forEach(b => b.onclick = async () => { b.disabled = true; const r = await save("skill_stop", { id: b.dataset.runStop }); if (!r.ok) return alertMsg(b, r); b.textContent = "Stopping after this pass"; });
   const find = $("#sess-find", root);
   if (find) {

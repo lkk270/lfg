@@ -216,6 +216,12 @@ def api(view, q):
             return dict(SS.recent(_arg(q, "id")), used=SS.usage_of(_arg(q, "id")))
         except ValueError as e:
             return {"available": False, "why": str(e)}
+    if view in ("sessionchanges", "sessionwork"):  # what a session changed, what it has running (read only)
+        from . import sesswork as SW
+        try:
+            return (SW.changes if view == "sessionchanges" else SW.work)(_arg(q, "id"))
+        except ValueError as e:
+            return {"available": False, "why": str(e)}
     if view == "skillruns":
         from . import review as R
         from . import skillrun as SR
@@ -471,6 +477,16 @@ def save(what, body):
                 return res
             return SS.file_into(body.get("id"), body.get("folder"), body.get("from") or "")
         except ValueError as e:
+            raise S.Invalid(str(e)) from None
+    if what == "session_lines":  # lines picked in a session's changes: ask about them, or have it change them
+        from . import sesswork as SW
+        from . import skillrun as SR
+        kind = "change" if body.get("kind") == "change" else "ask"
+        try:
+            say = SW.about_lines(str(body.get("path") or ""), body.get("lines") or [], body.get("said") or "", kind)
+            return SR.start(body.get("session"), say=say, mode="acceptEdits" if kind == "change" else "dontAsk",
+                            fork=body.get("fork", True) is not False)
+        except (SR.RunError, ValueError, TypeError) as e:
             raise S.Invalid(str(e)) from None
     if what in ("skill_run", "skill_stop"):
         from . import skillrun as SR

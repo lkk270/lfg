@@ -4605,6 +4605,157 @@ class StackTest(unittest.TestCase):
         self.assertEqual(v.call_args.kwargs.get("pr"), "1755")
 
 
+class SessionWorkTest(SessionsTest):
+    """What a session changed (its own edits, from its transcript) and what it has running in the background."""
+    SID = "00000077-0000-0000-0000-000000000000"
+    CWD = "/nowhere/app"
+
+    def events(self, evs, subagents=None):
+        d = os.path.join(self.dir, self.CWD.replace("/", "-"))
+        os.makedirs(d, exist_ok=True)
+        base = {"cwd": self.CWD, "gitBranch": "main", "sessionId": self.SID}
+        with open(os.path.join(d, self.SID + ".jsonl"), "w") as f:
+            f.write("\n".join(json.dumps(dict(base, **e)) for e in evs) + "\n")
+        for name, (meta, lines) in (subagents or {}).items():
+            sd = os.path.join(d, self.SID, "subagents")
+            os.makedirs(sd, exist_ok=True)
+            C.write_json(os.path.join(sd, name + ".meta.json"), meta)
+            with open(os.path.join(sd, name + ".jsonl"), "w") as f:
+                f.write("\n".join(json.dumps(x) for x in lines) + "\n")
+
+    @staticmethod
+    def you(uid, text, parent=None, ts="2026-10-25T10:00:00Z"):
+        return {"type": "user", "uuid": uid, "parentUuid": parent, "timestamp": ts,
+                "message": {"role": "user", "content": text}}
+
+    @staticmethod
+    def call(uid, tid, name, inp, parent, ts="2026-10-25T10:01:00Z"):
+        return {"type": "assistant", "uuid": uid, "parentUuid": parent, "timestamp": ts,
+                "message": {"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": name,
+                                                              "input": inp}]}}
+
+    @staticmethod
+    def result(uid, tid, parent, tur=None, error=False, text="ok", ts="2026-10-25T10:01:30Z"):
+        e = {"type": "user", "uuid": uid, "parentUuid": parent, "timestamp": ts,
+             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": text,
+                                                      "is_error": error}]}}
+        if tur is not None:
+            e["toolUseResult"] = tur
+        return e
+
+    def edit(self, n, path, patch, parent, error=False, create=None):
+        tur = {"filePath": path, "structuredPatch": patch}
+        if create is not None:
+            tur = {"type": "create", "filePath": path, "content": create, "structuredPatch": []}
+        return [self.call("a%d" % n, "t%d" % n, "Write" if create is not None else "Edit", {"file_path": path},
+                          parent), self.result("r%d" % n, "t%d" % n, "a%d" % n, tur, error)]
+
+    def test_changes_are_the_sessions_own_edits_without_denied_or_rewound_ones(self):
+        from lfgcore import sesswork as SW
+        p1 = [{"oldStart": 3, "oldLines": 2, "newStart": 3, "newLines": 2, "lines": [" a", "-old", "+new"]}]
+        p2 = [{"oldStart": 9, "oldLines": 1, "newStart": 9, "newLines": 2, "lines": [" b", "+more"]}]
+        ev = [self.you("u1", "fix it")]
+        ev += self.edit(1, self.CWD + "/src/app.py", p1, "u1")
+        ev += self.edit(2, self.CWD + "/src/app.py", p2, "r1")
+        ev += self.edit(3, self.CWD + "/src/denied.py", p1, "r2", error=True)
+        ev += self.edit(4, self.CWD + "/NEW.md", [], "r3", create="one\ntwo")
+        ev += self.edit(5, self.CWD + "/src/undone.py", p1, "r4")  # rewound below
+        ev += [self.call("a6", "t6", "Bash", {"command": "sed -i '' s/a/b/ src/x.py"}, "r5"),
+               self.result("r6", "t6", "a6"),
+               self.call("a7", "t7", "Bash", {"command": "git status 2>/dev/null"}, "r6"),
+               self.result("r7", "t7", "a7"),
+               self.you("u2", "no, go back", parent="r4")]  # continues from before the undone edit
+        self.events(ev)
+        got = SW.changes(self.SID)
+        files = {f["path"]: f for f in got["files"]}
+        self.assertEqual(sorted(files), ["NEW.md", "src/app.py"])
+        app = files["src/app.py"]
+        self.assertEqual((app["edits"], app["additions"], app["deletions"], len(app["hunks"])), (2, 2, 1, 2))
+        first = app["hunks"][0]["lines"]
+        self.assertEqual([(x["t"], x["old"], x["new"], x["text"]) for x in first],
+                         [(" ", 3, 3, "a"), ("-", 4, None, "old"), ("+", None, 4, "new")])
+        self.assertEqual((files["NEW.md"]["status"], files["NEW.md"]["additions"]), ("added", 2))
+        self.assertEqual((got["additions"], got["deletions"]), (4, 1))
+        self.assertEqual(got["shell"], [])  # the sed came after the rewind point: undone too
+        ev2 = ev[:-1]
+        self.events(ev2)
+        self.assertEqual([s["command"] for s in SW.changes(self.SID)["shell"]], ["sed -i '' s/a/b/ src/x.py"])
+        self.assertIn("src/undone.py", [f["path"] for f in SW.changes(self.SID)["files"]])
+
+    def test_worktree_edits_count_as_the_projects_and_queued_notices_finish_work(self):
+        from lfgcore import sesswork as SW
+        p1 = [{"oldStart": 1, "oldLines": 0, "newStart": 1, "newLines": 1, "lines": ["+x"]}]
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ev = [self.you("u1", "go", ts=now)]
+        ev += self.edit(1, "/nowhere/app.worktrees/feat-a/src/x.py", p1, "u1")
+        ev += self.edit(2, "/tmp/scratch/notes.py", p1, "r2")
+        ev += [self.call("a3", "t3", "Bash", {"command": "npm test", "run_in_background": True}, "r2", ts=now),
+               self.result("r3", "t3", "a3", text="Command running in background with ID: bq7w2", ts=now),
+               {"type": "queue-operation", "operation": "enqueue", "timestamp": now,
+                "content": "<task-notification><task-id>bq7w2</task-id><status>killed</status></task-notification>"}]
+        self.events(ev)
+        files = {(f["worktree"], f["path"]): f for f in SW.changes(self.SID)["files"]}
+        self.assertFalse(files[("feat-a", "src/x.py")]["outside"])
+        self.assertTrue(files[("", "/tmp/scratch/notes.py")]["outside"])
+        self.assertEqual([a["status"] for a in SW.work(self.SID)["items"]], ["stopped"])
+
+    def test_background_work_shows_subagents_and_commands_until_they_finish(self):
+        from lfgcore import sesswork as SW
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ev = [self.you("u1", "go", ts=now),
+              self.call("a1", "t1", "Agent", {"description": "Map the auth code", "subagent_type": "Explore",
+                                              "prompt": "x"}, "u1", ts=now),
+              self.call("a2", "t2", "Bash", {"command": "npm test", "run_in_background": True,
+                                             "description": "Run the tests"}, "a1", ts=now),
+              self.result("r2", "t2", "a2", text="Command running in background with ID: bk9x1", ts=now),
+              self.call("a3", "t3", "Bash", {"command": "sleep 100", "run_in_background": True}, "r2", ts=now),
+              self.result("r3", "t3", "a3", text="Command running in background with ID: bz2q8", ts=now),
+              self.you("u4", "<task-notification><task-id>bz2q8</task-id><status>completed</status>"
+                       "<summary>sleep finished</summary></task-notification>", parent="r3", ts=now)]
+        sub = [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Grep", "input": {"pattern": "login"}},
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/nowhere/app/src/auth.py"}}]}}]
+        self.events(ev, {"agent-1": ({"toolUseId": "t1"}, sub)})
+        got = {a["label"]: a for a in SW.work(self.SID)["items"]}
+        self.assertEqual(got["Map the auth code"]["status"], "running")
+        self.assertEqual((got["Map the auth code"]["steps"], got["Map the auth code"]["now"]), (2, "Read auth.py"))
+        self.assertEqual(got["Map the auth code"]["type"], "Explore")
+        self.assertEqual(got["Run the tests"]["status"], "running")
+        self.assertEqual((got["sleep 100"]["status"], got["sleep 100"]["summary"]), ("done", "sleep finished"))
+        old = time.time() - 3600
+        os.utime(glob.glob(os.path.join(self.dir, "*", self.SID + ".jsonl"))[0], (old, old))
+        for p in glob.glob(os.path.join(self.dir, "*", self.SID, "subagents", "*")):
+            os.utime(p, (old, old))
+        self.assertEqual({a["status"] for a in SW.work(self.SID)["items"] if a["label"] != "sleep 100"}, {"quiet"})
+
+    def test_ask_about_lines_goes_to_the_session_with_file_and_lines(self):
+        from lfgcore import sesswork as SW
+        lines = [{"t": "+", "new": 4, "text": "return x"}, {"t": "+", "new": 5, "text": "  # done"}]
+        ask = SW.about_lines("src/app.py", lines, "why return here?", "ask")
+        self.assertIn("src/app.py lines 4-5", ask)
+        self.assertIn("return x", ask)
+        self.assertIn("why return here?", ask)
+        self.assertIn("Don't change", ask)
+        change = SW.about_lines("src/app.py", lines, "rename x to total", "change")
+        self.assertIn("Make this change", change)
+        with self.assertRaises(ValueError):
+            SW.about_lines("src/app.py", [], "x", "ask")
+        self.events([self.you("u1", "hi")])
+        self.assertEqual(ui.api("sessionchanges", {"id": [self.SID]})["files"], [])
+        self.assertEqual(ui.api("sessionwork", {"id": [self.SID]})["items"], [])
+        self.assertFalse(ui.api("sessionchanges", {"id": ["../x"]})["available"])
+        from lfgcore import skillrun as SR
+        with mock.patch.object(SR, "start", return_value={"ok": True}) as go:
+            ui.save("session_lines", {"session": self.SID, "path": "src/app.py", "lines": lines, "said": "why?"})
+            self.assertEqual((go.call_args.kwargs["mode"], go.call_args.kwargs["fork"]), ("dontAsk", True))
+            ui.save("session_lines", {"session": self.SID, "path": "src/app.py", "lines": lines, "said": "do it",
+                                      "kind": "change", "fork": False})
+            self.assertEqual((go.call_args.kwargs["mode"], go.call_args.kwargs["fork"]), ("acceptEdits", False))
+            self.assertIn("Make this change there: do it", go.call_args.kwargs["say"])
+            with self.assertRaises(ui.S.Invalid):
+                ui.save("session_lines", {"session": self.SID, "path": "x", "lines": [], "said": "x"})
+
+
 class InsightsTest(unittest.TestCase):
     """Hotspots (files that keep needing fixes) and why code is here (the commits behind it). Read-only git."""
 
