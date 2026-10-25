@@ -198,6 +198,9 @@ def api(view, q):
         from . import claudesess as CS
         root = dash.repo_root(rid)
         return CS.listing(rid, root) if view == "sessions" else CS.detail(rid, root, _arg(q, "id"))
+    if view == "session_changes":  # every file a session changed, as diffs, from its transcript
+        from . import claudesess as CS
+        return CS.changes(rid, dash.repo_root(rid), _arg(q, "id"))
     if view == "session_where":
         from . import claudesess as CS
         return CS.where(rid, dash.repo_root(rid))

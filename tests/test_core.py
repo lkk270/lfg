@@ -2104,6 +2104,65 @@ class ClaudeSessionsTest(unittest.TestCase):
         d = C.ensure_dir(os.path.join(self.proj, re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(self.root))))
         C.write_text(os.path.join(d, sid + ".jsonl"), "".join(json.dumps(x) + "\n" for x in lines))
 
+    def test_changes_are_the_sessions_own_edits_as_diffs(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-555555555555"
+        base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
+        fp = os.path.join(self.root, "src", "a.py")
+        self._transcript(sid, [
+            dict(base, type="assistant", message={"content": [
+                {"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": fp}},
+                {"type": "tool_use", "id": "e2", "name": "Write", "input": {"file_path": "/tmp/notes.md"}},
+                {"type": "tool_use", "id": "e3", "name": "Edit", "input": {"file_path": fp}},
+                {"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "sed -i '' s/a/b/ x.py"}},
+                {"type": "tool_use", "id": "b2", "name": "Bash", "input": {"command": "ls >/dev/null 2>&1"}}]}),
+            dict(base, type="user", toolUseResult={"filePath": fp, "structuredPatch": [
+                {"oldStart": 3, "oldLines": 2, "newStart": 3, "newLines": 2, "lines": [" keep", "-old", "+new"]}]},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e1", "content": "ok"}]}),
+            dict(base, type="user", toolUseResult={"type": "create", "filePath": "/tmp/notes.md", "content": "a\nb"},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e2", "content": "ok"}]}),
+            dict(base, type="user", toolUseResult={"filePath": fp, "structuredPatch": [
+                {"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-x", "+y"]}]},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e3", "content": "denied", "is_error": True}]}),
+            dict(base, type="user", message={"content": [{"type": "tool_result", "tool_use_id": "b1", "content": ""},
+                                                         {"type": "tool_result", "tool_use_id": "b2", "content": ""}]})])
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            c = CS.changes("r", self.root, sid)
+        a, notes = c["files"]
+        self.assertEqual((a["path"], a["status"], a["additions"], a["deletions"], a["edits"]), ("src/a.py", "modified", 1, 1, 1))
+        self.assertEqual([l["t"] for l in a["hunks"][0]["lines"]], [" ", "-", "+"])  # the denied edit isn't shown
+        self.assertEqual((a["hunks"][0]["lines"][2]["new"], notes["status"], notes["outside"]), (4, "added", True))
+        self.assertEqual([x["command"] for x in c["shell"]], ["sed -i '' s/a/b/ x.py"])
+
+    def test_subagents_and_background_work_are_tracked(self):
+        CS = self.CS
+        base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
+        p = os.path.join(self.proj, "s.jsonl")
+        lines = [
+            dict(base, type="assistant", message={"content": [
+                {"type": "tool_use", "id": "ag", "name": "Agent", "input": {"subagent_type": "Explore", "description": "Map the code"}},
+                {"type": "tool_use", "id": "bg", "name": "Bash", "input": {"command": "make iso", "description": "Build the ISO", "run_in_background": True}},
+                {"type": "tool_use", "id": "bg2", "name": "Bash", "input": {"command": "sleep 9", "run_in_background": True}}]}),
+            dict(base, type="user", message={"content": [
+                {"type": "tool_result", "tool_use_id": "bg", "content": "Command running in background with ID: b4r62env5."},
+                {"type": "tool_result", "tool_use_id": "bg2", "content": "Command running in background with ID: bzzz11."}]}),
+            dict(base, type="user", message={"content": "<task-notification>\n<task-id>b4r62env5</task-id>\n<tool-use-id>bg</tool-use-id>"
+                                                        "\n<status>completed</status>\n<summary>Build the ISO completed (exit code 0)</summary>\n</task-notification>"}),
+            dict(base, type="assistant", message={"content": [{"type": "tool_use", "id": "k", "name": "TaskStop", "input": {"task_id": "bzzz11"}}]})]
+        C.write_text(p, "".join(json.dumps(x) + "\n" for x in lines))
+        items, meta = CS.read(p)
+        got = {a["id"]: a["status"] for a in meta["activity"]}
+        self.assertEqual(got, {"ag": "running", "bg": "done", "bg2": "stopped"})
+        self.assertFalse(any(i["k"] == "me" for i in items))  # the notification isn't shown as something you typed
+        sub = C.ensure_dir(os.path.join(self.proj, "s", "subagents"))
+        C.write_json(os.path.join(sub, "agent-x.meta.json"), {"toolUseId": "ag", "agentType": "Explore"})
+        C.write_text(os.path.join(sub, "agent-x.jsonl"), json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/r/app.js"}}]}}) + "\n")
+        acts = {a["id"]: a for a in CS.activity(p, meta["activity"], live=True)}
+        self.assertEqual((acts["ag"]["steps"], acts["ag"]["now"]), (1, "Read app.js"))
+        self.assertNotIn("bg", acts)  # finished long ago: not worth showing
+        os.utime(p, (1000, 1000)); os.utime(os.path.join(sub, "agent-x.jsonl"), (1000, 1000))
+        self.assertEqual(CS.activity(p, meta["activity"], live=False)[0]["status"], "quiet")
+
     def test_transcripts_read_as_cards_and_list_with_where_they_came_from(self):
         CS, sid = self.CS, "11111111-2222-3333-4444-555555555555"
         base = {"cwd": self.root, "gitBranch": "feat/x", "entrypoint": "cli", "timestamp": "2026-10-24T10:00:00Z"}

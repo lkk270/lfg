@@ -75,7 +75,12 @@ def transcript(sid, cwd=None):
 COMMAND = re.compile(r"<command-name>/?([^<]+)</command-name>")
 ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 NOISE = re.compile(r"^\s*<(local-command-stdout|local-command-caveat|system-reminder|bash-input|bash-stdout|"
-                   r"bash-stderr|user-prompt-submit-hook)", re.S)
+                   r"bash-stderr|user-prompt-submit-hook|task-notification)", re.S)
+AGENT_TOOLS = ("Agent", "Task")
+NOTE = re.compile(r"<task-notification>(.*?)</task-notification>", re.S)
+TASK_ID = re.compile(r"\b(?:ID|id|agentId|task_id)[:=]\s*`?([A-Za-z0-9_-]{5,})")
+DONE = {"completed": "done", "success": "done", "failed": "failed", "error": "failed", "killed": "stopped",
+        "stopped": "stopped", "cancelled": "stopped"}
 
 
 def _text_of(content):
@@ -115,6 +120,7 @@ def read(path, limit=MAX_ITEMS):
     if not path or not os.path.exists(path):
         return items, meta
     pos = {}  # each line's uuid -> how many items there were once it was read
+    acts, stops = {}, set()  # subagents and background work: tool_use id -> what it is and how it's doing
     with open(path, "rb") as fh:
         for raw in fh:
             try:
@@ -151,6 +157,13 @@ def read(path, limit=MAX_ITEMS):
                         if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in tools:
                             tool = tools[c["tool_use_id"]]
                             tool.update(result=_result_text(c)[:20000], error=bool(c.get("is_error")))
+                        if (isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in tools
+                                and isinstance(ev.get("toolUseResult"), dict)):
+                            tools[c["tool_use_id"]].update(_line_counts(ev["toolUseResult"]))
+                        if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in acts:
+                            _act_result(acts[c["tool_use_id"]], _result_text(c), bool(c.get("is_error")), ts)
+                for m in NOTE.finditer(_text_of(content)):
+                    _act_note(acts, m.group(1), ts)
                 if not _human(ev):
                     pos[ev.get("uuid")] = len(items)
                     continue
@@ -190,16 +203,130 @@ def read(path, limit=MAX_ITEMS):
                                 meta["skills"].append(sk)
                         tools[c.get("id")] = it
                         items.append(it)
+                        inp = c.get("input") or {}
+                        if c.get("name") in AGENT_TOOLS or inp.get("run_in_background"):
+                            acts[c.get("id")] = {
+                                "id": c.get("id"), "kind": "agent" if c.get("name") in AGENT_TOOLS else
+                                ("command" if c.get("name") == "Bash" else "task"), "tool": c.get("name"),
+                                "label": _one_line(str(inp.get("description") or inp.get("command") or
+                                                       c.get("name")))[:120],
+                                "type": inp.get("subagent_type"), "background": bool(inp.get("run_in_background")),
+                                "status": "running", "started": ts}
+                        if c.get("name") in ("TaskStop", "KillShell", "KillBash"):
+                            stops.add(str(inp.get("task_id") or inp.get("shell_id") or inp.get("id") or ""))
                         fp = (c.get("input") or {}).get("file_path") or (c.get("input") or {}).get("notebook_path")
                         if c.get("name") in ("Edit", "MultiEdit", "Write", "NotebookEdit") and fp:
                             it["changes"] = fp
             pos[ev.get("uuid")] = len(items)
+    meta["additions"] = meta["deletions"] = 0
     for it in items:  # a file counts as changed once its edit went through (and wasn't rewound)
         fp = it.get("changes")
-        if fp and "result" in it and not it.get("error") and fp not in meta["files"]:
-            meta["files"].append(fp)
+        if fp and "result" in it and not it.get("error"):
+            if fp not in meta["files"]:
+                meta["files"].append(fp)
+            meta["additions"] += it.pop("adds", 0)
+            meta["deletions"] += it.pop("dels", 0)
     meta["issues"] = _issues(" ".join(str(x or "") for x in (meta["branch"], meta["title"], meta["first"])))
+    for a in acts.values():
+        if a["status"] == "running" and a.get("task") and a["task"] in stops:
+            a["status"] = "stopped"
+    meta["activity"] = list(acts.values())
     return items[-limit:], meta
+
+
+def _line_counts(r):
+    """Lines an edit added and removed, from Claude Code's record of it (its patch, or a new file's content)."""
+    patch = r.get("structuredPatch") or []
+    if not patch and r.get("type") == "create":
+        return {"adds": len(str(r.get("content") or "").split("\n")), "dels": 0}
+    lines = [ln for h in patch for ln in (h.get("lines") or [])]
+    return {"adds": sum(1 for ln in lines if ln[:1] == "+"), "dels": sum(1 for ln in lines if ln[:1] == "-")}
+
+
+def _act_result(a, text, error, ts):
+    """A tool result for a subagent or background job: a foreground one is finished; a background one only started
+    (its result carries the id that its later notification and any TaskStop refer to)."""
+    if a["background"]:
+        m = TASK_ID.search(text or "")
+        a["task"] = m.group(1) if m else a.get("task")
+        if error:
+            a.update(status="failed", ended=ts)
+    else:
+        a.update(status="failed" if error else "done", ended=ts)
+
+
+def _act_note(acts, body, ts):
+    """<task-notification>: Claude Code's word that background work finished (or failed, or was stopped)."""
+    def f(tag):
+        m = re.search(r"<%s>(.*?)</%s>" % (tag, tag), body, re.S)
+        return m.group(1).strip() if m else ""
+    tid, task = f("tool-use-id"), f("task-id")
+    a = acts.get(tid) or next((x for x in acts.values() if task and x.get("task") == task), None)
+    st = DONE.get(f("status").lower())
+    if a and st:
+        a.update(status=st, ended=ts, summary=_one_line(f("summary"))[:200] or a.get("summary"))
+
+
+def _short_input(name, inp):
+    """What a tool call was about, in a few words: the file, the command, the search."""
+    inp = inp or {}
+    for k in ("file_path", "notebook_path", "path"):
+        if inp.get(k):
+            return "%s %s" % (name, os.path.basename(str(inp[k]).rstrip("/")))
+    for k in ("description", "command", "pattern", "query", "url", "skill", "prompt"):
+        if inp.get(k):
+            return "%s: %s" % (name, _one_line(str(inp[k]))[:70])
+    return name
+
+
+def _epoch(ts):
+    try:
+        import datetime
+        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def activity(path, acts, live):
+    """What this session has running besides the conversation: subagents and background commands, each with what
+    it's doing now (from the subagent's own transcript in <session>/subagents/). Running work, plus what finished in
+    the last 20 minutes. When LFG isn't running the session and nothing has been written for 15 minutes, running is
+    only what the transcript last said, so it's reported as "quiet" instead of claimed as running."""
+    subs = {}
+    sub_dir = os.path.join(path[:-len(".jsonl")], "subagents") if path and path.endswith(".jsonl") else ""
+    for mp in glob.glob(os.path.join(sub_dir, "agent-*.meta.json")) if sub_dir else []:
+        m = C.read_json(mp, {}) or {}
+        if m.get("toolUseId"):
+            subs[m["toolUseId"]] = mp[:-len(".meta.json")] + ".jsonl"
+    newest = os.path.getmtime(path) if path and os.path.exists(path) else 0
+    out = []
+    for a in acts:
+        a = dict(a)
+        jp = subs.get(a["id"])
+        if jp and os.path.exists(jp):
+            steps, last = 0, None
+            with open(jp, "rb") as fh:
+                for raw in fh:
+                    try:
+                        ev = json.loads(raw)
+                    except ValueError:
+                        continue
+                    for c in ((ev.get("message") or {}).get("content") or []) if ev.get("type") == "assistant" else []:
+                        if isinstance(c, dict) and c.get("type") == "tool_use":
+                            steps, last = steps + 1, _short_input(c.get("name"), c.get("input"))
+            a.update(steps=steps, now=last, touched=os.path.getmtime(jp))
+            newest = max(newest, a["touched"])
+        out.append(a)
+    quiet = not live and newest and time.time() - newest > 900
+    keep, cutoff = [], time.time() - 1200
+    for a in out:
+        if a["status"] == "running":
+            if quiet:
+                a["status"] = "quiet"
+            keep.append(a)
+        elif (_epoch(a.get("ended")) or 0) > cutoff:
+            keep.append(a)
+    return keep[-12:]
 
 
 ISSUE = re.compile(r"\b([A-Z]{2,10}-\d{1,6})\b")
@@ -746,10 +873,99 @@ def detail(rid, root, sid):
                                                               for p in (l_.pending.values() if l_ else [])],
             "queued": [_text_of(q) if isinstance(q, list) else q for q in l_.queued] if l_ else [],
             "error": l_.error if l_ else None, "forked_from": mine.get("forked_from"),
-            "cost": _cost(path) if path else None,
+            "cost": _cost(path) if path else None, "additions": meta.get("additions", 0),
+            "deletions": meta.get("deletions", 0),
             "skills": meta["skills"], "via": via, "updated": meta["updated"], "files": meta["files"],
             "issues": meta["issues"], "pr": _pr_for(rid, (l_.branch if l_ else None) or meta["branch"]),
-            "worktree_name": _wt_name(root, l_.root if l_ else meta["cwd"])}
+            "worktree_name": _wt_name(root, l_.root if l_ else meta["cwd"]),
+            "activity": activity(path, meta.get("activity") or [], bool(l_ and l_.state not in ("ended", "saved")))}
+
+
+EDIT_TOOLS = ("Edit", "MultiEdit", "Write", "NotebookEdit")
+
+
+def changes(rid, root, sid):
+    """Every file this session changed, as diffs: Claude Code keeps the exact patch of each Edit and the content of
+    each new file in its transcript, so this is what the session itself did (not what git shows now, which can mix in
+    other sessions and your own edits). Edits that were denied, failed or rewound are left out. One file's edits stay
+    separate hunks, in order, each with when it was made. Changes made by shell commands (sed, a script, a
+    formatter) aren't recorded as edits; they're listed as commands to look at."""
+    if not re.match(r"^[0-9a-f-]{36}$", str(sid or "")):
+        return {"available": False, "why": "not a session id"}
+    l_ = _LIVE.get(sid)
+    path = transcript(sid, l_.root if l_ else root)
+    if not path:
+        return {"available": False, "why": "This session's transcript isn't on this computer."}
+    items, meta = read(path, limit=10 ** 6)
+    kept = {it["id"] for it in items if it.get("k") == "tool" and it.get("name") in EDIT_TOOLS
+            and "result" in it and not it.get("error")}
+    shells = [{"command": _one_line(str((it.get("input") or {}).get("command") or ""))[:240], "ts": it.get("ts")}
+              for it in items if it.get("k") == "tool" and it.get("name") == "Bash" and "result" in it
+              and SHELL_WRITES.search(QUIET.sub(" ", str((it.get("input") or {}).get("command") or "")))]
+    base = meta.get("cwd") or root or ""
+    files, order = {}, []
+    with open(path, "rb") as fh:
+        for raw in fh:
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            r = ev.get("toolUseResult")
+            if ev.get("type") != "user" or ev.get("isSidechain") or not isinstance(r, dict) or not r.get("filePath"):
+                continue
+            ids = [c.get("tool_use_id") for c in (ev.get("message") or {}).get("content") or []
+                   if isinstance(c, dict) and c.get("type") == "tool_result"]
+            if not any(i in kept for i in ids):
+                continue
+            fp = r["filePath"]
+            rel = os.path.relpath(fp, base) if base and fp.startswith(base.rstrip("/") + "/") else fp
+            f = files.get(rel)
+            if f is None:
+                f = files[rel] = {"path": rel, "old_path": "", "status": "added" if r.get("type") == "create" else
+                                  "modified", "additions": 0, "deletions": 0, "binary": False, "too_big": False,
+                                  "hunks": [], "edits": 0, "first": ev.get("timestamp"), "last": None,
+                                  "outside": rel == fp}  # a scratch file or another repo, not this project
+                order.append(rel)
+            f["edits"] += 1
+            f["last"] = ev.get("timestamp")
+            when = _clock(ev.get("timestamp"))
+            patch = r.get("structuredPatch") or []
+            if not patch and r.get("type") == "create":
+                body = str(r.get("content") or "").split("\n")
+                patch = [{"oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": len(body),
+                          "lines": ["+" + x for x in body]}]
+            for h in patch:
+                old, new = int(h.get("oldStart") or 0), int(h.get("newStart") or 0)
+                lines = []
+                for ln in h.get("lines") or []:
+                    t = ln[:1] if ln[:1] in ("+", "-", " ") else " "
+                    lines.append({"t": t, "old": old if t != "+" else None, "new": new if t != "-" else None,
+                                  "text": ln[1:] if ln[:1] in ("+", "-", " ") else ln})
+                    old += t != "+"
+                    new += t != "-"
+                    f["additions"] += t == "+"
+                    f["deletions"] += t == "-"
+                f["hunks"].append({"header": "@@ -%s,%s +%s,%s @@%s" % (h.get("oldStart"), h.get("oldLines"),
+                                   h.get("newStart"), h.get("newLines"), "  ·  edited " + when if when else ""),
+                                   "lines": lines})
+    out = sorted((files[k] for k in order), key=lambda f: f["outside"])  # the project's files first
+    for f in out:
+        if sum(len(h["lines"]) for h in f["hunks"]) > 6000:
+            f["too_big"], f["hunks"] = True, []
+    return {"available": True, "id": sid, "files": out, "shell": shells[-30:],
+            "additions": sum(f["additions"] for f in out), "deletions": sum(f["deletions"] for f in out)}
+
+
+QUIET = re.compile(r"\d?>>?\s*/dev/null|\d?>&\d")  # output thrown away, not a file written
+SHELL_WRITES = re.compile(r"(\bsed\s+-i|>\s*[^&|\s]|\btee\b|\bmv\b|\bcp\b|\brm\b|\bpatch\b|\bgit\s+(apply|checkout|restore|"
+                          r"stash|reset|mv|rm)\b|python3?\s+-\s*<<|\bprettier\b.*--write|\bruff\b.*(format|--fix)|"
+                          r"\bblack\b|\bgofmt\b.*-w|\bnpm\s+(install|i)\b|\bpip\s+install\b)")
+
+
+def _clock(ts):
+    """An ISO timestamp as local "Oct 24, 21:05", for a hunk's edited-at label."""
+    e = _epoch(ts)
+    return time.strftime("%b %d, %H:%M", time.localtime(e)) if e else ""
 
 
 def stop_all():

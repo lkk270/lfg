@@ -1654,14 +1654,20 @@ function wireLanding(root) {
   parts.forEach(x => io.observe(x));
 }
 
-/* The launch film, offered once on the home page. Watching it to the end or closing it marks it seen (tours.json),
-   so it never comes back; it waits until the first-run setup guide is done so the two never stack. */
+/* The launch film, offered once on the home page. It counts as seen the moment it shows (tours.json, and this
+   browser as a fallback), so quitting `lfg ui` or closing the tab mid-film doesn't bring it back: the next start goes
+   straight to the home page, and the film stays on it under "The launch film". It waits until the first-run setup
+   guide is done so the two never stack. */
 const LAUNCH_VIDEO = "https://github.com/user-attachments/assets/bcc10777-99ec-4f32-9b55-19702dbade8f";
 async function launchVideo() {
   if ($(".lv")) return;
   let t;
   try { t = await api("tours"); } catch (e) { return; }
-  if (!t || t.launch_video_seen || !t.setup_guide_done || (location.hash.slice(1).split("/")[0] || "lfg") !== "lfg") return;
+  let local = null;
+  try { local = localStorage.getItem("lfg.launchVideo"); } catch (e) { /* private window */ }
+  if (!t || t.launch_video_seen || local || !t.setup_guide_done || (location.hash.slice(1).split("/")[0] || "lfg") !== "lfg") return;
+  try { localStorage.setItem("lfg.launchVideo", "seen"); } catch (e) { /* private window */ }
+  save("tour_done", { name: "launch-video", how: "finished" });  // seen once it shows, whatever happens next
   const box = document.createElement("div");
   box.className = "lv";
   box.innerHTML = `<div class="lv-shade"></div><video class="lv-v" src="${LAUNCH_VIDEO}" playsinline preload="auto" aria-label="The LFG launch film"></video>`;
@@ -1675,7 +1681,6 @@ async function launchVideo() {
     box.remove();
     document.removeEventListener("keydown", onKey, true);
     document.removeEventListener("pointerdown", unmute, true);
-    save("tour_done", { name: "launch-video", how: v.currentTime > 0 ? "finished" : "skipped" });
   };
   // Browsers only autoplay with sound after the page has had a click or key press. If this one refuses, play muted
   // and turn the sound on at the first click or key press, which then also counts as permission to play.
@@ -3123,6 +3128,8 @@ const ICON = {
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
   review: "M4 5h16v11H9l-5 4zM8 9h8M8 12h5",
   code: "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14",
+  back: "M15 6l-6 6 6 6",
+  diff: "M6 4v10M12 4v4M9 8h6M17 10v10M14 16h6M6 18h.01",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
   plus: "M12 5v14M5 12h14",
   insights: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1.1 2h5c.1-.8.5-1.5 1.1-2A6 6 0 0 0 12 3z",
@@ -3151,6 +3158,7 @@ const ICON = {
   more: "M5 12h.01M12 12h.01M19 12h.01",
   download: "M12 4v11M7 10l5 5 5-5M5 20h14",
   terminal: "M4 5h16v14H4zM7.5 10l2.5 2-2.5 2M12 15h4",
+  agent: "M12 3v3M7 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM9.5 11.5v1M14.5 11.5v1M9.5 15.5h5",
 };
 const icon = (k, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[k] || ""}"/></svg>`;
 function renderNav(active) {
@@ -3341,10 +3349,12 @@ PAGES.sessions = async arg => {
     crumbs("sessions", "New session", "#sessions");
     return `<div class="ss-one">${ssNew(sug)}</div>`;
   }
+  const ch = arg.match(/^([0-9a-f-]{36})\/changes$/);
+  if (ch) return ssChanges(ch[1]);
   const d = await api("session", { id: arg });
   state.sess = { d, id: arg };
   crumbs("sessions", d && d.available !== false ? d.title : null, `#sessions/${arg}`);
-  return d.available === false ? unavailable(d) : `<div class="ss-one">${ssDetail(d)}</div>`;
+  return d.available === false ? unavailable(d) : `<div class="ss-one${(d.activity || []).length ? " has-act" : ""}">${ssDetail(d)}</div>`;
 };
 
 /* tags: one look tells you what a session is about and where it stands */
@@ -3356,7 +3366,8 @@ function ssTagList(x, full) {  // full: the session's own header, where tags can
   if (x.branch && x.branch !== "HEAD") out.push(`<span class="brtag" title="Branch">${esc(x.branch)}</span>`);
   (x.skills || []).slice(0, full ? 6 : 2).forEach(k => out.push(`<span class="tg sk">/${esc(k.replace(/^\//, ""))}</span>`));
   const files = Array.isArray(x.files) ? x.files.length : x.files;
-  if (files) out.push(`<span class="tg" title="${Array.isArray(x.files) ? esc(x.files.join("\n")) : "Files Claude changed"}">${plural(files, "file")} changed</span>`);
+  if (files) out.push(full && x.id ? `<a class="ss-chg" href="#sessions/${esc(x.id)}/changes" title="Open every change this session made, as diffs. Select lines there to ask about them or ask for a change.">${icon("diff")}<span>${plural(files, "file")} changed</span>${x.additions || x.deletions ? `<span class="add">+${n_(x.additions)}</span><span class="del">−${n_(x.deletions)}</span>` : ""}<span class="ss-chg-go">View changes${icon("chev")}</span></a>`
+    : `<span class="tg" title="${Array.isArray(x.files) ? esc(x.files.join("\n")) : "Files Claude changed"}">${plural(files, "file")} changed</span>`);
   if (x.worktree_name) out.push(`<span class="tg wt" title="Works in this worktree">${icon("folder")}${esc(x.worktree_name)}</span>`);
   const [src, stone] = SS_SRC[x.source] || ["", ""]; if (src) out.push(`<span class="tg ${stone}">${src}</span>`);
   return out.join("");
@@ -3498,8 +3509,22 @@ function ssItems(items, live) {
   return html;
 }
 /* what you sent: uploaded files show as chips, the [Image #n] markers as the images themselves */
+/* Lines you pointed at from a session's changes: <lfg-lines file lines>…</lfg-lines> becomes a small diff card, and the
+   <lfg-note> (the instruction meant for Claude) is hidden. Messages sent before the tags existed read the same way. */
+const SS_OLD_REF = /^About `([^`]+)`, (?:lines? )?([\d-]+|removed lines) \(as this session changed them; the file may have moved on since\):\n\n```diff\n([\s\S]*?)\n```\n\n([\s\S]*?)\n\n(?:This is a question: answer it, don't edit any files\.|Make this change to those lines \(read the file first, it may differ from the snippet\)\.)\s*$/;
+function ssRefCard(file, lines, body) {
+  const lang = hlLang(file), st = { block: null };
+  const rows = body.split("\n").map(l => { const t = l[0] === "+" || l[0] === "-" ? l[0] : " "; return `<div class="ss-ref-l ${t === "+" ? "add" : t === "-" ? "del" : ""}"><span class="ss-ref-s">${t === " " ? "" : t}</span><code>${hlLine(t === " " && l[0] !== " " ? l : l.slice(1), lang, st) || " "}</code></div>`; }).join("");
+  return `<div class="ss-ref"><div class="ss-ref-h">${icon("diff")}<b title="${esc(file)}">${esc(file.split("/").pop())}</b><span>${/^\d/.test(lines) ? `${lines.includes("-") ? "lines" : "line"} ${esc(lines)}` : esc(lines)}</span></div><div class="ss-ref-b">${rows}</div></div>`;
+}
 function ssMeText(it) {
-  let t = esc(it.text || "");
+  let raw = it.text || "";
+  const old = raw.match(SS_OLD_REF);
+  if (old) raw = `<lfg-lines file="${old[1]}" lines="${old[2]}">\n${old[3]}\n</lfg-lines>\n\n${old[4]}`;
+  const cards = [];
+  raw = raw.replace(/<lfg-lines file="([^"]*)" lines="([^"]*)">\n?([\s\S]*?)\n?<\/lfg-lines>\s*/g, (_m, f, l, b) => { cards.push(ssRefCard(f, l, b)); return `\u0000${cards.length - 1}\u0000`; })
+    .replace(/\s*<lfg-note>[\s\S]*?<\/lfg-note>\s*/g, "");
+  let t = esc(raw).replace(/\u0000(\d+)\u0000/g, (_m, k) => cards[+k]);
   if ((it.images || []).length) t = t.replace(/\[Image #\d+\]\s?/g, "");
   t = t.replace(/@(\/\S*?\/\.lfg\/uploads\/\d{8}\/[0-9a-f]{8}-(\S+))/g, (_m, path, name) => `<span class="ss-file" title="${path}">${icon("docs")}${name}</span>`);
   return t.trim();
@@ -3579,7 +3604,29 @@ function ssDetail(d) {
   const live = ssLive(d.state), fork = state.ssFork && state.ssFork.sid === d.id ? state.ssFork : null;
   return `<header class="ss-head" id="ss-head">${ssHead(d)}</header>
     <div class="ss-conv${d.state === "working" || d.state === "starting" || (d.pending || []).length ? " ss-busy" : ""}" id="ss-conv">${ssConv(d)}</div>
-    ${ssComposer({ live, saved: !live, mode: d.mode, fork })}`;
+    ${ssComposer({ live, saved: !live, mode: d.mode, fork })}
+    <aside class="ss-act" id="ss-act" aria-label="Running in the background" aria-live="polite">${ssAct(d)}</aside>`;
+}
+
+/* Beside the conversation: the subagents and background commands this session has going, so you can see Claude
+   isn't idle (or that something is still running after it went quiet). Running first, then what just finished. */
+const SS_ACT = { running: ["Running", "run"], quiet: ["No news for 15 min", "quiet"], done: ["Done", "ok"], failed: ["Failed", "bad"], stopped: ["Stopped", "off"] };
+function ssAct(d) {
+  const xs = (d.activity || []).slice().sort((a, b) => (a.status === "running" ? 0 : a.status === "quiet" ? 1 : 2) - (b.status === "running" ? 0 : b.status === "quiet" ? 1 : 2));
+  if (!xs.length) return "";
+  const n = xs.filter(a => a.status === "running").length;
+  const row = a => {
+    const [word, cls] = SS_ACT[a.status] || [a.status, "off"];
+    const kind = a.kind === "agent" ? `${a.type ? esc(a.type) : "Subagent"}${a.background ? " · background" : ""}` : a.kind === "command" ? "Background command" : `Background ${esc(a.tool || "task")}`;
+    const when = a.status === "running" || a.status === "quiet" ? `started ${ago(a.started)}` : ago(a.ended);
+    return `<div class="ss-act-i ${cls}"><span class="ss-act-dot" aria-hidden="true"></span><div class="grow">
+      <div class="ss-act-k">${icon(a.kind === "agent" ? "agent" : "terminal")}<span>${kind}</span></div>
+      <b title="${esc(a.label)}">${esc(a.label)}</b>
+      ${a.now && (a.status === "running" || a.status === "quiet") ? `<span class="ss-act-now" title="${esc(a.now)}">${esc(a.now)}</span>` : ""}
+      ${a.summary && a.status !== "running" ? `<span class="ss-act-now">${esc(a.summary)}</span>` : ""}
+      <span class="ss-act-m">${word === "Running" ? "" : `<span class="tg ${cls}">${word}</span>`}${a.steps ? `${plural(a.steps, "step")} · ` : ""}${when}</span></div></div>`;
+  };
+  return `<div class="ss-act-h"><b>${n ? `${n} running` : "Background work"}</b><span class="muted small">${n ? "besides this chat" : "nothing running now"}</span></div>${xs.map(row).join("")}`;
 }
 
 /* a file for a message: big images are scaled down first (to 2000px and under ~3.5 MB, as Claude Code does) */
@@ -3667,13 +3714,106 @@ function ssFit(root) {
   const box = $(".ss-one, .ss-page", root), view = $("#view");
   if (!box) return;
   window.scrollTo(0, 0);
-  const pad = parseFloat(getComputedStyle(view).paddingBottom) || 0;
-  box.style.setProperty("--ss-h", Math.max(360, Math.floor(window.innerHeight - box.getBoundingClientRect().top - pad - 2)) + "px");
+  // Text size zooms #view: the box's position is measured on screen, but --ss-h is set in the zoomed CSS pixels
+  const zoom = parseFloat(getComputedStyle(view).zoom) || 1, pad = (parseFloat(getComputedStyle(view).paddingBottom) || 0) * zoom;
+  box.style.setProperty("--ss-h", Math.max(360, Math.floor((window.innerHeight - box.getBoundingClientRect().top - pad - 2) / zoom)) + "px");
 }
 window.addEventListener("resize", () => { if ((location.hash.slice(1) || "").split("/")[0] === "sessions") ssFit(document); });
 
+/* What one session changed: every file it edited or created, as diffs, from its own transcript. The same diff view as
+   Reviews (file tree, folding, filter), read-only. Shell commands that may also have changed files are listed. */
+async function ssChanges(id) {
+  const [c, d] = await Promise.all([api("session_changes", { id }), api("session", { id }).catch(() => ({}))]);
+  state.sess = { d: null, id: null, changes: true };
+  crumbs("sessions", d && d.title ? d.title : "Session", `#sessions/${id}`);
+  const back = `<a class="btn small" href="#sessions/${esc(id)}">${icon("back")}Back to the session</a>`;
+  if (!c || c.available === false) return `<div class="ssc">${back}${unavailable(c || {})}</div>`;
+  // files outside the project (scratch notes, another repo) go under their own folder in the tree
+  const files = c.files.map(f => f.outside ? Object.assign({}, f, { path: "Outside this project/" + f.path.split("/").pop(), full: f.path }) : f);
+  state.sscFiles = Object.fromEntries(files.map(f => [f.path, f.full || f.path]));  // shown path -> the real one
+  state.dfOpen = { n: "ss-" + id, paths: [], shut: [], filter: "" };
+  const total = files.reduce((a, f) => a + f.hunks.reduce((b, h) => b + h.lines.length, 0), 0);
+  const body = files.map((f, i) => diffFile(f, i, [], total <= 3000 || i < 4)).join("");
+  const shell = c.shell.length ? `<details class="box ssc-sh"><summary><b>${plural(c.shell.length, "shell command")}</b> that can also change files <span class="muted small">(sed, scripts, installs, formatters: these aren't recorded as edits, so check git for what they did)</span></summary>
+    <ul>${c.shell.slice().reverse().map(x => `<li><code>${esc(x.command)}</code><span class="muted small">${ago(x.ts)}</span></li>`).join("")}</ul></details>` : "";
+  return `<div class="ssc"><div class="ssc-h">${back}<div class="grow"><h1>What this session changed</h1>
+      <p class="muted">${esc(d && d.title || "")}${d && d.title ? " · " : ""}${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span> · from the session's own record, so it shows exactly what Claude edited here, even after commits</p></div></div>
+    ${shell}
+    ${files.length ? `<p class="muted small df-note">Drag down the line numbers, or click one and shift-click another, to ask about those lines or ask for a change. It goes into this same session, with the file and lines pointed out.</p>` : ""}
+    ${files.length ? `<div class="df"><aside class="df-side"><div class="df-filter"><input type="search" id="df-filter" placeholder="Filter files…" aria-label="Filter files"></div>
+      <div class="df-sum">${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span></div>
+      <div class="df-tree" id="df-tree">${diffTree(files, {})}</div></aside><div class="df-main">${body}</div></div>` : empty("No file edits in this session", "Claude didn't edit or create files here. Shell commands, if any, are listed above.")}</div>`;
+}
+function wireSessChanges(root) {
+  const id = (location.hash.match(/^#sessions\/([0-9a-f-]{36})\/changes/) || [])[1];
+  // select lines (drag down the numbers, or click then shift-click), then ask about them or ask for an edit: it goes
+  // into this same session as the next message, with the file, the lines and what they say, so Claude knows exactly
+  // what you mean
+  let sel = null, dragging = false;
+  const rowsOf = table => $$(".df-l", table);
+  const range = () => { const rows = rowsOf(sel.table), i = rows.indexOf(sel.a), j = rows.indexOf(sel.b); return rows.slice(Math.min(i, j), Math.max(i, j) + 1); };
+  const clear = () => $$(".df-l.sel", root).forEach(r => r.classList.remove("sel"));
+  const mark = () => { clear(); if (sel) range().forEach(r => r.classList.add("sel")); };
+  const compose = () => {
+    $$(".df-compose", root).forEach(r => r.remove());
+    if (!sel || !id) return;
+    const rows = range(), path = state.sscFiles[sel.table.dataset.path] || sel.table.dataset.path;
+    const nums = rows.map(r => +(r.dataset.k.startsWith("R") ? r.dataset.k.slice(1) : NaN)).filter(n => !isNaN(n));
+    const where = nums.length ? (nums[0] === nums[nums.length - 1] ? `line ${nums[0]}` : `lines ${nums[0]}-${nums[nums.length - 1]}`) : "removed lines";
+    const tr = document.createElement("tr");
+    tr.className = "df-compose";
+    tr.innerHTML = `<td colspan="4"><div class="th th-ask"><div class="th-h"><span class="th-lines">${icon("review")}${esc(path.split("/").pop())}, ${esc(where)} · goes to this session</span></div>
+      <textarea rows="3" placeholder="Ask about these lines, or say what to change: rename this, handle the empty case, why a sliding window?"></textarea>
+      <div class="df-reply"><span class="muted small">⌘ Enter asks · Claude gets the file, the lines and this text</span><span class="grow"></span><button class="btn small" data-ssc-cancel>Cancel</button><button class="btn small" data-ssc-send="ask">Ask</button><button class="btn small primary" data-ssc-send="edit">Make this change</button></div></div></td>`;
+    rows[rows.length - 1].after(tr);
+    const ta = $("textarea", tr); ta.focus();
+    const cancel = () => { sel = null; clear(); tr.remove(); };
+    ta.onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $('[data-ssc-send="ask"]', tr).click(); if (e.key === "Escape") cancel(); };
+    $("[data-ssc-cancel]", tr).onclick = cancel;
+    $$("[data-ssc-send]", tr).forEach(b => b.onclick = async () => {
+      if (!ta.value.trim()) return ta.focus();
+      const snippet = rows.slice(0, 80).map(r => { const t = r.classList.contains("add") ? "+" : r.classList.contains("del") ? "-" : " "; return t + ($(".df-c", r) || r.lastElementChild).textContent; }).join("\n");
+      const edit = b.dataset.sscSend === "edit";
+      // Claude gets the file, the lines and an instruction; the chat shows only the lines (as a diff) and your words
+      const span = where.replace(/^lines? /, "");
+      const text = `<lfg-lines file="${path.replace(/"/g, "")}" lines="${span}">\n${snippet}${rows.length > 80 ? "\n… (" + (rows.length - 80) + " more lines selected)" : ""}\n</lfg-lines>\n\n${ta.value.trim()}\n\n<lfg-note>${edit ? `Make this change to ${where} of ${path} (read the file first: the lines above are as this session changed them, and it may differ now).` : `This is a question about ${where} of ${path}, as this session changed them (the file may differ now): answer it, don't edit any files.`}</lfg-note>`;
+      $$("[data-ssc-send]", tr).forEach(x => (x.disabled = true)); b.textContent = "Sending…";
+      const st = await api("session", { id }).catch(() => null);
+      if (!st || !ssLive(st.state)) { const r = await save("sess_resume", { repo: state.repo, id }); if (!r.ok) { b.disabled = false; b.textContent = edit ? "Make this change" : "Ask"; return alert(String(r.why || "Couldn't start the session.")); } }
+      const r = await save("sess_say", { repo: state.repo, id, text });
+      if (!r.ok) { $$("[data-ssc-send]", tr).forEach(x => (x.disabled = false)); b.textContent = edit ? "Make this change" : "Ask"; return alert(String(r.why || "Couldn't send it.")); }
+      location.hash = `#sessions/${id}`;  // watch the answer in the conversation
+    });
+  };
+  $$("[data-df-pick]", root).forEach(el => el.addEventListener("mousedown", e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const tr = el.closest(".df-l"), table = el.closest(".df-t");
+    if (e.shiftKey && sel && sel.table === table) sel.b = tr; else sel = { table, a: tr, b: tr };
+    dragging = true; mark();
+  }));
+  $$(".df-t", root).forEach(table => table.addEventListener("mouseover", e => {
+    if (!dragging || !sel || sel.table !== table) return;
+    const tr = e.target.closest(".df-l");
+    if (tr && tr !== sel.b) { sel.b = tr; mark(); }
+  }));
+  const up = () => { if (!dragging) return; dragging = false; compose(); };
+  document.removeEventListener("mouseup", state.dfUp || (() => {}));
+  state.dfUp = up; document.addEventListener("mouseup", up);
+
+  $$("[data-df-dir]", root).forEach(a => a.onclick = e => { e.preventDefault(); a.parentNode.classList.toggle("shut"); });
+  $$("[data-df-goto]", root).forEach(a => a.onclick = e => { e.preventDefault(); $$(".df-leaf.on", root).forEach(x => x.classList.remove("on")); a.classList.add("on"); const f = $(`#df-f${a.dataset.dfGoto}`, root); f.open = true; f.scrollIntoView({ block: "start", behavior: "smooth" }); });
+  const filt = $("#df-filter", root);
+  if (filt) filt.oninput = () => {
+    const q = filt.value.trim().toLowerCase();
+    $$(".df-leaf", root).forEach(a => { a.hidden = !!q && !a.dataset.name.includes(q); });
+    $$(".df-dir", root).slice().reverse().forEach(dir => { dir.hidden = !!q && !$$(".df-leaf", dir).some(a => !a.hidden); if (q) dir.classList.remove("shut"); });
+  };
+}
+
 function wireSessions(root) {
   clearTimeout(ssPoll);
+  if ($(".ssc", root)) return wireSessChanges(root);
   ssFit(root);
   const S = state.sess || {}, d = S.d;
   const go = async (what, body, btn, busy) => { const was = btn && btn.textContent; if (btn) { btn.disabled = true; if (busy) btn.textContent = busy; } const r = await save(what, Object.assign({ repo: state.repo }, body)); if (!r.ok) { if (btn) { btn.disabled = false; btn.textContent = was; } alert(String(r.why || "That didn't work.").replace(/`/g, "")); } return r; };
@@ -3863,12 +4003,15 @@ function wireSessions(root) {
   conv.scrollTop = conv.scrollHeight;
   let sig = "";
   const sigOf = n => JSON.stringify([n.items.length, n.state, (n.pending || []).length, (n.queued || []).length, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null]);
+  const busyBg = n => (n.activity || []).some(a => a.status === "running");
+  const drawAct = n => { const box = $("#ss-act", root); if (box) box.innerHTML = ssAct(n); const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };
   sig = sigOf(d);
   async function refresh() {
     clearTimeout(ssPoll);
     if (!/^#sessions\//.test(location.hash) || state.sess.id !== S.id) return;
     const n = await api("session", { id: S.id });
     if (!n || n.available === false) return;
+    drawAct(n);  // steps and times change without the conversation changing
     const nsig = sigOf(n);
     if (nsig !== sig) {
       const stick = atBottom(), was = d.state;
@@ -3880,8 +4023,10 @@ function wireSessions(root) {
       if (stick) conv.scrollTop = conv.scrollHeight;
     }
     if (ssLive(n.state)) ssPoll = setTimeout(refresh, n.state === "idle" ? 4000 : 1200);
+    else if (busyBg(n)) ssPoll = setTimeout(refresh, 5000);  // a terminal session's agents: keep watching
   }
   if (ssLive(d.state)) ssPoll = setTimeout(refresh, 1200);
+  else if (busyBg(d)) ssPoll = setTimeout(refresh, 5000);
 }
 
 /* Notifications: every long job (an AI review or answer, a fix run, a Linear ticket, a scan, the checks) is announced
