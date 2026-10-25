@@ -1,3 +1,4 @@
+
 # LFG
 
 **An engineering pipeline for Claude Code.** LFG takes an idea or a Linear issue to a change that is tested, security-checked, reviewed and ready for **you** to commit. It works from knowledge graphs of your code, picks a lane so small changes stay fast, never pushes or deploys, and commits only when you ask and approve it.
@@ -6,6 +7,8 @@
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+https://github.com/user-attachments/assets/bcc10777-99ec-4f32-9b55-19702dbade8f
 
 ```
 grill → plan → build → check ∥ secure ∥ pentest → expert review → ship packet → you commit
