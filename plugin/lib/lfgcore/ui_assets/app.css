@@ -185,7 +185,11 @@ a.now:hover { background: var(--soft-2); }
 .steps .done::before { content: "✓ "; color: var(--green); }
 .steps .next { color: var(--blue-tx); background: var(--blue-bg); box-shadow: none; font-weight: 500; }
 .steps .stuck { color: var(--red-tx); background: var(--red-bg); box-shadow: none; font-weight: 500; }
-.steps .stuck::before { content: "! "; }
+.steps .stuck::before { content: "✕ "; }
+.steps .doing { color: var(--orange-tx); background: var(--orange-bg); box-shadow: none; font-weight: 500; }
+.steps .doing::before { content: "◐ "; }
+.steps .todo::before, .steps .next::before { content: "○ "; }
+.step-doing { color: var(--orange-tx); } .step-ok { color: var(--green); } .step-bad { color: var(--red-tx); }
 .steps .skipped { font-style: italic; text-decoration: line-through; }
 .steps .skipped::after { content: " skipped"; text-decoration: none; display: inline-block; margin-left: 4px; }
 .steps .outside::after { content: " outside LFG"; color: var(--faint); }

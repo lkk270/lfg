@@ -19,7 +19,7 @@ adapted-from: mattpocock/skills/to-spec + to-tickets + codebase-design (MIT, © 
 ## Step 0: preflight
 
 1. Run `lfg graphs ensure`. If it exits non-zero, stop and show its output (only `--allow-stale` from the user overrides).
-2. Run `lfg run path` → `RUN`. If there is no run or no `RUN/01-brief.md`, stop and suggest `/grill`.
+2. Run `lfg run path` → `RUN`. If there is no run or no `RUN/01-brief.md`, stop and suggest `/grill`. Run `lfg run doing design` and `lfg run doing tasks`.
 3. Run `lfg repo docs` → `DOCS`; read `DOCS/GLOSSARY.md` and ADRs touching this area. Use glossary terms everywhere.
 4. Load `lfg rule slice-rules` and `lfg rule module-design`.
 
@@ -31,7 +31,7 @@ adapted-from: mattpocock/skills/to-spec + to-tickets + codebase-design (MIT, © 
 4. **Tickets** (`slice-rules`): tracer-bullet vertical slices, prefactor first, each sized for one fresh context, each with `depends_on`. Wide mechanical refactors use expand → migrate batches → contract. Assign `owner_role` (`software-engineer`, or `ai-engineer` for prompts/RAG/model calls/evals) and a `parallel_group` (same letter = no edge between them, can run together).
 5. **Lane.** Run `lfg lane --json` and combine it with the radius, communities, new dependencies and touched auth/crypto/PII/payments/migrations/infra. Suggest the higher lane when in doubt; record reasons. Never lower a lane a human set.
 6. **Write** `RUN/02-design.md` and `RUN/tasks.json`; update `RUN/progress.md` (lane, ticket count, next: `/build`). Mirror tickets to dev-graph with `lfg issue sync-tasks` (one `Issue` per ticket, carrying its description, steps and verification; never hand-write a stub), then add `IssueBlocksIssue` edges for `depends_on`.
-7. **Checkpoint 2:** show a short summary: lane + reasons, components, risks, numbered tickets (title · blocked by · what it delivers · seams). Ask: granularity right? edges right? merge/split any? Iterate until approved.
+7. **Checkpoint 2:** show a short summary: lane + reasons, components, risks, numbered tickets (title · blocked by · what it delivers · seams). Ask: granularity right? edges right? merge/split any? Iterate until approved, then run `lfg run done design` and `lfg run done tasks`.
 8. **Linear (checkpoint 7, only if asked).** Never create Linear issues on your own. Ask once whether the user wants a Linear issue per ticket; only on yes, show one issue per ticket, blockers first, as exact text (title, what to build, acceptance criteria, `file:symbol` refs; no code blocks, secrets or internal hosts), as sub-issues when the run came from a Linear issue, with native blocking relations. Write only after an explicit yes; then store each Linear id on its ticket. Never modify the parent issue.
 
 ## Output
