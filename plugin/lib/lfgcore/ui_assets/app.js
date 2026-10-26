@@ -2814,10 +2814,14 @@ function togetherSection(t, unlocked, me) {
     ${stale || postBar(t.pr, q, t.live, own, unlocked)}`, prTally(q, own));
 }
 /* "3 findings · 1 kept · 2 to decide · score 91" for one PR's review */
+/* Passed on, or "Is it fixed?" found it fixed: decided, and no longer costs points. */
+const settled = f => f.status === "drop" || (f.check || {}).state === "fixed";
+const undecided = p => p.findings.filter(f => f.status === "pending" && !settled(f)).length;
 function prTally(p, own) {
-  const kept = p.findings.filter(f => f.status === "keep").length, pending = p.findings.filter(f => f.status === "pending").length;
-  const dropped = p.findings.length - kept - pending;
-  return `${plural(p.findings.length, "finding")} · ${kept} ${own ? "to fix" : "kept"}${dropped ? ` · ${dropped} ${own ? "passed" : "dropped"}` : ""} · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
+  const fixed = p.findings.filter(f => f.status !== "drop" && (f.check || {}).state === "fixed").length;
+  const kept = p.findings.filter(f => f.status === "keep" && !settled(f)).length, pending = undecided(p);
+  const dropped = p.findings.filter(f => f.status === "drop").length;
+  return `${plural(p.findings.length, "finding")} · ${kept} ${own ? "to fix" : "kept"}${fixed ? ` · ${fixed} fixed` : ""}${dropped ? ` · ${dropped} ${own ? "passed" : "dropped"}` : ""} · ${pending} to decide${p.score != null ? ` · score ${esc(p.score)}` : ""}`;
 }
 /* On your own PR: Claude fixes the findings marked Fix, in one commit unless that would be too big, and pushes. */
 function fixBar(pr, p, live, unlocked, fj, carry) {
@@ -2826,8 +2830,8 @@ function fixBar(pr, p, live, unlocked, fj, carry) {
   const done = p.fix ? `<div class="callout ${(p.fix.commits || []).length ? "ok" : "warn"}">${dot((p.fix.commits || []).length ? "ok" : "warn")}${(p.fix.commits || []).length ? `Fixed and pushed ${ago(p.fix.ended)} in ${(p.fix.commits || []).map(c => `<span class="mono">${esc(c.slice(0, 8))}</span>`).join(", ")}.` : "The last fix didn't commit anything."}${p.fix.note ? ` <span class="pre-wrap">${txt(p.fix.note)}</span>` : ""}${(p.fix.skipped || []).length ? `<ul>${p.fix.skipped.map(x => `<li><b class="mono">${esc(x.id)}</b> skipped: ${txt(x.why || "")}</li>`).join("")}</ul>` : ""}</div>` : "";
   const failed = fj && fj.status === "failed" ? `<div class="callout bad">${dot("bad")}The fix didn't go through: ${esc(fj.why || "")}${steps(fj)}</div>` : "";
   if (!live) return done || `<p class="muted small">An older review. Only the newest one can be fixed.</p>`;
-  const pending = p.findings.filter(f => f.status === "pending").length;
-  const todo = [...p.findings, ...(carry || [])].filter(f => f.status === "keep" && !(f.fixed || {}).commit).length;
+  const pending = undecided(p);
+  const todo = [...p.findings, ...(carry || [])].filter(f => f.status === "keep" && !(f.fixed || {}).commit && !settled(f)).length;
   return `<div class="pr-fixbar">${done}${failed}<div class="panel"><div class="k" style="margin-top:0">Fix your PR: <span class="mono">${esc(pr)}</span></div>
       <div class="row"><button class="btn primary" data-pr-fix="${esc(pr)}" ${unlocked && !pending && todo ? "" : "disabled"}>Fix ${plural(todo, "finding")}</button>
       <span class="muted small">${pending ? `Choose Fix or Pass on ${plural(pending, "more finding")} first.` : todo ? "Claude fixes them in a checkout of the PR's branch, runs the tests, and pushes one commit (more only if one would be too big to review)." : "Nothing marked Fix."}</span></div></div></div>`;
@@ -2837,7 +2841,7 @@ function postBar(pr, p, live, own, unlocked, fj, carry) {
   if (own && !p.posted) return fixBar(pr, p, live, unlocked, fj, carry);
   if (p.posted) return `<div class="callout ok">${dot("ok")}Posted ${ago(p.posted.ts)}. <a href="${esc(p.posted.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a></div>`;
   if (!live) return `<p class="muted small">An older review. Only the newest one can be posted or discarded.</p>`;
-  const pending = p.findings.filter(f => f.status === "pending").length, kept = p.findings.filter(f => f.status === "keep").length;
+  const pending = undecided(p), kept = p.findings.filter(f => f.status === "keep" && !settled(f)).length;
   return `<div class="panel"><div class="k" style="margin-top:0">Post to GitHub: <span class="mono">${esc(pr)}</span></div>
       <textarea class="editor small" data-pr-postbody="${esc(pr)}" placeholder="Optional: a note above the comments"></textarea>
       <div class="row mt">${(own ? [["comment", "Comment only"]] : [["request-changes", "Request changes"], ["approve", "Approve"], ["comment", "Comment only"]]).map(([e, l]) => `<button class="btn${e === "request-changes" || own ? " primary" : ""}" data-pr-preview='${esc(JSON.stringify([pr, e]))}' ${unlocked && !pending ? "" : "disabled"}>${l}…</button>`).join("")}
@@ -2857,7 +2861,7 @@ function prFinding(f, pr, unlocked, live, own) {
   const ref = esc(JSON.stringify([pr, f.id]));
   const code = f.file && f.line ? `<div class="pr-snip" data-pr-snip='${ref}'><div class="pr-snip-h mono">${esc(where)}</div><div class="muted small pad"><span class="loading-inline">Loading the code…</span></div></div>` : `<div class="muted small mono">${esc(where)}</div>`;
   const cost = POINTS[f.severity] || 0;
-  const pts = cost ? `<span class="pts ${f.status === "drop" ? "off" : ""}" title="${f.status === "drop" ? `Would cost ${cost} points; dropped, so it doesn't count` : `Costs ${cost} points of the score (${f.severity}). Nitpicks count once per kind`}">−${cost}</span>` : "";
+  const pts = cost ? `<span class="pts ${settled(f) ? "off" : ""}" title="${settled(f) ? `Would cost ${cost} points; ${f.status === "drop" ? "dropped" : "fixed"}, so it doesn't count` : `Costs ${cost} points of the score (${f.severity}). Nitpicks count once per kind`}">−${cost}</span>` : "";
   return `<div class="card pr-finding ${esc(f.status)}" id="f-${esc(f.id)}"><div class="row">${st(f.severity === "nitpick" ? "nit" : f.severity)}${pts}${tags}<span class="grow"></span><span class="muted small mono">${esc(f.id)}</span></div>
     <div class="title">${txt(f.title || f.issue)}</div>
     ${f.issue && f.title ? `<p>${txt(f.issue)}</p>` : ""}${f.fix ? `<p><b>Fix:</b> ${txt(f.fix)}</p>` : ""}
@@ -2954,13 +2958,13 @@ function verdictHero(p, together, gh) {
   const ring = sc == null ? "" : `<div class="score-ring ${scoreTone(sc)}" style="--pct:${Math.max(0, Math.min(100, sc))}" title="${sc < raw ? `Saved as ${raw}, shown as ${sc}: a PR that is ${label.toLowerCase()} can't score higher` : "The review's score out of 100"}"><span>${esc(sc)}</span><small>score</small></div>`;
   const upTo = (p.history || []).filter(x => x.n <= p.n);
   /* where the points went: findings, open questions, and anything the review took off without saying */
-  const kinds = new Set(), fpts = (p.findings || []).filter(f => f.status !== "drop").reduce((a, f) => {
+  const kinds = new Set(), fpts = (p.findings || []).filter(f => !settled(f)).reduce((a, f) => {
     if (f.severity === "nitpick") { if (kinds.has(f.title)) return a; kinds.add(f.title); }
     return a + (POINTS[f.severity] || 0);
   }, 0);
   const qpts = (p.questions || []).filter(q => !q.answer).reduce((a, q) => a + (q.costs || 0), 0);
   const other = raw == null ? 0 : Math.max(0, 100 - raw - fpts - qpts);
-  const breakdown = raw == null || together ? "" : `<div class="score-why small" title="The score is 100 minus these">100 <span class="muted">−</span> <b>${fpts}</b> <span class="muted">findings</span>${qpts ? ` <span class="muted">−</span> <b>${qpts}</b> <span class="muted">open questions</span>` : ""}${other ? ` <span class="muted">−</span> <b>${other}</b> <span class="muted" title="The review took these off without tying them to a finding or question, often risks named in the summary">not itemized</span>` : ""} <span class="muted">=</span> <b>${raw}</b></div>`;
+  const breakdown = raw == null || together ? "" : `<div class="score-why small" title="The score is 100 minus these">100 <span class="muted">−</span> <b>${fpts}</b> <span class="muted">findings</span>${qpts ? ` <span class="muted">−</span> <b>${qpts}</b> <span class="muted">open questions</span>` : ""}${other ? ` <span class="muted">−</span> <b>${other}</b> <span class="muted" title="The review took these off without tying them to a finding or question, often risks named in the summary">not itemized</span>` : ""} <span class="muted">=</span> <b>${raw}</b></div>${(p.credits || []).length ? `<div class="score-why small">${esc(p.score_at_review)} when reviewed, <b>${raw}</b> now: ${p.credits.map(c => `+${c.points} for ${esc(c.id)} ${c.why === "fixed" ? "fixed" : "passed on"}`).join(", ")}</div>` : ""}`;
   return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}${breakdown}${RUBRIC}</div>${together ? "" : trend(upTo)}</div>${clash ? `<div class="callout ${clash.others ? "bad" : "warn"} approved-anyway">${dot(clash.others ? "bad" : "warn")}<span>${esc(clash.text)}</span></div>` : ""}`;
 }
 /* Which way the score is heading: against the review before, and a small line of every score so far. */
@@ -3475,7 +3479,14 @@ function wirePrs(root) {
     $(`[data-pr-body="${b.dataset.prEditcancel}"]`, card).hidden = false;
   });
   $$("[data-pr-importpath]", root).forEach(b => b.onclick = () => { const [p, path] = JSON.parse(b.dataset.prImportpath); prImport(p, path, b); });
-  $$("[data-pr-pass]", root).forEach(b => b.onclick = () => { const [pr, n] = JSON.parse(b.dataset.prPass); sessionStorage.setItem("lfg.prpass." + pr, n); softRoute(); });
+  $$("[data-pr-pass]", root).forEach(b => b.onclick = () => {
+    const [pr, n] = JSON.parse(b.dataset.prPass);
+    sessionStorage.setItem("lfg.prpass." + pr, n);
+    $$("[data-pr-pass]", root).forEach(x => x.classList.toggle("on", x === b));  // the tab moves now, the review follows
+    const body = $(".pr-split", root);
+    if (body) body.innerHTML = `<div class="pr-pass-body" aria-busy="true" aria-label="Loading"><div class="skeleton" style="height:120px"></div><div class="skeleton" style="height:18px;width:70%;margin-top:16px"></div><div class="skeleton" style="height:18px;width:55%;margin-top:10px"></div><div class="sk-box">${'<div class="sk-row"><div class="skeleton" style="width:45%"></div></div>'.repeat(3)}</div></div>`;
+    softRoute();
+  });
   $$("[data-pr-discard]", root).forEach(b => b.onclick = () => {
     const [pr, n] = JSON.parse(b.dataset.prDiscard);
     openDrawer(`Discard review ${n}?`, `<div class="readable"><p>Its findings and your keep/drop choices go. Nothing was posted, so GitHub isn't touched. Earlier reviews stay.</p><div class="set-actions"><button class="btn primary" id="pr-disc-go">Discard</button><span class="save-msg" id="pr-disc-msg"></span></div></div>`);
