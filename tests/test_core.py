@@ -3463,6 +3463,25 @@ class ReviewTest(unittest.TestCase):
         self.assertIn("3 if not s: return", asked[0])  # the file now, with line numbers
         self.assertEqual(R.load("o/r", 7)["passes"][0]["findings"][0]["check"]["state"], "fixed")
 
+    def test_is_it_fixed_reads_the_pr_description_for_a_finding_about_the_whole_pr(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s",
+                              "findings": [self.finding(file=None, line=None, title="Body skips setup")]})
+        head = R.load("o/r", 7)["passes"][0]["head_sha"]
+        asked = []
+
+        def run(cmd, input=None, **kw):
+            asked.append(input)
+            said = json.dumps({"result": '{"state": "fixed", "why": "it says so"}'})
+            return subprocess.CompletedProcess(cmd, 0, said, "")
+        with mock.patch.object(R, "gh_status", return_value={"head_sha": head}), \
+                mock.patch.object(R, "gh_json", return_value={"title": "T", "body": "Run setup first."}), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch("subprocess.run", side_effect=run):
+            out = R.check_fixed("o/r", 7, "1.1")
+        self.assertEqual(out["state"], "fixed")  # no new commit, but the description was edited
+        self.assertIn("Run setup first.", asked[0])
+
     def test_one_review_can_follow_its_own_method(self):
         events = [{"type": "system", "subtype": "init", "session_id": "s1"},
                   {"type": "result", "session_id": "s1",
@@ -3798,7 +3817,8 @@ class ReviewTest(unittest.TestCase):
         rec["passes"][0]["findings"][0]["check"] = {"state": "fixed"}
         R.store(rec)
         p2 = R.load("o/r", 7)["passes"][1]
-        self.assertEqual((p2["score"], p2.get("verdict_now"), p2["earlier_points"]), (94, None, 5))  # 1.2 still open
+        # the minor that made it "almost" is fixed: the score moves now, though the nitpick 1.2 is still open
+        self.assertEqual((p2["score"], p2.get("verdict_now"), p2["earlier_points"]), (99, "mergeable", 5))
         rec = R.load("o/r", 7)
         rec["passes"][0]["findings"][1]["check"] = {"state": "fixed"}
         R.store(rec)
@@ -3807,10 +3827,51 @@ class ReviewTest(unittest.TestCase):
                          [(100, "mergeable", "mergeable")] * 2)
         R.mark("o/r", 7, ["1.2"], status="keep")
         rec = R.load("o/r", 7)
-        rec["passes"][0]["findings"][1]["check"] = {"state": "partly"}
+        rec["passes"][0]["findings"][0]["check"] = {"state": "partly"}  # the minor turns out only partly fixed
         R.store(rec)
         p2 = R.load("o/r", 7)["passes"][1]
         self.assertEqual((p2["score"], p2.get("verdict_now"), R.verdict_of(p2)), (94, None, "almost"))
+
+    def test_with_its_majors_fixed_a_not_mergeable_review_reads_almost(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "score": 72, "verdict": "not", "findings": [
+                f(severity="major", title="a"), f(severity="major", title="b", line=9), f(severity="minor", title="c",
+                                                                                         line=20)]})
+        rec = R.load("o/r", 7)
+        for g in rec["passes"][0]["findings"][:2]:
+            g["check"] = {"state": "fixed"}
+        R.store(rec)
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["verdict_now"], p["score"], R.verdict_of(p)), ("almost", 94, "almost"))
+
+    def test_the_review_chat_takes_images_and_slash_commands(self):
+        import base64
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()
+        path = R.save_image(png, "image/png")["path"]
+        self.assertTrue(path.startswith(R.chat_images_dir()) and os.path.isfile(path))
+        with self.assertRaises(R.ReviewError):
+            R.save_image(png, "text/html")
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["run"] = {"session_id": "s" * 8, "cwd": self.tmp_dir()}
+        R.store(rec)
+        sent = []
+
+        def fake(cmd, **kw):
+            sent.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok"}), "")
+        with mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
+            R.ask("o/r", 7, 1, "what is this?\n[image: %s]\n[image: /etc/passwd]" % path)
+            R.ask("o/r", 7, 1, "/review-pr 7 look again")
+        prompt, tools = sent[0][2], sent[0][sent[0].index("--allowedTools") + 1]
+        self.assertIn("Open each attached image with the Read tool before answering: %s" % path, prompt)
+        self.assertNotIn("/etc/passwd,", prompt.split("before answering:")[1])  # only images saved by the chat
+        self.assertNotIn("Skill", tools)
+        self.assertTrue(sent[1][2].startswith("/review-pr 7 look again"))  # a command goes first, as typed
+        self.assertIn("Skill", sent[1][sent[1].index("--allowedTools") + 1].split(","))
+        self.assertEqual(sent[1][sent[1].index("--resume") + 1], "s" * 8)
 
     def test_a_re_review_follows_up_findings_you_never_decided_on(self):
         f = self.finding

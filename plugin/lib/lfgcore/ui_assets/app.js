@@ -2576,9 +2576,9 @@ function methodPick(d, unlocked) {
   if (!d.methods) return "";
   const saved = d.methods.find(m => m.saved) || d.methods[0], cur = state.reviewMethod || saved.id;
   const all = state.reviewMethodsAll, shown = d.methods.filter(m => all || m.fits || m.id === cur);
-  const opt = m => `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""} title="${esc(m.about || "")}">${esc(m.label)}${m.saved ? " (saved)" : ""}</option>`;
+  const opt = m => `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""} title="${esc(m.about || "")}">${esc(m.label)}${m.saved ? " (default)" : ""}</option>`;
   const others = d.methods.length - d.methods.filter(m => m.fits || m.id === cur).length;
-  return `<label class="model-pick" >Method${info("The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded. lfg:review still runs the review around it. Your saved one is in Review method, below the lists.")}<select data-review-method ${unlocked ? "" : "disabled"}>${shown.map(opt).join("")}${!all && others ? `<option value="__all">Other skill… (${others})</option>` : ""}</select></label>`;
+  return `<label class="model-pick" >Method${info("The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded. lfg:review still runs the review around it. Your default is set in Review method, below the lists.")}<select data-review-method ${unlocked ? "" : "disabled"}>${shown.map(opt).join("")}${!all && others ? `<option value="__all">Other skill… (${others})</option>` : ""}</select></label>`;
 }
 function modelPick(d, unlocked) {
   if (!d.models) return "";
@@ -2890,7 +2890,8 @@ const chatTurn = (x, pr) => {
   const tag = m ? `<a href="#" class="chip c-blue msg-tag" ${x.qid ? `data-goto-q="${esc(x.qid)}"` : ""} title="${esc(m[1])}">Answer to: ${esc(m[1].length > 60 ? m[1].slice(0, 59) + "…" : m[1])}</a>` : "";
   return chatTurnOf({ ...x, q: m ? m[2] : x.q }, pr, tag);
 };
-const chatTurnOf = (x, pr, tag) => `<div class="msg you">${tag || ""}<div class="bubble">${txt(x.q)}</div>${x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.a == null ? typing() : `<div class="msg claude"><div class="who">Claude</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
+const chatImgs = q => (String(q || "").match(/\[image: [^\]\s]+\]/g) || []).length;
+const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(/\s*\[image: [^\]\s]+\]/g, "").trim())}${chatImgs(x.q) ? `<div class="msg-imgs">${plural(chatImgs(x.q), "image")} attached</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing() : `<div class="msg claude"><div class="who">Claude</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
 const typing = () => '<div class="msg claude"><div class="who">Claude</div><div class="bubble typing" aria-label="Claude is thinking"><i></i><i></i><i></i></div></div>';
 /* What a reply changed in the review, as chips that jump to the finding. */
 function changedChips(changed, pr) {
@@ -2933,7 +2934,7 @@ function questionsBox(pr, p, unlocked) {
 /* Can it merge? The review's own call when it made one, else worked out from the findings still open. */
 const VERDICT = { mergeable: ["Mergeable", "ok"], almost: ["Almost mergeable", "warn"], not: ["Not mergeable", "bad"] };
 function mergeVerdict(p) {
-  if (VERDICT[p.verdict_now]) return { v: p.verdict_now, why: `Everything this review raised is now fixed or passed. When it ran it said ${VERDICT[p.verdict] ? VERDICT[p.verdict][0].toLowerCase() : "otherwise"}${p.verdict_why ? `: ${p.verdict_why}` : "."}`, guessed: false };
+  if (VERDICT[p.verdict_now]) return { v: p.verdict_now, why: `${p.verdict_now === "mergeable" ? "Everything this review raised is now fixed or passed" : "What made it worse is fixed or passed; this is what is still open"}. When it ran it said ${VERDICT[p.verdict] ? VERDICT[p.verdict][0].toLowerCase() : "otherwise"}${p.verdict_why ? `: ${p.verdict_why}` : "."}`, guessed: false };
   if (VERDICT[p.verdict]) return { v: p.verdict, why: p.verdict_why || "", guessed: false };
   const open = (p.findings || []).filter(f => f.status !== "drop" && !(f.fixed || {}).commit);
   const big = open.filter(f => ["blocker", "major"].includes(f.severity)), small = open.filter(f => f.severity === "minor");
@@ -3012,10 +3013,12 @@ function rememberRow(pr, n, q, unlocked) {
    match what the conversation settles. */
 const chatMode = () => localStorage.getItem("lfg.chat") || "side";
 function talkPane(pr, p, unlocked, byId) {
+  state.lastTalk = { pr, p, unlocked, byId };  // what a Discuss redraws from at once, before the page catches up
   const about = (state.chatAbout || {})[pr], f = about && byId[about];
   const key = f ? `f:${pr}:${f.id}` : `r:${pr}:${p.n}`;
   const turns = [...(f ? f.chat || [] : p.chat || [])], waiting = (state.chatPending || {})[key];
   if (waiting) turns.push({ q: waiting, a: null });
+  turns.push(...((state.chatQueue || {})[key] || []).map(q => ({ q, a: null, queued: true })));
   const mode = chatMode(), count = (p.chat || []).length;
   const hint = f ? `Ask about ${f.id}, push back, or say it isn't needed. If Claude agrees after checking the code, it drops the finding; if not, it says why it still matters.`
     : `Ask why something is rated the way it is, push back, or ask for a change: "drop 1.3, it's handled in the caller", "make 1.1 softer". The review changes to match.`;
@@ -3027,8 +3030,8 @@ function talkPane(pr, p, unlocked, byId) {
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
     <div class="pr-thread">${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
-    <div class="pr-compose big"><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change…"}" ${unlocked && !waiting ? "" : "disabled"}></textarea>
-      <div class="pr-compose-bar"><span class="muted small">Enter to send · Shift+Enter for a new line</span><button class="btn small primary" data-pr-chatgo ${unlocked && !waiting ? "" : "disabled"}>${waiting ? "Thinking…" : "Send"}</button></div></div></aside>`;
+    <div class="pr-compose big"><div class="chat-atts" data-chat-atts></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
+      <div class="pr-compose-bar"><label class="btn small" title="Attach an image, or paste one into the box">Image<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden data-chat-file ${unlocked ? "" : "disabled"}></label><span class="muted small grow">Enter to send · Shift+Enter for a new line${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
 }
 /* Copy one finding or earlier comment: short for a person, everything an agent needs to act on it. */
 const copyBtns = (person, agent) => `<button class="btn small" data-copy="${esc(person)}" title="What's wrong, where, and the comment: to paste to a person">Copy</button><button class="btn small" data-copy="${esc(agent)}" title="Everything needed to act on it: file and line, issue, fix, the evidence, the comment and its status">Copy for an agent</button>`;
@@ -3129,7 +3132,7 @@ async function prDetail(arg) {
   const byId = Object.fromEntries(passes.flatMap(x => x.findings).map(f => [f.id, f]));
   // a full review saved before LFG recorded the kind: no earlier findings followed up, and every finding is new
   const full = x => x.kind === "full" || (x.kind === "re-review" && !(x.prior || []).length && x.findings.length > 0 && x.findings.every(f => f.since === "first"));
-  const label = x => `Review ${x.n}${full(x) ? " · from scratch" : x.kind === "re-review" ? " · re-review" : ""}`;
+  const label = x => `Review ${x.n}${(x.run || {}).fresh_eyes ? " · fresh eyes" : full(x) ? " · from scratch" : x.kind === "re-review" ? " · re-review" : ""}`;
   const passTabs = `<div class="tabs pr-passes" data-scroll-on>${passes.slice().reverse().map(x => `<button class="tab ${x.n === p.n ? "on" : ""}" data-pr-pass='${esc(JSON.stringify([pr, x.n]))}'>${esc(label(x))}<span class="n">${x.posted ? "posted" : ago(x.ts)}</span></button>`).join("")}</div>`;
   const own = !!(rec.author && d.gh && d.gh.me && rec.author === d.gh.me);  // GitHub takes only a comment on your own PR
   const passOf = Object.fromEntries(passes.flatMap(x => x.findings.map(f => [f.id, x.n])));
@@ -3149,11 +3152,11 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-split"><div class="pr-pass-body">
-      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
+      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · reviewed at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${d.gh && d.gh.head_sha && d.gh.head_sha !== p.head_sha ? ` · <span class="tag warn" title="Commits were pushed after this review. Is it fixed? checks a finding against the newest code; a re-review reads them all">PR is now at <span class="mono">${esc(d.gh.head_sha.slice(0, 8))}</span></span>` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
-        ${p.run.used ? `<div class="k mt">What it used</div>${usedTags(p.run.used, p.run.method)}` : ""}
+        ${p.run.used ? `<div class="k mt">What it used</div>${p.run.fresh_eyes ? `<div class="used"><div class="used-k">Mode${info("Fresh eyes: this review didn't see earlier reviews, your Fix/Pass choices, or anyone else's comments. Findings an earlier review raised are tagged.")}</div><div class="used-v"><span class="chip c-green">Fresh eyes</span></div></div>` : ""}${usedTags(p.run.used, p.run.method)}` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted"><span class="loading-inline">Loading…</span></div></details>` : ""}</div>
       ${questionsBox(pr, p, unlocked)}
       ${prior}
@@ -3251,12 +3254,6 @@ function prGroup() {
 function wireChat(root) {
   $$("textarea[data-grow]", root).forEach(grow);
   $$("[data-chat-mode]", root).forEach(b => b.onclick = () => chatSetMode(b.dataset.chatMode));
-  $$("[data-chat-about]", root).forEach(b => b.onclick = e => {
-    e.preventDefault();
-    const [pr, id] = JSON.parse(b.dataset.chatAbout);
-    (state.chatAbout || (state.chatAbout = {}))[pr] = id;
-    softRoute();
-  });
   $$(".msg-tag", root).forEach(a => a.onclick = e => {  // your answer in the chat: show the question it answers
     e.preventDefault();
     const el = a.dataset.gotoQ ? $(`#q-${CSS.escape(a.dataset.gotoQ)}`) : $$(".pr-question").find(q => q.dataset.ask === a.title);
@@ -3271,36 +3268,86 @@ function wireChat(root) {
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600);
   });
+  wireChatPane(root);
+}
+/* Point the chat at a finding (or back at the whole review) and show it now, from what the page last drew; the
+   page refreshes behind it. */
+function chatRedraw(pr) {
+  const t = state.lastTalk, old = $(".pr-talk");
+  if (!t || t.pr !== pr || !old) return softRoute();
+  const box = document.createElement("div");
+  box.innerHTML = talkPane(t.pr, t.p, t.unlocked, t.byId);
+  const fab = $(".chat-fab");
+  if (fab) fab.replaceWith(box.firstElementChild);
+  old.replaceWith(box.querySelector(".pr-talk"));
+  wireChat(document);
+  $("[data-pr-chat]")?.focus();
+  softRoute();
+}
+function wireChatPane(root) {
+  $$("[data-chat-about]", root).forEach(b => b.onclick = e => {
+    e.preventDefault();
+    const [pr, id] = JSON.parse(b.dataset.chatAbout);
+    (state.chatAbout || (state.chatAbout = {}))[pr] = id;
+    chatRedraw(pr);
+  });
   const pane = $(".pr-talk", root);
   if (!pane) return;
   const thread = $(".pr-thread", pane);
   if (thread && !thread.dataset.scrolled) { thread.scrollTop = thread.scrollHeight; }
   const [pr, n, fid] = JSON.parse(pane.dataset.chat), input = $("[data-pr-chat]", pane), b = $("[data-pr-chatgo]", pane);
+  const key = fid ? `f:${pr}:${fid}` : `r:${pr}:${n}`;
+  const atts = (state.chatAtts || (state.chatAtts = {}))[key] || (state.chatAtts[key] = []);
+  const attBox = $("[data-chat-atts]", pane);
+  const drawAtts = () => { attBox.innerHTML = atts.map((a, i) => `<span class="chat-att"><img src="${a.url}" alt=""><button class="icon-btn" data-att-x="${i}" aria-label="Remove image">×</button></span>`).join(""); $$("[data-att-x]", attBox).forEach(x => x.onclick = () => { atts.splice(+x.dataset.attX, 1); drawAtts(); }); };
+  drawAtts();
+  const attach = async file => {
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return prefToast("Only PNG, JPEG, GIF or WebP images", true);
+    const data = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(",")[1]); fr.readAsDataURL(file); });
+    const d = await save("chat_image", { data, type: file.type });
+    if (!d.ok) return prefToast(d.why || "Couldn't attach the image", true);
+    atts.push({ path: d.path, url: URL.createObjectURL(file) }); drawAtts();
+  };
+  $("[data-chat-file]", pane).onchange = e => { [...e.target.files].forEach(attach); e.target.value = ""; };
+  input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []].filter(x => x.type.startsWith("image/")); if (fs.length) { e.preventDefault(); fs.forEach(attach); } };
   const go = async () => {
-    const text = input.value.trim();
-    if (!text) return input.focus();
-    const key = fid ? `f:${pr}:${fid}` : `r:${pr}:${n}`;
-    (state.chatPending || (state.chatPending = {}))[key] = text;
-    input.value = ""; input.disabled = b.disabled = true; b.textContent = "Thinking…";
-    // your message and Claude "typing" show at once; the page catches up in the background
+    const said = input.value.trim();
+    if (!said && !atts.length) return input.focus();
+    const text = [said, ...atts.splice(0).map(a => `[image: ${a.path}]`)].join("\n").trim();
+    input.value = ""; drawAtts(); grow(input);
     const thread = $(".pr-thread", pane);
     $(".chat-empty", thread)?.remove();
+    if ((state.chatPending || {})[key]) {  // Claude is still on the one before: this one waits its turn
+      ((state.chatQueue || (state.chatQueue = {}))[key] || (state.chatQueue[key] = [])).push(text);
+      thread.insertAdjacentHTML("beforeend", chatTurn({ q: text, a: null, queued: true }, pr));
+      thread.scrollTop = thread.scrollHeight;
+      return;
+    }
     thread.insertAdjacentHTML("beforeend", chatTurn({ q: text, a: null, at: new Date().toISOString() }, pr));
     thread.scrollTop = thread.scrollHeight;
-    const d = fid ? await save("review_discuss", { pr, id: fid, question: text }) : await save("review_ask", { pr, pass: n, question: text });
-    delete state.chatPending[key];
-    await softRoute();
-    if (!d.ok) {
-      $$(".msg", thread).slice(-2).forEach(m => m.remove());  // your message and the typing dots
-      const t = $("[data-pr-chat]"), sb = $("[data-pr-chatgo]");
-      if (t) { t.disabled = false; t.value = text; grow(t); }
-      if (sb) { sb.disabled = false; sb.textContent = "Send"; }
-      prefToast(d.error || "Claude didn't answer", true);
-    }
+    b.textContent = "Queue";
+    chatSend(key, pr, n, fid, text);
   };
   b.onclick = go;
   input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } };
   if (pane.classList.contains("wide")) document.onkeydown = e => { if (e.key === "Escape" && $(".pr-talk.wide")) { localStorage.setItem("lfg.chat", "side"); softRoute(); } };
+}
+/* Send one chat message, then the next one queued behind it, in order. A failed one goes back in the box. */
+async function chatSend(key, pr, n, fid, text) {
+  (state.chatPending || (state.chatPending = {}))[key] = text;
+  const d = fid ? await save("review_discuss", { pr, id: fid, question: text }) : await save("review_ask", { pr, pass: n, question: text });
+  delete state.chatPending[key];
+  const queue = (state.chatQueue || {})[key] || [];
+  if (!d.ok) {
+    const left = [text, ...queue.splice(0)].join("\n\n");
+    await softRoute();
+    const t = $("[data-pr-chat]");
+    if (t) { t.value = left; grow(t); }
+    return prefToast(d.error || d.why || "Claude didn't answer", true);
+  }
+  const next = queue.shift();
+  if (next) chatSend(key, pr, n, fid, next);
+  await softRoute();
 }
 /* Side, wide or hidden, at once: only classes change, nothing is fetched again. */
 function chatSetMode(mode) {
@@ -3463,7 +3510,7 @@ function wirePrs(root) {
     const [pr, id] = JSON.parse(b.dataset.prDiscuss);
     (state.chatAbout || (state.chatAbout = {}))[pr] = id;
     if (chatMode() === "hidden") localStorage.setItem("lfg.chat", "side");  // a Discuss opens the chat
-    softRoute().then(() => { const t = $("[data-pr-chat]"); if (t) t.focus(); });
+    chatRedraw(pr);
   });
   $$("[data-pr-check]", root).forEach(b => b.onclick = async () => {
     const [pr, id] = JSON.parse(b.dataset.prCheck), card = b.closest(".pr-finding");

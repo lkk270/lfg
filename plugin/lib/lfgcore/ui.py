@@ -359,6 +359,7 @@ def api(view, q):
 
 
 MAX_BODY = 600_000
+IMAGE_BODY = 7_000_000  # 5 MB of image as base64
 NO_KEY = {"/api/save/graphs_build", "/api/save/tour_done"}  # neither changes your settings
 
 
@@ -521,6 +522,8 @@ def review_action(what, body):
     `lfg review post` away from agents."""
     from . import review as R
     try:
+        if what == "chat_image":
+            return R.save_image(body.get("data"), str(body.get("type") or ""))
         if what == "review_sources":
             return R.set_sources(body.get("sources"))
         if what == "review_model":
@@ -705,7 +708,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if u.path not in NO_KEY and not S.key_ok(self.headers.get("X-LFG-Key")):
             return no(403, "editing is locked: run `lfg ui --unlock` in your terminal")
         size = int(self.headers.get("Content-Length") or 0)
-        if not (self.headers.get("Content-Type") or "").startswith("application/json") or not 0 < size <= MAX_BODY:
+        limit = IMAGE_BODY if u.path == "/api/save/chat_image" else MAX_BODY  # a pasted screenshot is bigger
+        if not (self.headers.get("Content-Type") or "").startswith("application/json") or not 0 < size <= limit:
             return no(400, "expected a JSON body")
         try:
             body = json.loads(self.rfile.read(size))
