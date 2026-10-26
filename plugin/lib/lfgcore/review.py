@@ -2056,7 +2056,8 @@ def score_stats(only=None):
             continue
         approved = next((p["n"] for p in r["passes"] if (p.get("posted") or {}).get("event") == "APPROVE"), None)
         prs.append({"repo": r["repo"], "number": r["number"], "title": r.get("title") or "", "author": r.get("author")
-                    or "?", "first": ps[0].get("score_at_review", ps[0]["score"]), "latest": ps[-1]["score"], "reviews": len(r["passes"]),
+                    or "?", "first": ps[0].get("score_at_review", ps[0]["score"]), "latest": ps[-1]["score"],
+                    "reviews": len(r["passes"]),
                     "approved_after": approved, "verdict": verdict_of(r["passes"][-1]), "scores": scores(r),
                     "updated": r.get("updated") or ps[-1].get("ts"), "first_at": ps[0].get("ts") or ""})
 
