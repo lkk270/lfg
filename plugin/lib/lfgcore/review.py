@@ -180,7 +180,53 @@ def load(repo, number):
     return C.read_json(record_path(repo, number))
 
 
+POINTS = {"blocker": 25, "major": 12, "minor": 4, "nitpick": 1, "note": 0}  # the rubric's cost of each severity
+
+
+def checked_fixed(f):
+    return (f.get("check") or {}).get("state") == "fixed"
+
+
+def undecided(p):
+    """Findings of a pass still waiting for keep or drop (Fix or Pass). One that "Is it fixed?" found fixed is
+    settled already."""
+    return [f["id"] for f in p["findings"] if f["status"] == "pending" and not checked_fixed(f)]
+
+
+def rescore(rec):
+    """Each review's score as things stand: the score it gave, plus the points of every finding it counted that you
+    since passed on or that "Is it fixed?" found fixed (`credits`; `score_at_review` keeps the original). A finding
+    counts in its own review and in later ones that still listed it as open. Nitpicks cost once per kind, so a kind
+    comes back only when every one of them is settled."""
+    by_id = {f["id"]: f for p in rec.get("passes") or [] for f in p.get("findings") or []}
+    for p in rec.get("passes") or []:
+        if p.get("score") is None:
+            continue
+        base = p.get("score_at_review", p["score"])
+        counted = list(p.get("findings") or []) + [
+            by_id[x["id"]] for x in p.get("prior") or []
+            if x.get("state") not in ("fixed", "withdrawn") and x.get("id") in by_id]
+        credits, nits = [], {}
+        for f in counted:
+            if f["severity"] == "nitpick":
+                nits.setdefault(f.get("title") or f["id"], []).append(f)
+            elif POINTS.get(f["severity"]) and (f["status"] == "drop" or checked_fixed(f)):
+                credits.append(f)
+        credits += [fs[0] for fs in nits.values() if all(f["status"] == "drop" or checked_fixed(f) for f in fs)]
+        credits.sort(key=lambda f: [int(x) for x in f["id"].split(".") if x.isdigit()])
+        if credits:
+            p["score_at_review"] = base
+            p["credits"] = [{"id": f["id"], "points": POINTS[f["severity"]],
+                             "why": "passed" if f["status"] == "drop" else "fixed"} for f in credits]
+            p["score"] = cap_score(min(100, base + sum(c["points"] for c in p["credits"])), p.get("verdict"))
+        elif "score_at_review" in p:
+            p["score"] = p.pop("score_at_review")
+            p.pop("credits", None)
+    return rec
+
+
 def store(rec):
+    rescore(rec)
     rec["updated"] = C.now_iso()
     C.write_json(record_path(rec["repo"], rec["number"]), rec)
 
@@ -431,9 +477,9 @@ def plan_post(rec, event, body="", lines=None):
     p = rec["passes"][-1]
     if p.get("posted"):
         raise ReviewError("pass %d was already posted (%s); run a re-review first" % (p["n"], p["posted"]["url"]))
-    pending = [f for f in p["findings"] if f["status"] == "pending"]
+    pending = undecided(p)
     if pending:
-        raise ReviewError("decide keep or drop first: %s" % ", ".join(f["id"] for f in pending))
+        raise ReviewError("decide keep or drop first: %s" % ", ".join(pending))
     kept = [f for f in p["findings"] if f["status"] == "keep" and not f["comment_id"]]
     if lines is None:
         lines = diff_lines(rec["repo"], rec["base"], p["head_sha"]) if any(f["file"] for f in kept) else {}
@@ -1204,6 +1250,8 @@ def apply_changes(repo, number, n, out):
             p["verdict"], p["verdict_why"] = v, _text((out or {}).get("verdict_why"), "verdict_why", 400)
             if cap_score(p.get("score"), v) != p.get("score"):
                 p["score"] = cap_score(p["score"], v)
+                if "score_at_review" in p:
+                    p["score_at_review"] = cap_score(p["score_at_review"], v)
                 done.append("score %d" % p["score"])
             recs[(repo, number)] = rec
             done.append("verdict %s" % v)
@@ -1213,6 +1261,10 @@ def apply_changes(repo, number, n, out):
         p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
         score = cap_score(score, p.get("verdict") if p else None)
         if p and p.get("score") != score:
+            # what Claude now says is the score as things stand: work back the one before anything settled
+            p["score"] = p["score_at_review"] = score
+            rescore(rec)
+            p["score_at_review"] = max(0, score - sum(c["points"] for c in p.get("credits") or []))
             p["score"] = score
             recs[(repo, number)] = rec
             done.append("score %d" % score)
@@ -1496,7 +1548,7 @@ def check_fixed(repo, number, fid):
 
 DISCUSS = ("This is about one finding, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\nThe comment drafted "
            "for the author: %s%s\n\nLee says: %s\n\nIf Lee says it isn't needed and the code agrees, say so in a "
-           "sentence and drop it (\"status\": \"drop\"), lowering \"score\" if the finding had cost points. If you "
+           "sentence and drop it (\"status\": \"drop\"); leave \"score\" alone, LFG gives its points back. If you "
            "disagree, keep it and say plainly why it still matters and what has to change.")
 
 
@@ -1624,7 +1676,7 @@ def fix_start(repo, number):
     if rec.get("author") and rec["author"] != me():
         raise ReviewError("only your own PR can be fixed from here; on someone else's, post the comments")
     p = rec["passes"][-1]
-    pending = [f["id"] for f in p["findings"] if f["status"] == "pending"]
+    pending = undecided(p)
     if pending:
         raise ReviewError("decide fix or pass first: %s" % ", ".join(pending))
     if not to_fix(rec):
@@ -2004,7 +2056,7 @@ def score_stats(only=None):
             continue
         approved = next((p["n"] for p in r["passes"] if (p.get("posted") or {}).get("event") == "APPROVE"), None)
         prs.append({"repo": r["repo"], "number": r["number"], "title": r.get("title") or "", "author": r.get("author")
-                    or "?", "first": ps[0]["score"], "latest": ps[-1]["score"], "reviews": len(r["passes"]),
+                    or "?", "first": ps[0].get("score_at_review", ps[0]["score"]), "latest": ps[-1]["score"], "reviews": len(r["passes"]),
                     "approved_after": approved, "verdict": verdict_of(r["passes"][-1]), "scores": scores(r),
                     "updated": r.get("updated") or ps[-1].get("ts"), "first_at": ps[0].get("ts") or ""})
 

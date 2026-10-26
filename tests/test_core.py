@@ -3712,6 +3712,29 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.object(R, "pr_meta", return_value=new_head), mock.patch.object(R, "_threads", return_value=[]):
             self.assertEqual([x["id"] for x in R.threads("o/r", 7)["unposted"]], ["1.4"])
 
+    def test_the_score_updates_in_place_when_a_finding_is_passed_or_checked_fixed(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "score": 98, "verdict": "mergeable",
+                              "findings": [f(severity="nitpick", title="a"), f(severity="nitpick", title="b", line=9)]})
+            R.save("o/r", 7, {"summary": "s", "score": 83, "verdict": "mergeable",
+                              "findings": [f(severity="major", title="c", line=20), f(severity="minor", title="d")],
+                              "prior": [{"id": "1.1", "state": "open"}, {"id": "1.2", "state": "fixed"}]})
+        R.mark("o/r", 7, ["1.1"], status="drop")
+        rec = R.load("o/r", 7)
+        p1, p2 = rec["passes"]
+        self.assertEqual((p1["score"], p1["score_at_review"]), (99, 98))  # 1.1 passed: its point back
+        self.assertEqual((p2["score"], [c["id"] for c in p2["credits"]]), (84, ["1.1"]))  # 2 still counted it
+        rec["passes"][1]["findings"][0]["check"] = {"state": "fixed", "head": "b" * 40}
+        R.store(rec)
+        p2 = R.load("o/r", 7)["passes"][1]
+        self.assertEqual((p2["score"], p2["score_at_review"]), (96, 83))
+        self.assertEqual([(c["id"], c["why"]) for c in p2["credits"]], [("1.1", "passed"), ("2.1", "fixed")])
+        R.mark("o/r", 7, ["1.1"], status="keep")  # changed your mind: the point goes again
+        p2 = R.load("o/r", 7)["passes"][1]
+        self.assertEqual((p2["score"], [c["id"] for c in p2["credits"]]), (95, ["2.1"]))
+        self.assertEqual(R.undecided(p2), ["2.2"])  # a finding checked fixed needs no Fix or Pass
+
     def test_a_re_review_follows_up_findings_you_never_decided_on(self):
         f = self.finding
         with mock.patch.object(R, "pr_meta", return_value=self.META):
