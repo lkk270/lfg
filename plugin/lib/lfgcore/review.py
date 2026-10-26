@@ -231,15 +231,20 @@ def rescore(rec):
         earlier = [f for f in counted[len(p.get("findings") or []):] if POINTS.get(f["severity"])]
         if earlier:  # earlier findings it still counted, so the page can name them instead of "not itemized"
             p["earlier_points"] = sum(POINTS[f["severity"]] for f in earlier)
-        # everything it held against the PR is fixed or passed, and no question that costs points is open: the
-        # "almost" or "not" it gave no longer holds, so neither does its cap
-        clear = credits and p.get("verdict") in SCORE_CAP and all(
-            f["status"] == "drop" or checked_fixed(f) for f in counted if POINTS.get(f["severity"])) and not any(
+        # what it held against the PR got fixed or passed: its verdict follows what is still open (a major left: not
+        # mergeable; only minors: almost; nothing: mergeable), never worse than it said, and its cap with it. An
+        # open question that costs points keeps the verdict as it was.
+        still = [f for f in counted if POINTS.get(f["severity"]) and not (f["status"] == "drop" or checked_fixed(f))]
+        now = "not" if any(f["severity"] in ("blocker", "major") for f in still) else \
+            "almost" if any(f["severity"] == "minor" for f in still) else "mergeable"
+        rank = {"mergeable": 0, "almost": 1, "not": 2}
+        better = credits and p.get("verdict") in SCORE_CAP and rank[now] < rank[p["verdict"]] and not any(
             q.get("costs") and not q.get("answer") for q in p.get("questions") or [])
-        if clear:
-            p["verdict_now"] = "mergeable"
+        if better:
+            p["verdict_now"] = now
         else:
             p.pop("verdict_now", None)
+        clear = better
         if credits:
             p["score_at_review"] = base
             p["credits"] = [{"id": f["id"], "points": POINTS[f["severity"]],
@@ -1385,6 +1390,59 @@ def _reply_text(text):
     return shown or "Done.", found
 
 
+IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+IMAGE_MAX = 5_000_000
+IMAGE_RX = re.compile(r"\[image: ([^\]\s]+)\]")
+
+
+def chat_images_dir():
+    return C.lfg_path("tmp", "chat")
+
+
+def save_image(data, kind):
+    """An image pasted or attached in a review chat: kept under ~/.lfg/tmp/chat for Claude to read. Returns its path,
+    which the message carries as [image: <path>]."""
+    import base64
+    import uuid
+    if kind not in IMAGE_TYPES:
+        raise ReviewError("only PNG, JPEG, GIF or WebP images")
+    try:
+        raw = base64.b64decode(str(data or ""), validate=True)
+    except ValueError:
+        raise ReviewError("that image didn't come through") from None
+    if not raw or len(raw) > IMAGE_MAX:
+        raise ReviewError("images up to 5 MB")
+    path = os.path.join(C.ensure_dir(chat_images_dir()), "%s.%s" % (uuid.uuid4().hex, IMAGE_TYPES[kind]))
+    with open(path, "wb") as fh:
+        fh.write(raw)
+    return {"path": path}
+
+
+def _chat_prompt(context_prompt, q):
+    """What a chat message sends: a message starting with / runs that command or skill in the session as typed (the
+    review is added after it); images the message carries are named for the Read tool. Returns (prompt, images)."""
+    base = os.path.realpath(chat_images_dir()) + os.sep
+    images = [x for x in IMAGE_RX.findall(q) if os.path.realpath(x).startswith(base) and os.path.isfile(x)]
+    seen = ("\n\nOpen each attached image with the Read tool before answering: %s" % ", ".join(images)
+            if images else "")
+    if q.lstrip().startswith("/"):
+        about = context_prompt.split("\n\n", 1)[0]
+        return q.strip() + seen + "\n\n(Asked from the LFG review page. " + about + ")", images
+    return context_prompt + seen, images
+
+
+def _chat_tools(run_, slash, images):
+    """Tools for a chat turn: the review session's read-only set, plus Skill for a / command; without a session, only
+    Read for attached images."""
+    if run_.get("session_id"):
+        allow = [x for x in RUN_ALLOW if "review save" not in x] + (["Skill"] if slash else [])
+        return ["--allowedTools", ",".join(allow), "--disallowedTools", ",".join(RUN_DENY)]
+    if images or slash:
+        return ["--allowedTools", ",".join(["Read"] + (["Skill"] if slash else [])),
+                "--disallowedTools", ",".join(RUN_DENY)]
+    return ["--tools", ""]
+
+
 def _review_now(rec, p):
     """The pass as Claude needs it to change it: ids, ratings, statuses and comments, compact."""
     return json.dumps({"pr": ref(rec["repo"], rec["number"]), "summary": p.get("summary"),
@@ -1406,12 +1464,9 @@ def ask(repo, number, n, question):
         raise ReviewError("no review %s on %s" % (n, ref(repo, number)))
     run_ = p.get("run") or {}
     q = _text(question, "question", 4000)
-    prompt = ASK % (_review_now(rec, p), q)
-    if run_.get("session_id"):
-        cmd = ["claude", "-p", prompt, "--resume", run_["session_id"], "--allowedTools",
-               ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
-    else:
-        cmd = ["claude", "-p", prompt, "--tools", ""]
+    prompt, images = _chat_prompt(ASK % (_review_now(rec, p), q), q)
+    cmd = ["claude", "-p", prompt] + (["--resume", run_["session_id"]] if run_.get("session_id") else []) \
+        + _chat_tools(run_, q.lstrip().startswith("/"), images)
     cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model() + _direct(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
@@ -1546,14 +1601,16 @@ def discuss(repo, number, fid, question):
     said = "".join("\n\nEarlier, Lee: %s\nYou: %s" % (x["q"], x["a"]) for x in f.get("chat") or [])
     about = DISCUSS % (fid, f.get("title") or f.get("issue") or "", f.get("file") or "the PR as a whole",
                        f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", f.get("body") or "", said, q)
+    slash = q.lstrip().startswith("/")
     if run_.get("session_id"):
-        cmd = ["claude", "-p", ASK % (_review_now(rec, p), about), "--resume", run_["session_id"], "--allowedTools",
-               ",".join(x for x in RUN_ALLOW if "review save" not in x), "--disallowedTools", ",".join(RUN_DENY)]
+        prompt, images = _chat_prompt(ASK % (_review_now(rec, p), about), q)
+        cmd = ["claude", "-p", prompt, "--resume", run_["session_id"]] + _chat_tools(run_, slash, images)
     else:
         snip = snippet(repo, number, fid)
         code = "\n".join("%s %s" % (r["new"] or r["old"] or "", r["text"]) for r in (snip or {}).get("rows") or [])
-        cmd = ["claude", "-p", ASK % (_review_now(rec, p), about + ("\n\nThe code:\n" + code if code else "")),
-               "--tools", ""]
+        about += "\n\nThe code:\n" + code if code else ""
+        prompt, images = _chat_prompt(ASK % (_review_now(rec, p), about), q)
+        cmd = ["claude", "-p", prompt] + _chat_tools(run_, slash, images)
     cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model() + _direct(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
                         stdin=subprocess.DEVNULL)
@@ -1604,13 +1661,15 @@ def check_fixed(repo, number, fid):
     head = (gh_status(repo, number, max_age=0) or {}).get("head_sha")
     if not head:
         raise ReviewError("couldn't ask GitHub where the PR is now")
-    if head == p["head_sha"]:
+    whole = not f.get("file")  # about the PR as a whole, often its description: that can change with no commit
+    if head == p["head_sha"] and not whole:
         out = {"state": "not", "why": "No commits since this review, so nothing has changed yet.", "head": head,
                "at": C.now_iso(), "quick": True}
     else:
         if not C.which("claude"):
             raise ReviewError("Claude Code (`claude`) is not on PATH")
-        files = gh_json(["api", "repos/%s/compare/%s...%s" % (repo, p["head_sha"], head)], timeout=120) or {}
+        files = gh_json(["api", "repos/%s/compare/%s...%s" % (repo, p["head_sha"], head)], timeout=120) or {} \
+            if head != p["head_sha"] else {}
         changed = files.get("files") or []
         patch = next((x.get("patch") or "" for x in changed if x.get("filename") == f.get("file")), "")
         now = ""
@@ -1624,8 +1683,10 @@ def check_fixed(repo, number, fid):
             else:
                 now = "(the file is gone at the new head)"
         others = [x["filename"] for x in changed if x.get("filename") != f.get("file")]
-        if not f.get("file"):  # about the PR as a whole: every change counts
+        if whole:  # about the PR as a whole: every change counts, and the description as it reads now
             patch = "\n".join("--- %s\n%s" % (x["filename"], x.get("patch") or "") for x in changed)
+            desc = (gh_json(["pr", "view", str(number), "-R", repo, "--json", "title,body"], timeout=60) or {})
+            now = "The PR's title and description now:\n%s\n\n%s" % (desc.get("title") or "", desc.get("body") or "")
         prompt = CHECK % (fid, f.get("severity"), f.get("title") or "", f.get("file") or "the PR as a whole",
                           f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", f.get("file") or "the PR",
                           p["head_sha"][:8], head[:8], (patch or "(no changes to this file)")[:30000],
