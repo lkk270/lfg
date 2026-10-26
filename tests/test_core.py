@@ -3676,6 +3676,18 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.object(R, "pr_meta", return_value=new_head), mock.patch.object(R, "_threads", return_value=[]):
             self.assertEqual([x["id"] for x in R.threads("o/r", 7)["unposted"]], ["1.4"])
 
+    def test_a_re_review_follows_up_findings_you_never_decided_on(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(), f(line=9)]})
+        R.mark("o/r", 7, ["1.2"], status="drop")
+        with mock.patch.object(R, "pr_meta", return_value=dict(self.META, head_sha="d" * 40)), \
+                mock.patch.object(R, "_threads", return_value=[]), \
+                mock.patch.object(R, "gh_json", return_value={"files": []}):
+            t = R.threads("o/r", 7)
+        self.assertEqual([x["id"] for x in t["unposted"]], ["1.1"])
+        self.assertEqual([x["id"] for x in t["settled"]], ["1.2"])
+
     def test_a_finished_review_leaves_a_notice_and_macos_shows_it_only_with_no_dashboard_open(self):
         shown = []
         run = lambda cmd, **kw: shown.append(cmd) or subprocess.CompletedProcess(cmd, 0)  # noqa: E731

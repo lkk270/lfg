@@ -2453,6 +2453,7 @@ function tallyLine(r) {
 }
 async function prStart(pr, btn) {
   const fresh = btn.dataset.fresh === "1";
+  btn.style.minWidth = btn.offsetWidth + "px";  // a shorter label must not pull the buttons beside it left
   btn.disabled = true; btn.textContent = "Starting…";
   const d = await save("review_run", { pr, fresh, method: state.reviewMethod || "" });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
@@ -3395,6 +3396,7 @@ function wirePrs(root) {
   });
   $$("[data-pr-start]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prStart(b.dataset.prStart, b); });
   $$("[data-pr-cancel]", root).forEach(b => b.onclick = async () => {
+    b.style.minWidth = b.offsetWidth + "px";
     b.disabled = true; b.textContent = "Cancelling…";
     const d = await save("review_cancel", { pr: b.dataset.prCancel });
     if (!d.ok) { b.disabled = false; b.textContent = "Try again"; b.title = d.why || ""; return; }

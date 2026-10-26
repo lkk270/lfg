@@ -540,7 +540,7 @@ def threads(repo, number):
             if f["status"] == "drop":  # you decided against it: never raised again unless it got worse
                 settled.append(where)
                 continue
-            if f["status"] != "keep" or last_state.get(f["id"]) in ("fixed", "withdrawn"):
+            if last_state.get(f["id"]) in ("fixed", "withdrawn"):  # kept or never decided: still followed up
                 continue
             if not f.get("comment_url"):  # kept but never posted (your own PR): check it like a posted one
                 unposted.append(dict(where, fixed_in=(f.get("fixed") or {}).get("commit") or None,

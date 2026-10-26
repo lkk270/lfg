@@ -47,7 +47,7 @@ preflight: graphs
      open: say whether the answer holds up), `withdrawn` (their answer is right, or you were wrong),
      `resolved-unchanged` (thread resolved but the problem is still there), `ignored` (no change, no reply) or
      `open`. `file_changed` and `outdated` are hints only; the code decides. Do the same for each row in
-     `threads.unposted` (kept but never posted, as on the user's own PR; `fixed_in` is the commit LFG's Fix made):
+     `threads.unposted` (kept or never decided, and never posted; `fixed_in` is the commit LFG's Fix made):
      `fixed`, `ignored` or `open`, with no thread to read. Both go in `prior`.
    - **Settled.** `threads.settled` lists findings the user dropped. They decided; never raise one again in any pass,
      in other words or at another line. Only if later commits made that exact problem worse, file it with
