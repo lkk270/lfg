@@ -1349,12 +1349,13 @@ async function runDetail(run) {
   const keys = all.stages.map(([k]) => k), out = d.outside || {}, skipped = d.skipped || {};
   const steps = `<div class="steps">${keys.map((k, i) => {
     const [cmd, what] = STEP_WHY[k] || ["", ""];
-    const cls = k === stuck ? "stuck" : d.stages[k] ? "done" : out[k] ? "done outside" : skipped[k] != null ? "skipped"
-      : k === p.next ? "next" : i < p.last ? "unrecorded" : "";
-    const state = k === stuck ? "Needs fixing" : d.stages[k] ? "Done" : out[k] ? `Done outside LFG (${plural(out[k], "commit")} on the run's branch)`
-      : skipped[k] != null ? `Skipped: ${skipped[k]}` : k === p.next ? "Next" : i < p.last ? "Not recorded: a later step ran without it" : "Not yet";
+    const doing = (d.doing || []).includes(k);
+    const cls = k === stuck ? "stuck" : doing ? "doing" : d.stages[k] ? "done" : out[k] ? "done outside" : skipped[k] != null ? "skipped"
+      : k === p.next ? "next" : i < p.last ? "unrecorded" : "todo";
+    const state = k === stuck ? "Has a problem: needs fixing" : doing ? "In progress: started, not finished" : d.stages[k] ? "Done" : out[k] ? `Done outside LFG (${plural(out[k], "commit")} on the run's branch)`
+      : skipped[k] != null ? `Skipped: ${skipped[k]}` : k === p.next ? "Next: not started" : i < p.last ? "Not recorded: a later step ran without it" : "Not started";
     return `<span class="${cls}" tabindex="0">${esc(STEP[k] || k)}<span class="tip" role="tooltip"><span class="tip-state">${esc(state)}</span><br><code>${esc(cmd)}</code> ${esc(what)}</span></span>`;
-  }).join("")}</div><p class="muted small">Hover a step for what it is. <code>/lfg:lfg</code> runs every step in order; <code>lfg run skip &lt;step&gt; "why"</code> marks one you left out on purpose.</p>`;
+  }).join("")}</div><p class="muted small">○ not started · <span class="step-doing">◐ in progress</span> · <span class="step-ok">✓ done</span> · <span class="step-bad">✕ has a problem</span>. Hover a step for what it is. <code>/lfg:lfg</code> runs every step in order; <code>lfg run skip &lt;step&gt; "why"</code> marks one you left out on purpose.</p>`;
   const files = d.files.filter(f => fileName(f.name)).map(f => ({ ...f, run, label: fileName(f.name) }))
     .sort((a, b) => fileRank(a.name) - fileRank(b.name) || a.name.localeCompare(b.name));
   const tasks = d.tasks_list.length ? `<div class="box items">${d.tasks_list.map(taskItem).join("")}</div>` : "";

@@ -403,6 +403,8 @@ def cmd_run(a):
         return _run_set(root, rid, a)
     if a.action in ("skip", "unskip"):
         return _run_skip(root, rid, a)
+    if a.action in ("doing", "done"):
+        return _run_step(root, rid, a)
     main = C.linked_worktree(root)
     if a.action == "use":
         runs = C.runs_dir(main or root, create=False)
@@ -478,6 +480,25 @@ def _run_skip(root, rid, a):
     meta.update(skipped=skipped, updated=C.now_iso())
     C.write_json(p, meta)
     print("run.json: skipped %s" % (", ".join("%s (%s)" % kv for kv in skipped.items()) or "nothing"))
+    return 0
+
+
+def _run_step(root, rid, a):
+    """`lfg run doing <step>` / `lfg run done <step>`: a step started, or finished. The run page shows a started one in
+    progress (not done) even once its file exists, as a brief grill has drafted but you haven't approved yet."""
+    from . import dash
+    r = C.current_run(root)
+    if not r:
+        C.die("no current run for %s - start one with `lfg run new <slug>`" % rid)
+    steps = [k for k, _, _ in dash.STAGES]
+    if a.arg not in steps:
+        C.die("usage: lfg run %s <%s>" % (a.action, "|".join(steps)), 2)
+    p = os.path.join(r, "run.json")
+    meta = C.read_json(p, {}) or {}
+    marks = dict(meta.get("steps") or {}, **{a.arg: a.action})
+    meta.update(steps=marks, updated=C.now_iso())
+    C.write_json(p, meta)
+    print("run.json: %s %s" % (a.arg, "in progress" if a.action == "doing" else "done"))
     return 0
 
 
@@ -1312,8 +1333,8 @@ def main(argv=None):
     for f in ("--background", "--allow-stale", "--json", "--quiet", "--rebuild"):
         g.add_argument(f, action="store_true")
     r = sp.add_parser("run")
-    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip", "merge",
-                                      "review-stamp", "review-status"],
+    r.add_argument("action", choices=["new", "path", "scratch", "list", "set", "use", "skip", "unskip", "doing", "done",
+                                      "merge", "review-stamp", "review-status"],
                    help="scratch: this machine's folder for the current run (/build's ticket worktrees); "
                         "use: make a run current (taking over a teammate's); "
                         "merge <from-run> [<into-run>]: move a duplicate run's files into another (default: current); "

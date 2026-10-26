@@ -981,6 +981,18 @@ class TrackerTest(unittest.TestCase):
             self.assertEqual(cli.main(["run", "unskip", "design"]), 0)
             self.assertEqual(C.read_json(os.path.join(run, "run.json"), {})["skipped"], {})
 
+    def test_run_doing_and_done_mark_a_step_in_progress_or_finished(self):
+        from lfgcore import cli
+        root, rid = git_repo()
+        run = C.new_run(root, "x")
+        with mock.patch.object(C, "need_repo", return_value=(root, rid)):
+            self.assertEqual(cli.main(["run", "doing", "brief"]), 0)
+            self.assertEqual(C.read_json(os.path.join(run, "run.json"), {})["steps"], {"brief": "doing"})
+            self.assertEqual(cli.main(["run", "done", "brief"]), 0)
+            self.assertEqual(C.read_json(os.path.join(run, "run.json"), {})["steps"], {"brief": "done"})
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "doing", "nope"])
+
 
 class SettingsTest(unittest.TestCase):
     def setUp(self):
@@ -1638,6 +1650,30 @@ class RunStepsTest(unittest.TestCase):
         self.assertFalse(r["stages"]["build"])  # no build notes: LFG didn't build it
         C.write_text(os.path.join(run, "03-build-t1.md"), "built")
         self.assertEqual(dash._run_summary(run)["outside"], {})  # /lfg:build did: nothing outside to show
+
+    def test_a_step_that_has_started_but_not_finished_is_in_progress_not_done(self):
+        root, rid = git_repo()
+        run = os.path.join(C.runs_dir(root), "20261025-2253-x")
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "stage": "grill"})
+        C.write_text(os.path.join(run, "01-brief.md"), "# Brief: X (draft)\n")
+        r = dash._run_summary(run)
+        self.assertEqual(r["doing"], ["brief"])  # grill wrote a draft brief but hasn't finished
+        self.assertFalse(r["stages"]["brief"])
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "stage": "grill", "steps": {"brief": "done"}})
+        r = dash._run_summary(run)
+        self.assertEqual((r["doing"], r["stages"]["brief"]), ([], True))  # approved: done
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "stage": "build"})
+        C.write_json(os.path.join(run, "tasks.json"), {"tasks": [{"id": "t1"}, {"id": "t2"}]})
+        C.write_text(os.path.join(run, "03-build-t1.md"), "built")
+        r = dash._run_summary(run)
+        self.assertEqual(r["doing"], ["build"])  # one of two tasks built
+        self.assertTrue(r["stages"]["brief"])  # the run moved on from grill: the brief is done
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "stage": "expert"})
+        C.write_json(os.path.join(run, "06-review.json"), {"verdict": "approve"})
+        r = dash._run_summary(run)
+        self.assertEqual((r["doing"], r["stages"]["review"]), ([], True))  # a verdict, not the stage, decides
+        C.write_json(os.path.join(run, "run.json"), {"branch": "main", "stage": "expert", "steps": {"review": "doing"}})
+        self.assertEqual(dash._run_summary(run)["doing"], ["review"])  # a second review running
 
 
 class McpListTest(unittest.TestCase):

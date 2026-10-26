@@ -33,6 +33,27 @@ STEP_CMD = {"brief": "/lfg:grill", "design": "/lfg:plan", "tasks": "/lfg:plan", 
             "qa": "/lfg:check", "gate": "/lfg:check", "secure": "/lfg:secure", "review": "/lfg:expert",
             "ship": "/lfg:ship",
             "packet": "/lfg:ship"}  # the command that does each step, as the run page names them
+# the steps each `lfg run set stage=` is working on, and the ones whose file is written before the step is over (a
+# draft brief, a plan still being agreed, the first of several tasks): those stay in progress while the stage is theirs
+STAGE_STEPS = {"grill": ("brief",), "plan": ("design", "tasks"), "build": ("build",), "fix": ("build",),
+               "check": ("qa", "gate"), "secure": ("secure",), "pentest": ("secure",), "expert": ("review",),
+               "ship": ("ship", "packet")}
+DRAFTED = ("brief", "design", "tasks", "build")
+
+
+def _doing(meta, stages):
+    """Steps started but not finished: `lfg run doing <step>`, or the run's stage is on it and it has no output yet
+    (or only a draft). `lfg run done <step>` ends it; a step with a verdict (checks, security, review, ship check) is
+    over when its verdict is in."""
+    marks = meta.get("steps") if isinstance(meta.get("steps"), dict) else {}
+    out = []
+    for k, _, _ in STAGES:
+        if marks.get(k) == "doing" or (marks.get(k) != "done" and k in STAGE_STEPS.get(meta.get("stage"), ())
+                                       and (not stages[k] or k in DRAFTED)):
+            out.append(k)
+    return out
+
+
 STEP_LABEL = {"brief": "Idea written up", "design": "Plan", "tasks": "Task list", "build": "Built", "qa": "Tested",
               "gate": "Checks run", "secure": "Security check", "review": "Code review", "ship": "Ship check",
               "packet": "Ready to commit"}
@@ -270,6 +291,9 @@ def _run_summary(d):
     tasks = C.read_json(os.path.join(d, "tasks.json"), None)
     tl = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", []) if isinstance(tasks, dict) else []
     stages = _stage_state(d)
+    doing = _doing(meta, stages)
+    for k in doing:
+        stages[k] = False  # started, not finished: neither done nor next
     title, about = _about(d, rv)
     keys = [k for k, _, _ in STAGES]
     skipped = {k: str(v)[:300] for k, v in (meta.get("skipped") or {}).items() if k in keys and not stages.get(k)}
@@ -288,7 +312,7 @@ def _run_summary(d):
             "branch": (_own_worktree(meta, ticket) or {}).get("branch") or meta.get("branch") or "",
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()) + bool(ahead),
-            "skipped": skipped, "outside": {"build": ahead} if ahead else {},
+            "skipped": skipped, "doing": doing, "outside": {"build": ahead} if ahead else {},
             "ready": ready, "checked_at": (rd or {}).get("ts"), "checking": checks_running(d),
             "review": (rv or {}).get("verdict"), "review_on_red": (rv or {}).get("checks") == "red",
             "cant_run": sorted({t for c in (rd or {}).get("checks") or [] for t in c.get("cant_run") or []}),

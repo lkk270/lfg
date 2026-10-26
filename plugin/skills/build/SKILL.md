@@ -19,7 +19,7 @@ adapted-from: mattpocock/skills/implement-spec + implement + tdd (MIT, © 2026 M
 ## Step 0: preflight
 
 1. Run `lfg graphs ensure`. If it exits non-zero, stop and show its output (only `--allow-stale` from the user overrides).
-2. Run `lfg run path` → `RUN` (in the repo's `.lfg/runs/`, committed) and `lfg run scratch` → `SCRATCH` (this machine only, for ticket worktrees). No run or no `RUN/01-brief.md` → stop and suggest `/grill` (or `/lfg`).
+2. Run `lfg run path` → `RUN` (in the repo's `.lfg/runs/`, committed) and `lfg run scratch` → `SCRATCH` (this machine only, for ticket worktrees). No run or no `RUN/01-brief.md` → stop and suggest `/grill` (or `/lfg`). Run `lfg run doing build`.
 3. Load `lfg rule tdd-rules`. Read `RUN/tasks.json`; if absent (Express), build one ticket from the brief's acceptance criteria and agree its seam with the user (unattended: the highest existing seam the graph shows), then write it to `RUN/tasks.json`.
 
 ## Steps
@@ -45,7 +45,7 @@ adapted-from: mattpocock/skills/implement-spec + implement + tdd (MIT, © 2026 M
    3. Run the affected tests (`tests_for` on the patch's changed nodes). Red → send the failure back to that ticket's implementer; do not mark it done.
    4. Green → set `passes: true` for the ticket, run `lfg issue sync-tasks` (marks its issue done), update `progress.md`, run `lfg graphs ensure`.
    5. Recompute the frontier and start implementers for newly unblocked tickets immediately.
-4. **Integration pass.** When all tickets pass: type-check, run the full test suite once, list changed nodes with no test.
+4. **Integration pass.** When all tickets pass: type-check, run the full test suite once, list changed nodes with no test. All green: run `lfg run done build`.
 5. **Cleanup.** `git worktree remove --force SCRATCH/wt/<id>` for every worktree, then `git worktree prune`. Keep `RUN/patches/` for the record.
 
 ## Output
