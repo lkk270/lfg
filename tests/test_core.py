@@ -3787,6 +3787,31 @@ class ReviewTest(unittest.TestCase):
             self.assertEqual(R.rewrite("o/r", 7, "1.1", "shorter")["body"], "shorter one")
         self.assertIn("lowercase. short. no exclamation marks.", seen["prompt"])
 
+    def test_once_everything_a_review_raised_is_fixed_its_almost_no_longer_caps_the_score(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "score": 95, "verdict": "almost", "verdict_why": "one duplicate",
+                              "findings": [f(severity="minor", title="dup"), f(severity="nitpick", line=9)]})
+            R.save("o/r", 7, {"summary": "s", "score": 95, "verdict": "almost", "findings": [],
+                              "prior": [{"id": "1.1", "state": "open"}, {"id": "1.2", "state": "open"}]})
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["check"] = {"state": "fixed"}
+        R.store(rec)
+        p2 = R.load("o/r", 7)["passes"][1]
+        self.assertEqual((p2["score"], p2.get("verdict_now"), p2["earlier_points"]), (94, None, 5))  # 1.2 still open
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][1]["check"] = {"state": "fixed"}
+        R.store(rec)
+        p1, p2 = R.load("o/r", 7)["passes"]
+        self.assertEqual([(p["score"], p["verdict_now"], R.verdict_of(p)) for p in (p1, p2)],
+                         [(100, "mergeable", "mergeable")] * 2)
+        R.mark("o/r", 7, ["1.2"], status="keep")
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][1]["check"] = {"state": "partly"}
+        R.store(rec)
+        p2 = R.load("o/r", 7)["passes"][1]
+        self.assertEqual((p2["score"], p2.get("verdict_now"), R.verdict_of(p2)), (94, None, "almost"))
+
     def test_a_re_review_follows_up_findings_you_never_decided_on(self):
         f = self.finding
         with mock.patch.object(R, "pr_meta", return_value=self.META):
