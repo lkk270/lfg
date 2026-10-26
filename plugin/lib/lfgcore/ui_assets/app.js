@@ -3105,6 +3105,7 @@ async function prDetail(arg) {
   if (d.available === false) return unavailable(d);
   const rec = d.record, j = d.job;
   crumbs("prs", pr);
+  prTabOpen(pr, (rec && rec.title) || (d.gh && d.gh.title) || "");
   const running = j && j.status === "running";
   const fixing = d.fix_job && d.fix_job.status === "running";
   if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
@@ -3123,7 +3124,7 @@ async function prDetail(arg) {
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
     <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">${rec || d.linked.some(x => x.reviewed) ? "Re-review" : "Review"} together with linked PRs</button>${rec || d.linked.some(x => x.reviewed) ? `<button class="btn small" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' data-fresh="1" ${can ? "" : "disabled"} title="${FULL_TITLE}">Review together from scratch</button>` : ""}` : ""}</div>${(d.linked || []).length && (rec || d.linked.some(x => x.reviewed)) ? AGAIN_HELP : ""}`, "reviewed together, or linked by you; they can be in any repo");
   const stack = stackBox({ gh: m[1], pr: m[2] }, "strip");
-  if (!rec) return `${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${stack}${jobBox}${actions}${linkedBox}${sess}`;
+  if (!rec) return `${prTabStrip()}${head(pr, `Not reviewed yet. <a href="https://github.com/${esc(m[1])}/pull/${esc(m[2])}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}${ghPanel(d.gh)}${stack}${jobBox}${actions}${linkedBox}${sess}`;
   const passes = rec.passes, last = passes[passes.length - 1];
   const key = "lfg.prpass." + pr;
   let pick = Number(sessionStorage.getItem(key)) || last.n;
@@ -3147,7 +3148,7 @@ async function prDetail(arg) {
   const fs = [...p.findings].sort((a, b) => (order[a.severity] ?? 5) - (order[b.severity] ?? 5));
   const together = p.together || [];
   const discard = live && unlocked ? `<button class="btn small" data-pr-discard='${esc(JSON.stringify([pr, p.n]))}' title="Throw this review away; nothing was posted">Discard this review</button>` : "";
-  return `${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
+  return `${prTabStrip()}${head(rec.title || pr, `<span class="mono">${esc(pr)}</span> by ${esc(rec.author || "")}${rec.ticket ? ` · ${esc(rec.ticket)}` : ""} · <a href="${esc(rec.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>`, back)}
     ${ghPanel(d.gh, passes.length)}
     ${stack}
     ${jobBox}
@@ -3662,8 +3663,40 @@ const ICON = {
   help: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3M12 17h.01",
 };
 const icon = (k, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[k] || ""}"/></svg>`;
+/* Reviews open as tabs inside the dashboard: every PR review you open joins them, above its page and under PR
+   reviews in the sidebar, until you close it. Kept in this browser. */
+const PR_TABS_MAX = 12;
+const openTabs = () => { try { return JSON.parse(localStorage.getItem("lfg.prtabs") || "[]"); } catch (e) { return []; } };
+const prTabsSave = tabs => localStorage.setItem("lfg.prtabs", JSON.stringify(tabs.slice(-PR_TABS_MAX)));
+const prTabHref = pr => "#prs/" + pr.replace("#", "/");
+function prTabOpen(pr, title) {
+  const tabs = openTabs(), hit = tabs.find(t => t.pr === pr);
+  if (hit) { if (title && hit.title !== title) { hit.title = title; prTabsSave(tabs); } return; }
+  prTabsSave([...tabs, { pr, title: title || pr }]);
+  renderNav("prs");
+}
+function prTabClose(pr) {
+  const tabs = openTabs(), i = tabs.findIndex(t => t.pr === pr);
+  if (i < 0) return;
+  tabs.splice(i, 1);
+  prTabsSave(tabs);
+  if (location.hash === prTabHref(pr)) location.hash = tabs.length ? prTabHref(tabs[Math.min(i, tabs.length - 1)].pr).slice(1) : "prs";
+  else { renderNav(location.hash.startsWith("#prs") ? "prs" : null); $$(".pr-doc-tabs").forEach(el => { el.outerHTML = prTabStrip(); }); }
+}
+const prTabLabel = t => `${esc(t.pr.split("#")[1] ? "#" + t.pr.split("#")[1] : t.pr)} <span class="prtab-t">${esc(t.title)}</span>`;
+function prTabStrip() {
+  const tabs = openTabs();
+  return tabs.length ? `<div class="pr-doc-tabs" role="tablist">${tabs.map(t => `<a class="prtab ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" title="${esc(t.pr + " · " + t.title)}">${prTabLabel(t)}<span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("")}</div>` : "";
+}
+document.addEventListener("click", e => {
+  const x = e.target.closest("[data-prtab-x]");
+  if (!x) return;
+  e.preventDefault(); e.stopPropagation();
+  prTabClose(x.dataset.prtabX);
+}, true);
 function renderNav(active) {
-  $("#nav").innerHTML = NAV_GROUPS.map(([g, ks]) => `<div class="nav-grp">${esc(g)}</div>${ks.map(k => `<a class="${k === active ? "on" : ""}" href="#${k}"${k === active ? ' aria-current="page"' : ""}>${icon(k)}<span>${esc(TITLES[k])}</span></a>`).join("")}`).join("");
+  const subs = k => k !== "prs" ? "" : openTabs().map(t => `<a class="nav-sub ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" title="${esc(t.pr + " · " + t.title)}"><span>${prTabLabel(t)}</span><span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("");
+  $("#nav").innerHTML = NAV_GROUPS.map(([g, ks]) => `<div class="nav-grp">${esc(g)}</div>${ks.map(k => `<a class="${k === active && !(k === "prs" && openTabs().some(t => location.hash === prTabHref(t.pr))) ? "on" : ""}" href="#${k}"${k === active ? ' aria-current="page"' : ""}>${icon(k)}<span>${esc(TITLES[k])}</span></a>${subs(k)}`).join("")}`).join("");
 }
 /* Breadcrumb in the top bar: project / page / item. Pages that open an item call crumbs() again with it. */
 function crumbs(page, item, itemHref) {
