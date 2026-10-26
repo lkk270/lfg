@@ -4060,6 +4060,18 @@ class ReviewTest(unittest.TestCase):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
         self.assertEqual(R.job("o/r", 9)["status"], "failed")
 
+    def test_cancel_stops_the_run_and_its_claude_and_marks_every_pr_in_it(self):
+        import signal
+        proc = subprocess.Popen(["sh", "-c", "sleep 60 & wait"], start_new_session=True)
+        C.write_json(R.job_path("o/r", 11), {"status": "running", "pid": proc.pid, "with": ["o/r#12"]})
+        C.write_json(R.job_path("o/r", 12), {"status": "running", "pid": proc.pid, "with": ["o/r#11"]})
+        self.assertEqual(R.cancel("o/r", 11), {"cancelled": ["o/r#11", "o/r#12"]})
+        self.assertEqual(proc.wait(timeout=10), -signal.SIGTERM)
+        for n in (11, 12):
+            self.assertEqual(R.job("o/r", n)["status"], "cancelled")
+        with self.assertRaises(R.ReviewError):
+            R.cancel("o/r", 11)  # nothing running any more
+
 
 class RepoPickerTest(unittest.TestCase):
     """Sessions, PR reviews and Environment show the repo picked top left, and every repo with "Show all repos"."""

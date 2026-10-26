@@ -905,6 +905,29 @@ def start(repo, number, ticket=None, fresh=False, together=(), model=None, metho
     return {"started": True}
 
 
+def cancel(repo, number):
+    """Stop a running review: the `lfg review run` process and the Claude session under it (the dashboard starts it
+    as its own process group). Every PR reviewed in that session is marked cancelled; nothing is saved."""
+    import signal
+    j = job(repo, number) or {}
+    if j.get("status") != "running":
+        raise ReviewError("no review of %s is running" % ref(repo, number))
+    pid = int(j["pid"])
+    mine = [ref(repo, number)] + list(j.get("with") or [])
+    for r in mine:
+        o, _, n = r.rpartition("#")
+        x = job(o, int(n)) or {}
+        if x.get("status") == "running" and x.get("pid") == j["pid"]:
+            C.write_json(job_path(o, int(n)), dict(x, status="cancelled", ended=C.now_iso()))
+    try:
+        # its own group only when the dashboard started it; one run from a terminal stops alone
+        os.killpg(pid, signal.SIGTERM) if os.getpgid(pid) == pid else os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    C.audit("review_cancel", {"pr": ref(repo, number), "with": len(mine) - 1})
+    return {"cancelled": mine}
+
+
 def ref(repo, number):
     return "%s#%d" % (repo, number)
 
@@ -982,6 +1005,8 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             if fresh and p["n"] > 1:
                 p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)
+        if not ok and (job(*x) or {}).get("status") == "cancelled":
+            continue
         j = dict(job(*x) or {}, status="done" if ok else "failed", exit=cp.returncode, ended=C.now_iso(),
                  why="" if ok else why)
         C.write_json(job_path(*x), j)
@@ -992,6 +1017,8 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             link(x, y)
     rec = load(repo, number) or {}
     p = (rec.get("passes") or [{}])[-1]
+    if first is None:
+        return job(repo, number)  # cancelled: no notice
     done = first["status"] == "done"
     score = " · score %s" % p["score"] if p.get("score") is not None else ""
     notify(ref(repo, number), "Review %s: %s" % ("done" if done else "failed", rec.get("title") or ref(repo, number)),
