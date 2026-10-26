@@ -3514,7 +3514,7 @@ function wirePrs(root) {
   });
   $$("[data-pr-editsave]", root).forEach(b => b.onclick = async () => {
     const [pr, id] = JSON.parse(b.dataset.prEditsave), box = b.closest(".pr-edit");
-    const text = $("textarea", box).value;
+    const text = $("textarea.editor", box).value;  // the comment, not the "Ask Claude to change it" box above it
     const d = await save("review_mark", { pr, ids: [id], body: text });
     if (!d.ok) return saidMsg($(".save-msg", box), d);
     const shown = $(`[data-pr-body="${id}"]`, b.closest(".pr-finding"));

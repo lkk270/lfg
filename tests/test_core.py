@@ -4144,6 +4144,13 @@ class ReviewTest(unittest.TestCase):
         self.assertIn("runs every review", js)
         self.assertIn("const info = text =>", js)
 
+    def test_save_comment_saves_the_edited_comment_not_the_ask_claude_box(self):
+        with open(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        save = js[js.index('$$("[data-pr-editsave]"'):]
+        save = save[:save.index("});")]
+        self.assertIn('$("textarea.editor", box).value', save)  # the box also holds the Ask Claude textarea, first
+
     def test_dead_running_job_reads_as_failed(self):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
         self.assertEqual(R.job("o/r", 9)["status"], "failed")
