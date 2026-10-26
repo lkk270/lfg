@@ -1078,13 +1078,42 @@ def session_id(log):
 
 
 def used(log):
-    """What a review run used (sessions.used), with the review skill it was told to follow: it reads the skill's file
-    rather than calling the Skill tool, so the log alone wouldn't show it."""
+    """What a review run used (sessions.used), with the review skill that runs it (lfg:review, marked `runner`: it
+    reads the skill's file rather than calling the Skill tool, so the log alone wouldn't show it) and `method_files`:
+    the files of your own skills it read, which is where a chosen method shows up."""
     u = SS.used(log)
-    if u is not None and not any(x["name"] == "lfg:review" for x in u["skills"]):
-        u["skills"].insert(0, {"name": "lfg:review", "count": 1, "plugin": "lfg"})
-        u["plugins"] = sorted(set(u["plugins"]) | {"lfg"})
+    if u is None:
+        return u
+    u["skills"] = [x for x in u["skills"] if x["name"] != "lfg:review"]
+    u["skills"].insert(0, {"name": "lfg:review", "count": 1, "plugin": "lfg", "runner": True})
+    u["plugins"] = sorted(set(u["plugins"]) | {"lfg"})
+    u["method_files"] = method_files(log)
     return u
+
+
+def method_files(log):
+    """Files under ~/.claude/skills a run read with the Read tool, in the order first read, as skill/path."""
+    root = os.path.join(C.HOME, ".claude", "skills") + os.sep
+    out = []
+    try:
+        fh = open(log, "rb")
+    except OSError:
+        return out
+    with fh:
+        for ln in fh:
+            if b'"Read"' not in ln:
+                continue
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            for b in ((ev.get("message") or {}).get("content") or []) if isinstance(ev, dict) else []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Read":
+                    path = os.path.normpath(os.path.expanduser(str((b.get("input") or {}).get("file_path") or "")))
+                    rel = path[len(root):] if path.startswith(root) else ""
+                    if rel and rel not in out:
+                        out.append(rel)
+    return out
 
 
 def resume(run):
@@ -1107,6 +1136,18 @@ def backfill(repo, number):
     shutil.copyfile(j["log"], kept)
     p["run"] = {"session_id": sid, "cwd": j.get("cwd") or "", "log": kept, "with": list(j.get("with") or [])}
     store(rec)
+    return rec
+
+
+def refresh_used(rec):
+    """Reviews saved before LFG kept what a run used, or before it marked the runner and the method's files: read it
+    once from the kept log and save it."""
+    stale = [p["run"] for p in (rec or {}).get("passes") or [] if (p.get("run") or {}).get("log")
+             and "method_files" not in (p["run"].get("used") or {})]
+    for run in stale:
+        run["used"] = used(run["log"])
+    if stale:
+        store(rec)
     return rec
 
 
