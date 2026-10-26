@@ -3676,6 +3676,18 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.object(R, "pr_meta", return_value=new_head), mock.patch.object(R, "_threads", return_value=[]):
             self.assertEqual([x["id"] for x in R.threads("o/r", 7)["unposted"]], ["1.4"])
 
+    def test_a_re_review_follows_up_findings_you_never_decided_on(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(), f(line=9)]})
+        R.mark("o/r", 7, ["1.2"], status="drop")
+        with mock.patch.object(R, "pr_meta", return_value=dict(self.META, head_sha="d" * 40)), \
+                mock.patch.object(R, "_threads", return_value=[]), \
+                mock.patch.object(R, "gh_json", return_value={"files": []}):
+            t = R.threads("o/r", 7)
+        self.assertEqual([x["id"] for x in t["unposted"]], ["1.1"])
+        self.assertEqual([x["id"] for x in t["settled"]], ["1.2"])
+
     def test_a_finished_review_leaves_a_notice_and_macos_shows_it_only_with_no_dashboard_open(self):
         shown = []
         run = lambda cmd, **kw: shown.append(cmd) or subprocess.CompletedProcess(cmd, 0)  # noqa: E731
@@ -4059,6 +4071,18 @@ class ReviewTest(unittest.TestCase):
     def test_dead_running_job_reads_as_failed(self):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
         self.assertEqual(R.job("o/r", 9)["status"], "failed")
+
+    def test_cancel_stops_the_run_and_its_claude_and_marks_every_pr_in_it(self):
+        import signal
+        proc = subprocess.Popen(["sh", "-c", "sleep 60 & wait"], start_new_session=True)
+        C.write_json(R.job_path("o/r", 11), {"status": "running", "pid": proc.pid, "with": ["o/r#12"]})
+        C.write_json(R.job_path("o/r", 12), {"status": "running", "pid": proc.pid, "with": ["o/r#11"]})
+        self.assertEqual(R.cancel("o/r", 11), {"cancelled": ["o/r#11", "o/r#12"]})
+        self.assertEqual(proc.wait(timeout=10), -signal.SIGTERM)
+        for n in (11, 12):
+            self.assertEqual(R.job("o/r", n)["status"], "cancelled")
+        with self.assertRaises(R.ReviewError):
+            R.cancel("o/r", 11)  # nothing running any more
 
 
 class RepoPickerTest(unittest.TestCase):

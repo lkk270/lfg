@@ -551,6 +551,8 @@ def review_action(what, body):
             return R.link(R.ref(repo, number), str(body.get("other") or ""), on=body.get("on", True) is not False)
         if what == "review_link_session":
             return R.link_session(R.ref(repo, number), body.get("id"), on=body.get("on", True) is not False)
+        if what == "review_cancel":
+            return R.cancel(repo, number)
         if what == "review_discard":
             return R.discard(repo, number, int(body.get("pass") or 0))
         if what == "review_answer":

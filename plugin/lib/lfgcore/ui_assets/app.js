@@ -1273,14 +1273,23 @@ const fileRank = f => { const i = FILE_ORDER.findIndex(x => f === x || (x.endsWi
 const STACK_STATE = { draft: ["Draft", ""], open: ["Open", "on"], approved: ["Approved", "ok"], changes: ["Changes asked", "warn"],
   merged_parent: ["Merged into the PR below", "ok"], merged_main: ["Merged into main", "ok"], closed: ["Closed", ""], no_pr: ["No PR yet", ""] };
 const CHECK_WORD = { pass: ["passing", "ok"], fail: ["failing", "bad"], pending: ["running", "warn"] };
-const stackBox = (params, mode) => `<div class="stack-box" data-stack="${esc(JSON.stringify([params, mode]))}"><div class="skeleton stack-skel"></div></div>`;
+/* What each strip last showed, for a minute: a page that refreshes itself (a running review) draws it at once
+   instead of flashing the placeholder every time. */
+const stackSeen = new Map();
+const stackBox = (params, mode) => {
+  const key = JSON.stringify([params, mode]), hit = stackSeen.get(key);
+  if (hit && Date.now() - hit.at < 60000) return `<div class="stack-box">${hit.html}</div>`;
+  return `<div class="stack-box" data-stack="${esc(key)}"><div class="skeleton stack-skel"></div></div>`;
+};
 function wireStacks(root) {
   $$("[data-stack]", root).forEach(async el => {
     const [params, mode] = JSON.parse(el.dataset.stack);
     delete el.dataset.stack;
     let d;
     try { d = await api("stack", params); } catch (e) { d = { available: false, why: String(e.message || e) }; }
-    if (document.body.contains(el)) el.innerHTML = stackHtml(d, mode);
+    const html = stackHtml(d, mode);
+    stackSeen.set(JSON.stringify([params, mode]), { at: Date.now(), html });
+    if (document.body.contains(el)) el.innerHTML = html;
   });
 }
 function stackTicket(d, key) {
@@ -2444,6 +2453,7 @@ function tallyLine(r) {
 }
 async function prStart(pr, btn) {
   const fresh = btn.dataset.fresh === "1";
+  btn.style.minWidth = btn.offsetWidth + "px";  // a shorter label must not pull the buttons beside it left
   btn.disabled = true; btn.textContent = "Starting…";
   const d = await save("review_run", { pr, fresh, method: state.reviewMethod || "" });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
@@ -3073,7 +3083,8 @@ async function prDetail(arg) {
   if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const kindOf = j && (j.fresh ? "review from scratch" : j.re_review ? "re-review" : "review");
-  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}${j.method ? `, following <b>${esc(j.method)}</b>` : ""}${j.model ? ` on ${esc(modelName(j.model))}` : ""}. It shows up below as a new tab when it's done; this updates by itself.${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
+  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}${j.method ? `, following <b>${esc(j.method)}</b>` : ""}${j.model ? ` on ${esc(modelName(j.model))}` : ""}. It shows up below as a new tab when it's done; this updates by itself.${unlocked ? ` <button class="btn small" data-pr-cancel="${esc(pr)}" title="Stop this review and its Claude session; nothing is saved">Cancel</button>` : ""}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
+    : j && j.status === "cancelled" && Date.now() - Date.parse(j.ended) < 3600000 ? `<div class="callout">You cancelled the ${esc(kindOf)} started ${ago(j.started)}. Nothing from it was saved.</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
   const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
@@ -3384,6 +3395,13 @@ function wirePrs(root) {
     setTimeout(() => (b.textContent = was), 1500);
   });
   $$("[data-pr-start]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prStart(b.dataset.prStart, b); });
+  $$("[data-pr-cancel]", root).forEach(b => b.onclick = async () => {
+    b.style.minWidth = b.offsetWidth + "px";
+    b.disabled = true; b.textContent = "Cancelling…";
+    const d = await save("review_cancel", { pr: b.dataset.prCancel });
+    if (!d.ok) { b.disabled = false; b.textContent = "Try again"; b.title = d.why || ""; return; }
+    softRoute();
+  });
   $$("[data-pr-sessions]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prSessions(b.dataset.prSessions); });
   $$("[data-pr-import]", root).forEach(b => b.onclick = e => { e.stopPropagation(); const [pr, path] = JSON.parse(b.dataset.prImport); prImport(pr, path, b); });
   $$("[data-pr-mark]", root).forEach(b => b.onclick = async () => {
