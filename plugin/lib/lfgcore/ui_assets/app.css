@@ -1104,3 +1104,4 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .chat-att .icon-btn { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; background: var(--side); }
 .msg.queued .bubble { opacity: .6; border-style: dashed; }
 .msg-imgs { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.chat-to { font-size: 12px; margin-left: 8px; max-width: 220px; padding-top: 2px; padding-bottom: 2px; }

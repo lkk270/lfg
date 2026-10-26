@@ -2132,6 +2132,65 @@ def sessions_for(repo, number, days=30):
     return sorted(out, key=lambda s: s["modified"], reverse=True)
 
 
+ASK_SESSION = ("Lee is reviewing pull request %s from the LFG dashboard and asks you about it. You worked on this, so "
+               "answer from what you know and from the code: a few plain sentences he could hand to the reviewer as "
+               "they are. Don't change any files, commit or push.\n\n%s")
+SESSION_TOOLS = ["Read", "Grep", "Glob", "Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git blame *)",
+                 "Bash(git grep *)", "Bash(gh pr view *)", "Bash(gh pr diff *)"]
+
+
+def _session_about(repo, number, sid):
+    """One of the sessions this PR's page lists (it mentions the PR, or you linked it): {id, title, cwd}."""
+    from . import sessions as SS
+    pr = ref(repo, number)
+    if sid in linked_sessions(pr):
+        s = next((x for x in SS.listing(scripted=True, hidden=True)["sessions"] if x["id"] == sid), None)
+        if s:
+            return {"id": sid, "title": s.get("name") or sid, "cwd": s.get("cwd") or ""}
+    s = next((x for x in sessions_for(repo, number) if x["id"] == sid), None)
+    if not s:
+        raise ReviewError("that session isn't one about %s" % pr)
+    return {"id": sid, "title": s["title"], "cwd": s["cwd"]}
+
+
+def ask_session(repo, number, sid, question, n=None):
+    """Ask one of your sessions about this PR (say the one where you built it), from the review page. The first
+    question forks it, so the session itself is never changed; later ones continue the fork. With `n`, the turn is
+    kept in that review's chat; the review itself doesn't change (only its own session's answers do that)."""
+    import subprocess
+    if not str(question or "").strip():
+        raise ReviewError("ask something")
+    if not C.which("claude"):
+        raise ReviewError("Claude Code (`claude`) is not on PATH")
+    s = _session_about(repo, number, str(sid or ""))
+    if not s["cwd"] or not os.path.isdir(s["cwd"]):
+        raise ReviewError("that session's folder (%s) isn't on this computer any more" % (s["cwd"] or "unknown"))
+    q = _text(question, "question", 4000)
+    rec = need(repo, number)
+    fork = (rec.get("session_forks") or {}).get(s["id"])
+    prompt, images = _chat_prompt(ASK_SESSION % (ref(repo, number), q), q)
+    cmd = ["claude", "-p", prompt, "--resume", fork or s["id"]] + ([] if fork else ["--fork-session"]) + [
+        "--output-format", "json", "--permission-mode", "dontAsk", "--allowedTools", ",".join(SESSION_TOOLS),
+        "--disallowedTools", ",".join(RUN_DENY)] + _model() + _direct()
+    cp = subprocess.run(cmd, cwd=s["cwd"], capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+    try:
+        out = json.loads(cp.stdout)
+    except ValueError:
+        out = {}
+    text = (out.get("result") or "").strip()
+    if not text:
+        raise ReviewError("the session didn't answer: %s" % (cp.stderr or cp.stdout or "")[-300:].strip())
+    rec = need(repo, number)
+    if out.get("session_id"):
+        rec.setdefault("session_forks", {})[s["id"]] = out["session_id"]
+    turn = {"q": q, "a": text, "at": C.now_iso(), "session": s["title"], "session_id": s["id"]}
+    p = next((x for x in rec["passes"] if x["n"] == int(n)), None) if n else None
+    if p:
+        p.setdefault("chat", []).append(turn)
+    store(rec)
+    return turn
+
+
 CONVERT = ("Below is a code review someone did in a Claude Code session. Turn it into this JSON and reply with only "
            "the JSON in one ```json block. Keep every finding the review settled on, with its wording; leave out "
            "ones it dropped or withdrew. Use null where the review doesn't say.\n\n%s\n\nThe review:\n\n%s")
