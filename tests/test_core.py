@@ -3845,6 +3845,30 @@ class ReviewTest(unittest.TestCase):
         p = R.load("o/r", 7)["passes"][0]
         self.assertEqual((p["verdict_now"], p["score"], R.verdict_of(p)), ("almost", 94, "almost"))
 
+    def test_ask_a_session_forks_it_once_then_continues_the_fork(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": []})
+        built = {"id": "b" * 36, "title": "build ATO-1", "cwd": self.tmp_dir()}
+        sent = []
+
+        def fake(cmd, **kw):
+            sent.append((cmd, kw.get("cwd")))
+            said = json.dumps({"result": "yes, on purpose", "session_id": "f" * 36})
+            return subprocess.CompletedProcess(cmd, 0, said, "")
+        with mock.patch.object(R, "sessions_for", return_value=[built]), \
+                mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
+            self.assertEqual(R.ask_session("o/r", 7, built["id"], "why no retry?")["a"], "yes, on purpose")
+            R.ask_session("o/r", 7, built["id"], "and the timeout?", n=1)
+            with self.assertRaises(R.ReviewError):
+                R.ask_session("o/r", 7, "c" * 36, "x")  # not a session about this PR
+        (first, cwd), (second, _) = sent
+        self.assertEqual((first[first.index("--resume") + 1], "--fork-session" in first, cwd), (built["id"], True,
+                                                                                                built["cwd"]))
+        self.assertEqual((second[second.index("--resume") + 1], "--fork-session" in second), ("f" * 36, False))
+        self.assertNotIn("Edit", first[first.index("--allowedTools") + 1])
+        chat = R.load("o/r", 7)["passes"][0]["chat"]
+        self.assertEqual([(x["q"], x["session"]) for x in chat], [("and the timeout?", "build ATO-1")])
+
     def test_the_review_chat_takes_images_and_slash_commands(self):
         import base64
         png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()

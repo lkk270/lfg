@@ -2891,8 +2891,8 @@ const chatTurn = (x, pr) => {
   return chatTurnOf({ ...x, q: m ? m[2] : x.q }, pr, tag);
 };
 const chatImgs = q => (String(q || "").match(/\[image: [^\]\s]+\]/g) || []).length;
-const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(/\s*\[image: [^\]\s]+\]/g, "").trim())}${chatImgs(x.q) ? `<div class="msg-imgs">${plural(chatImgs(x.q), "image")} attached</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing() : `<div class="msg claude"><div class="who">Claude</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
-const typing = () => '<div class="msg claude"><div class="who">Claude</div><div class="bubble typing" aria-label="Claude is thinking"><i></i><i></i><i></i></div></div>';
+const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(/\s*\[image: [^\]\s]+\]/g, "").trim())}${chatImgs(x.q) ? `<div class="msg-imgs">${plural(chatImgs(x.q), "image")} attached</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
+const typing = who => '<div class="msg claude"><div class="who">' + (who ? "Session: " + esc(who) : "Claude") + '</div><div class="bubble typing" aria-label="Claude is thinking"><i></i><i></i><i></i></div></div>';
 /* What a reply changed in the review, as chips that jump to the finding. */
 function changedChips(changed, pr) {
   if (!(changed || []).length) return "";
@@ -2927,7 +2927,7 @@ function questionsBox(pr, p, unlocked) {
     const said = q.answer || waiting;
     return `<div class="pr-question" id="q-${esc(q.id)}" data-ask="${esc(q.ask)}"><div class="pr-ask">${q.costs ? `<span class="pts q-pts ${q.answer ? "off" : ""}" title="${q.answer ? `Cost ${q.costs} points until you answered it` : `This question costs ${q.costs} points until it's answered: it could become a finding that holds the merge back`}">−${q.costs}</span>` : ""}<button class="btn tiny pr-q-copy" data-copy="${esc(q.ask + (q.why ? "\n\nWhy it matters: " + q.why : ""))}" title="Copy the question, and why it matters">Copy</button>${txt(q.ask)}${q.why ? `<div class="muted small">${txt(q.why)}</div>` : ""}</div>${said
       ? `<div class="pr-chat-thread">${chatTurn({ q: said, a: waiting ? null : q.reply || (q.answer ? "" : null), changed: q.changed }, pr).replace('<div class="bubble md"></div>', '<div class="bubble md muted">Sent to the review\'s chat. Answers from before this update show their reply there.</div>')}</div>${q.answer ? rememberRow(pr, p.n, q, unlocked) : ""}`
-      : `<div class="pr-compose"><textarea data-grow rows="2" data-pr-answer placeholder="Your answer" ${unlocked ? "" : "disabled"}></textarea><button class="btn small primary" data-pr-answergo='${esc(JSON.stringify([pr, p.n, q.id]))}' ${unlocked ? "" : "disabled"}>Answer</button></div>`}</div>`;
+      : `<div class="pr-compose"><textarea data-grow rows="2" data-pr-answer placeholder="Your answer" ${unlocked ? "" : "disabled"}></textarea><button class="btn small primary" data-pr-answergo='${esc(JSON.stringify([pr, p.n, q.id]))}' ${unlocked ? "" : "disabled"}>Answer</button>${((state.prSessions || {})[pr] || []).length ? `<button class="btn small" data-pr-qsession='${esc(JSON.stringify([pr, q.id]))}' ${unlocked ? "" : "disabled"} title="Ask a session about this PR, such as the one where you built it. Its answer goes in the box for you to check and send">Ask a session…</button>` : ""}</div>`}</div>`;
   }).join("")}</div>`;
 }
 /* The review's own conversation, beside it: ask, push back, or ask for changes, and the review changes to match. */
@@ -3017,7 +3017,8 @@ function talkPane(pr, p, unlocked, byId) {
   const about = (state.chatAbout || {})[pr], f = about && byId[about];
   const key = f ? `f:${pr}:${f.id}` : `r:${pr}:${p.n}`;
   const turns = [...(f ? f.chat || [] : p.chat || [])], waiting = (state.chatPending || {})[key];
-  if (waiting) turns.push({ q: waiting, a: null });
+  const toSess = !f && ((state.prSessions || {})[pr] || []).find(x => x.id === (state.chatTo || {})[pr]);
+  if (waiting) turns.push({ q: waiting, a: null, session: toSess ? toSess.title : "" });
   turns.push(...((state.chatQueue || {})[key] || []).map(q => ({ q, a: null, queued: true })));
   const mode = chatMode(), count = (p.chat || []).length;
   const hint = f ? `Ask about ${f.id}, push back, or say it isn't needed. If Claude agrees after checking the code, it drops the finding; if not, it says why it still matters.`
@@ -3025,7 +3026,7 @@ function talkPane(pr, p, unlocked, byId) {
   const icon = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
   return `<button class="chat-fab" data-chat-mode="side" ${mode === "hidden" ? "" : "hidden"}>${icon("M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z")}Chat${count ? `<span class="n">${count}</span>` : ""}</button>
   <aside class="pr-talk ${mode}" ${mode === "hidden" ? "hidden" : ""} data-chat="${esc(JSON.stringify([pr, p.n, f ? f.id : ""]))}">
-    <div class="pr-talk-h"><b>Chat</b><span class="grow"></span>
+    <div class="pr-talk-h"><b>Chat</b>${!f && ((state.prSessions || {})[pr] || []).length ? `<select class="chat-to" data-chat-to="${esc(pr)}" title="Who your messages go to: this review's session, which can change the review, or one of your sessions about this PR, which only answers"><option value="">with the review</option>${state.prSessions[pr].map(x => `<option value="${esc(x.id)}" ${(state.chatTo || {})[pr] === x.id ? "selected" : ""}>with ${esc(x.title.slice(0, 40))}</option>`).join("")}</select>` : ""}<span class="grow"></span>
       <button class="icon-btn" data-chat-mode="${mode === "wide" ? "side" : "wide"}" title="${mode === "wide" ? "Back to the side" : "Make it bigger"}">${icon(mode === "wide" ? "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" : "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")}</button>
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
@@ -3116,6 +3117,7 @@ async function prDetail(arg) {
   const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
+  (state.prSessions || (state.prSessions = {}))[pr] = (d.sessions || []).filter(x => !x.dashboard && x.cwd);
   const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
   const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
@@ -3285,6 +3287,7 @@ function chatRedraw(pr) {
   softRoute();
 }
 function wireChatPane(root) {
+  $$("[data-chat-to]", root).forEach(sel => sel.onchange = () => { (state.chatTo || (state.chatTo = {}))[sel.dataset.chatTo] = sel.value; });
   $$("[data-chat-about]", root).forEach(b => b.onclick = e => {
     e.preventDefault();
     const [pr, id] = JSON.parse(b.dataset.chatAbout);
@@ -3335,7 +3338,10 @@ function wireChatPane(root) {
 /* Send one chat message, then the next one queued behind it, in order. A failed one goes back in the box. */
 async function chatSend(key, pr, n, fid, text) {
   (state.chatPending || (state.chatPending = {}))[key] = text;
-  const d = fid ? await save("review_discuss", { pr, id: fid, question: text }) : await save("review_ask", { pr, pass: n, question: text });
+  const to = !fid && (state.chatTo || {})[pr];
+  const d = fid ? await save("review_discuss", { pr, id: fid, question: text })
+    : to ? await save("review_ask_session", { pr, pass: n, session: to, question: text })
+    : await save("review_ask", { pr, pass: n, question: text });
   delete state.chatPending[key];
   const queue = (state.chatQueue || {})[key] || [];
   if (!d.ok) {
@@ -3505,6 +3511,22 @@ function wirePrs(root) {
     sessionStorage.setItem("lfg.prpass." + pr, n);
     state.goto = "#f-" + CSS.escape(id);
     softRoute();
+  });
+  $$("[data-pr-qsession]", root).forEach(b => b.onclick = () => {
+    const [pr, qid] = JSON.parse(b.dataset.prQsession), box = b.closest(".pr-question"), q = box.dataset.ask;
+    const list = (state.prSessions || {})[pr] || [];
+    openDrawer("Ask a session", `<div class="readable"><p>Pick the session to ask, such as the one where you built this PR. LFG asks a copy of it, so the session itself doesn't change. Its answer goes in the box for you to check, then Answer.</p><div class="box pad small">${txt(q)}</div>
+      <ul class="items box mt">${list.map(x => `<li><div class="grow"><div class="title">${esc(x.title)}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd)}${x.linked ? " · linked by you" : ""}</div></div><button class="btn small primary" data-ask-sess="${esc(x.id)}">Ask</button></li>`).join("")}</ul><span class="save-msg" id="ask-sess-msg"></span></div>`);
+    $$("[data-ask-sess]").forEach(go => go.onclick = async () => {
+      $$("[data-ask-sess]").forEach(x => { x.disabled = true; });
+      go.textContent = "Asking…";
+      const d = await save("review_ask_session", { pr, session: go.dataset.askSess, question: q });
+      if (!d.ok) { $$("[data-ask-sess]").forEach(x => { x.disabled = false; }); go.textContent = "Ask"; return saidMsg($("#ask-sess-msg"), d); }
+      closeDrawer();
+      const t = $("[data-pr-answer]", box);
+      if (t) { t.value = d.a; grow(t); t.focus(); }
+      prefToast(`Answer from ${d.session}: check it, then Answer`);
+    });
   });
   $$("[data-pr-discuss]", root).forEach(b => b.onclick = () => {
     const [pr, id] = JSON.parse(b.dataset.prDiscuss);
