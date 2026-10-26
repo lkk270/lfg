@@ -3472,6 +3472,8 @@ function toolLine(t) {
   if (n === "WebFetch") return ["Fetched", `<code>${esc(i.url || "")}</code>`, ""];
   if (n === "WebSearch") return ["Searched the web for", esc(i.query || ""), ""];
   if (n === "TodoWrite") return ["Updated its to-do list", "", `${(i.todos || []).length} items`];
+  if (n === "AskUserQuestion") { const qs = i.questions || []; return ["Asked you", esc(((qs[0] || {}).header || (qs[0] || {}).question || "").slice(0, 120)), qs.length > 1 ? `${qs.length} questions` : ""]; }
+  if (n === "ExitPlanMode") return ["Presented a plan", "", t.error ? "you asked for changes" : t.result != null ? "approved" : ""];
   if (/^mcp__/.test(n)) { const [srv, tool] = mcpName(n); return ["Asked", `<b>${esc(srv)}</b>: ${esc(tool)}`, ""]; }
   return [esc(n), "", ""];
 }
@@ -3482,6 +3484,10 @@ function toolBody(t) {
     const edits = i.edits || [{ old_string: i.old_string, new_string: i.new_string }];
     inp = `<div class="muted small">${esc(i.file_path || "")}</div>` + edits.slice(0, 4).map(e => `<div class="ss-diff">${String(e.old_string || "").split("\n").slice(0, 12).map(l => `<div class="d-del">- ${esc(l)}</div>`).join("")}${String(e.new_string || "").split("\n").slice(0, 12).map(l => `<div class="d-add">+ ${esc(l)}</div>`).join("")}</div>`).join("");
   } else if (t.name === "Bash") inp = `<pre class="ss-pre">$ ${esc(i.command || "")}</pre>`;
+  else if (t.name === "AskUserQuestion") {  // each question with what you picked (Claude Code's result: "Q"="A")
+    const got = {}; String(t.result || "").replace(/"([^"]+)"="([^"]*)"/g, (_m, q, a) => { got[q] = a; return ""; });
+    return `<div class="ss-qa">${(i.questions || []).map(q => `<div><span class="muted small">${esc(q.header || "")}</span><b>${esc(q.question || "")}</b><span>${got[q.question] != null ? `→ ${esc(got[q.question])}` : t.error ? '<span class="muted">skipped</span>' : '<span class="muted">waiting for you</span>'}</span></div>`).join("")}</div>`;
+  } else if (t.name === "ExitPlanMode") return `<div class="md">${md(String(i.plan || ""))}</div>${t.error && t.result ? `<pre class="ss-pre bad">${esc(String(t.result).slice(0, 2000))}</pre>` : ""}`;
   else if (Object.keys(i).length) inp = `<pre class="ss-pre">${esc(JSON.stringify(i, null, 2).slice(0, 4000))}</pre>`;
   const out = t.result != null && t.result !== "" ? `<pre class="ss-pre${t.error ? " bad" : ""}">${esc(String(t.result).slice(0, 6000))}${String(t.result).length > 6000 ? "\n…" : ""}</pre>` : "";
   return inp + out;
@@ -3565,8 +3571,36 @@ function ssCtxHtml(c) {
   const tip = [`${(c.used || 0).toLocaleString()} of ${(c.max || 0).toLocaleString()} tokens`, ...(c.parts || []).map(p => `${p.name}: ${p.tokens.toLocaleString()}`), c.auto_compact_at ? `Compacts by itself near ${c.auto_compact_at.toLocaleString()}` : "", "Compact it from the ⋯ menu"].filter(Boolean).join("\n");
   return `<span class="ss-ctx${c.percent >= 70 ? " warn" : ""}" title="${esc(tip)}"><i style="--p:${Math.min(100, c.percent)}%"></i>${c.percent}% context</span>`;
 }
+/* Claude's questions (AskUserQuestion): pick an option per question (or several, for multi-select), or write your
+   own answer; it goes back as Claude Code's own picker sends it. Picks survive the page redrawing. */
+function ssQuestion(p) {
+  const qs = (p.input && p.input.questions) || [], picked = ((state.ssAns = state.ssAns || {})[p.id] = state.ssAns[p.id] || {});
+  const one = (q, qi) => {
+    const multi = !!q.multiSelect, cur = picked[qi] || { labels: [], other: "" }, name = `q-${p.id}-${qi}`;
+    const opt = (o, oi) => `<label class="ss-q-o${cur.labels.includes(o.label) ? " on" : ""}"><input type="${multi ? "checkbox" : "radio"}" name="${esc(name)}" data-q="${qi}" data-opt="${esc(o.label)}"${cur.labels.includes(o.label) ? " checked" : ""}>
+      <span class="ss-q-k">${multi ? "" : oi + 1}</span><span class="grow"><b>${esc(o.label)}</b>${o.description ? `<span>${esc(o.description)}</span>` : ""}</span></label>`;
+    return `<fieldset class="ss-q" data-qi="${qi}"><legend>${q.header ? `<span class="tg">${esc(q.header)}</span>` : ""}<span class="ss-q-t">${esc(q.question)}</span>${multi ? '<span class="muted small">Pick any</span>' : ""}</legend>
+      <div class="ss-q-os">${(q.options || []).map(opt).join("")}
+        <label class="ss-q-o ss-q-other${cur.other ? " on" : ""}"><input type="${multi ? "checkbox" : "radio"}" name="${esc(name)}" data-q="${qi}" data-opt="__other"${cur.other ? " checked" : ""}><span class="ss-q-k">${multi ? "" : "✎"}</span><span class="grow"><b>Something else</b><input type="text" class="ss-q-in" data-q-other="${qi}" placeholder="Type your own answer" value="${esc(cur.other)}"></span></label></div></fieldset>`;
+  };
+  // several questions: one tab each, Next moves on, so the card stays one question tall
+  const many = qs.length > 1, tab = Math.min(((state.ssQTab = state.ssQTab || {})[p.id]) || 0, qs.length - 1);
+  const tabs = many ? `<div class="ss-q-tabs" role="tablist">${qs.map((q, qi) => `<button type="button" role="tab" class="ss-q-tab${qi === tab ? " on" : ""}" data-q-tab="${qi}" aria-selected="${qi === tab}"><span class="ss-q-done" aria-hidden="true"></span>${esc(q.header || `Question ${qi + 1}`)}</button>`).join("")}</div>` : "";
+  return `<div class="ss-ask ss-ask-q${many ? " many" : ""}" data-req="${esc(p.id)}" data-kind="question"><div class="ss-ask-h">${icon("review")}<span class="grow">Claude has ${many ? `${qs.length} questions` : "a question"} for you</span></div>
+    ${tabs}${qs.map((q, qi) => one(q, qi).replace("<fieldset ", `<fieldset${many && qi !== tab ? " hidden" : ""} `)).join("")}
+    <div class="ss-ask-a">${many ? '<button class="btn small" data-q-back>Back</button><button class="btn primary small" data-q-next>Next</button>' : ""}<button class="btn primary small" data-q-send disabled${many && tab < qs.length - 1 ? " hidden" : ""}>${many ? "Send answers" : "Send answer"}</button><button class="btn small" data-decide="skip" title="Claude carries on with its best guess and says what it assumed">Skip</button><span class="muted small" data-q-left></span></div></div>`;
+}
+/* Claude's plan (ExitPlanMode): read it, then approve it or say what to change */
+function ssPlan(p) {
+  return `<div class="ss-ask ss-ask-plan" data-req="${esc(p.id)}" data-kind="plan"><div class="ss-ask-h">${icon("runs")}<span class="grow"><b>Claude's plan</b>, ready for you</span></div>
+    <div class="md ss-plan">${md(String((p.input || {}).plan || ""))}</div>
+    <textarea class="ss-plan-fb" rows="2" placeholder="What should change? (only needed for Keep planning)"></textarea>
+    <div class="ss-ask-a"><button class="btn primary small" data-decide="approve">Approve plan</button><button class="btn small" data-plan-revise>Keep planning</button></div></div>`;
+}
 function ssPending(d) {
   return (d.pending || []).map(p => {
+    if (p.kind === "question") return ssQuestion(p);
+    if (p.kind === "plan") return ssPlan(p);
     const t = { name: p.tool, input: p.input }, [verb, what] = toolLine(t), label = /^mcp__/.test(p.tool) ? mcpName(p.tool).join(": ") : p.tool;
     return `<div class="ss-ask" data-req="${esc(p.id)}"><div class="ss-ask-h">${icon("checks")}<span class="grow">Claude wants to <b>${verb.toLowerCase()}</b> ${what}</span></div>
       ${p.description ? `<div class="muted small">${esc(p.description)}</div>` : ""}<div class="ss-tool-b">${toolBody(t)}</div>
@@ -3933,6 +3967,73 @@ function wireSessions(root) {
   const conv = $("#ss-conv", root), head = $("#ss-head", root);
   const wireConv = () => {
     $$(".ss-ask", conv).forEach(card => $$("[data-decide]", card).forEach(b => b.onclick = async () => { const r = await go("sess_decide", { id: S.id, request: card.dataset.req, decision: b.dataset.decide }, b); if (r.ok) refresh(); }));
+    $$(".ss-ask-q", conv).forEach(card => {  // questions: pick, type, send
+      const rid = card.dataset.req, picked = (state.ssAns = state.ssAns || {})[rid] = state.ssAns[rid] || {};
+      const qs = $$(".ss-q", card), send = $("[data-q-send]", card), left = $("[data-q-left]", card);
+      const answerOf = qi => { const c = picked[qi] || { labels: [], other: "" }; return [...c.labels, ...(c.other.trim() ? [c.other.trim()] : [])]; };
+      const next = $("[data-q-next]", card), back = $("[data-q-back]", card), tabs = $$("[data-q-tab]", card);
+      const tabNow = () => Math.min((state.ssQTab = state.ssQTab || {})[rid] || 0, qs.length - 1);
+      const show = k => {  // one question at a time when there are several
+        state.ssQTab[rid] = k;
+        qs.forEach((f, i) => { f.hidden = i !== k; });
+        tabs.forEach((t, i) => { t.classList.toggle("on", i === k); t.setAttribute("aria-selected", String(i === k)); });
+        sync();
+        const first = $("input[data-opt]:checked", qs[k]) || $("input[data-opt]", qs[k]); if (first && tabs.length) first.focus({ preventScroll: true });
+      };
+      const sync = () => {
+        qs.forEach(f => { const qi = f.dataset.qi; $$(".ss-q-o", f).forEach(l => { const i = $("input[data-opt]", l); l.classList.toggle("on", i.checked); }); picked[qi] = picked[qi] || { labels: [], other: "" }; });
+        const missing = qs.filter(f => !answerOf(f.dataset.qi).length).length, k = tabNow(), last = k >= qs.length - 1;
+        tabs.forEach((t, i) => t.classList.toggle("done", !!answerOf(qs[i].dataset.qi).length));
+        if (next) { next.hidden = last; next.disabled = !answerOf(qs[k].dataset.qi).length; back.hidden = k === 0; send.hidden = !last; }
+        send.disabled = !!missing; left.textContent = missing && qs.length > 1 && last ? `${missing} left to answer` : "";
+      };
+      if (next) { next.onclick = () => show(Math.min(tabNow() + 1, qs.length - 1)); back.onclick = () => show(Math.max(tabNow() - 1, 0)); }
+      tabs.forEach((t, i) => t.onclick = () => show(i));
+      qs.forEach(f => {
+        const qi = f.dataset.qi, multi = !!$('input[type="checkbox"]', f);
+        $$("input[data-opt]", f).forEach(i => i.onchange = () => {
+          const c = picked[qi] = picked[qi] || { labels: [], other: "" };
+          if (i.dataset.opt === "__other") { if (!i.checked) c.other = ""; else $(".ss-q-in", f).focus(); if (!multi) c.labels = []; }
+          else if (multi) c.labels = i.checked ? [...new Set([...c.labels, i.dataset.opt])] : c.labels.filter(x => x !== i.dataset.opt);
+          else { c.labels = [i.dataset.opt]; c.other = ""; const o = $(".ss-q-in", f); if (o) o.value = ""; }
+          sync();
+        });
+        const other = $(".ss-q-in", f);
+        other.oninput = () => {
+          const c = picked[qi] = picked[qi] || { labels: [], other: "" };
+          c.other = other.value;
+          const box = $('input[data-opt="__other"]', f); box.checked = !!other.value.trim();
+          if (!multi && other.value.trim()) { c.labels = []; $$("input[data-opt]", f).forEach(x => { if (x !== box) x.checked = false; }); }
+          sync();
+        };
+        other.onclick = () => { const box = $('input[data-opt="__other"]', f); if (!box.checked && !multi) { box.checked = true; c0(qi); sync(); } };
+        other.onkeydown = e => { if (e.key !== "Enter") return; if (next && !next.hidden && !next.disabled) next.click(); else if (!send.disabled) send.click(); };
+      });
+      const c0 = qi => { const c = picked[qi] = picked[qi] || { labels: [], other: "" }; if (!multi0(qi)) c.labels = []; };
+      const multi0 = qi => !!$(`.ss-q[data-qi="${qi}"] input[type="checkbox"]`, card);
+      card.onkeydown = e => {  // 1-9 picks an option in the first unanswered single-choice question, as in the terminal
+        if (e.target.matches("input[type=text], textarea") || !/^[1-9]$/.test(e.key)) return;
+        const f = tabs.length ? qs[tabNow()] : qs.find(x => !multi0(x.dataset.qi) && !answerOf(x.dataset.qi).length) || qs[0];
+        if (multi0(f.dataset.qi)) { const i = $$("input[data-opt]", f)[+e.key - 1]; if (i && i.dataset.opt !== "__other") { i.checked = !i.checked; i.onchange(); } return; }
+        const i = $$("input[data-opt]", f)[+e.key - 1]; if (i && i.dataset.opt !== "__other") { i.checked = true; i.onchange(); }
+      };
+      sync();
+      send.onclick = async () => {
+        const answers = {};
+        const list = (d.pending || []).find(x => x.id === rid);
+        ((list && list.input && list.input.questions) || []).forEach((q, qi) => { answers[q.question] = answerOf(qi).join(", "); });
+        const r = await go("sess_decide", { id: S.id, request: rid, decision: "answer", answers }, send, "Sending…");
+        if (r.ok) { delete state.ssAns[rid]; delete (state.ssQTab || {})[rid]; refresh(); }
+      };
+    });
+    $$(".ss-ask-plan", conv).forEach(card => {
+      const fb = $(".ss-plan-fb", card), rv = $("[data-plan-revise]", card);
+      rv.onclick = async () => {
+        if (!fb.value.trim()) { fb.focus(); fb.placeholder = "Say what to change, then Keep planning"; return; }
+        const r = await go("sess_decide", { id: S.id, request: card.dataset.req, decision: "revise", message: fb.value }, rv, "Sending…");
+        if (r.ok) refresh();
+      };
+    });
     const stop = $("[data-ss-interrupt]", conv); if (stop) stop.onclick = () => go("sess_interrupt", { id: S.id }, stop, "Stopping…");
     $$("[data-follow]", conv).forEach(b => b.onclick = () => { ta.value = b.dataset.follow; send.click(); });
     $$("[data-ss-copy]", conv).forEach(b => b.onclick = async () => { await navigator.clipboard.writeText(ssItemText(d.items[+b.dataset.ssCopy])); const t = b.innerHTML; b.textContent = "Copied"; setTimeout(() => { b.innerHTML = t; }, 1200); });
@@ -4068,13 +4169,14 @@ function markSeen() { NOTES.seen = NOTES.events[0] ? NOTES.events[0].id : NOTES.
 function closeBell() { const pop = $("#bell-pop"); if (!pop.hidden) { pop.hidden = true; $("#bell").setAttribute("aria-expanded", "false"); markSeen(); } }
 function toast(ev) {
   const box = $("#toasts"), el = document.createElement("div");
-  el.innerHTML = `${noteHtml(ev, "toast")}<button class="toast-x" aria-label="Dismiss">&times;</button>`;
+  // a toast is one quiet line in the accent colour: what happened, click to go there; the details stay in the bell
+  el.innerHTML = `<a href="${esc(ev.href || "#")}" class="toast${ev.ok ? "" : " bad"}" title="${esc([ev.title, ev.body].filter(Boolean).join("\n"))}"><span class="toast-dot" aria-hidden="true"></span><span class="toast-t">${esc(ev.title)}</span></a><button class="toast-x" aria-label="Dismiss">&times;</button>`;
   const t = el.firstChild, x = el.lastChild;
   const wrap = document.createElement("div"); wrap.className = "toast-wrap"; wrap.append(t, x); box.prepend(wrap);
   t.onclick = e => { e.preventDefault(); wrap.remove(); openNote(ev); };
   x.onclick = () => wrap.remove();
-  setTimeout(() => wrap.remove(), 9000);
-  while (box.children.length > 4) box.lastChild.remove();
+  setTimeout(() => wrap.remove(), 6000);
+  while (box.children.length > 3) box.lastChild.remove();
 }
 function systemNote(ev) {  // the browser's own notification, only when `lfg ui` can't post macOS ones itself
   if (NOTES.desktop || !document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;

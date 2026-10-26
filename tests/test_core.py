@@ -2104,6 +2104,31 @@ class ClaudeSessionsTest(unittest.TestCase):
         d = C.ensure_dir(os.path.join(self.proj, re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(self.root))))
         C.write_text(os.path.join(d, sid + ".jsonl"), "".join(json.dumps(x) + "\n" for x in lines))
 
+    def test_questions_and_plans_are_answered_not_allowed(self):
+        CS = self.CS
+        lv = CS.Live.__new__(CS.Live)
+        sent = []
+        lv._write = lambda obj: sent.append(obj) or True
+        lv.pending, lv.allowed, lv.state, lv.sid, lv.rid, lv.title = {}, {"AskUserQuestion"}, "working", "s", "r", "T"
+        qs = [{"question": "Where?", "header": "Location", "options": [{"label": "Required"}, {"label": "Optional"}], "multiSelect": False},
+              {"question": "Which?", "header": "Kinds", "options": [{"label": "Printers"}, {"label": "Gateways"}], "multiSelect": True}]
+        with mock.patch.object(CS.N, "add"):
+            lv._ask({"request_id": "q1", "request": {"tool_name": "AskUserQuestion", "input": {"questions": qs}}})
+            lv._ask({"request_id": "p1", "request": {"tool_name": "ExitPlanMode", "input": {"plan": "1. do it"}}})
+        self.assertEqual(sent, [])  # never auto-allowed, even after "Allow for this session"
+        self.assertEqual((lv.pending["q1"]["kind"], lv.pending["p1"]["kind"], lv.state), ("question", "plan", "needs-you"))
+        with self.assertRaises(CS.Invalid):
+            lv.decide("q1", "answer", answers={"Where?": "Required"})  # every question needs an answer
+        lv.decide("q1", "answer", answers={"Where?": "Required", "Which?": ["Printers", "Gateways"]})
+        resp = sent[-1]["response"]["response"]
+        self.assertEqual(resp["behavior"], "allow")
+        self.assertEqual(resp["updatedInput"]["answers"], {"Where?": "Required", "Which?": "Printers, Gateways"})
+        self.assertEqual(resp["updatedInput"]["questions"], qs)
+        lv.decide("p1", "revise", message="split step 1")
+        self.assertEqual(sent[-1]["response"]["response"]["behavior"], "deny")
+        self.assertIn("split step 1", sent[-1]["response"]["response"]["message"])
+        self.assertEqual((lv.pending, lv.state), ({}, "working"))
+
     def test_changes_are_the_sessions_own_edits_as_diffs(self):
         CS, sid = self.CS, "77777777-2222-3333-4444-555555555555"
         base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}

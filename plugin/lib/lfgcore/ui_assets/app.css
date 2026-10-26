@@ -867,13 +867,19 @@ a.stk-i:hover { background: var(--hover); }
 .note .grow, .toast .grow { display: grid; gap: 2px; min-width: 0; }
 .note-b { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .note-m { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
-.note-ico { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--c-green); color: var(--green-tx, var(--green)); }
+.note-ico { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
 .bad .note-ico { background: var(--c-red); color: var(--red-tx, var(--red)); }
 .note-ico .ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
-.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
-.toast-wrap { position: relative; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); animation: toast-in .18s ease-out; }
-.toast { padding-right: 34px; border-radius: 10px; } .toast:hover { background: var(--hover); }
-.toast-x { position: absolute; top: 6px; right: 6px; border: 0; background: none; color: var(--muted); font-size: 17px; cursor: pointer; border-radius: 6px; padding: 0 6px; }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; justify-items: end; width: min(340px, calc(100vw - 32px)); }
+.toast-wrap { position: relative; max-width: 100%; display: flex; align-items: center; background: var(--surface); border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--line)); border-radius: 4px;
+  box-shadow: 0 6px 20px -8px rgba(0, 0, 0, .35), 0 0 0 1px color-mix(in srgb, var(--blue) 10%, transparent); animation: toast-in .18s ease-out; }
+.toast-wrap:has(.toast.bad) { border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+.toast { display: flex; align-items: center; gap: 8px; padding: 7px 30px 7px 10px; min-width: 0; font-size: 12.5px; color: var(--text); text-decoration: none; border-radius: 4px; }
+.toast:hover { background: color-mix(in srgb, var(--blue) 7%, transparent); }
+.toast-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 20%, transparent); }
+.toast.bad .toast-dot { background: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 20%, transparent); }
+.toast-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.toast-x { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; border-radius: 3px; padding: 2px 5px; }
 .toast-x:hover { background: var(--hover); color: var(--text); }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .toast-wrap { animation: none; } }
@@ -2006,3 +2012,31 @@ body.sg-open { overflow: hidden; }
 .ss-ref-l.add { background: color-mix(in srgb, var(--green) 14%, transparent); } .ss-ref-l.del { background: color-mix(in srgb, var(--red) 13%, transparent); }
 .ss-ref-s { flex: none; width: 22px; text-align: center; color: var(--muted); user-select: none; }
 .ss-ref-l code { background: none; padding: 0; font: inherit; color: var(--text); }
+
+/* Claude's questions and plans: an answer, not an OK */
+.ss-ask-q, .ss-ask-plan { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); background: color-mix(in srgb, var(--blue) 6%, var(--page)); border-radius: var(--radius); gap: 12px; }
+.ss-ask-q .ss-ask-h .ico, .ss-ask-plan .ss-ask-h .ico { color: var(--blue); }
+.ss-q { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width: 0; }
+.ss-q legend { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 0; margin-bottom: 8px; }
+.ss-q-t { font-weight: 600; font-size: 14.5px; }
+.ss-q-os { display: grid; gap: 6px; }
+.ss-q-o { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface, var(--page)); cursor: pointer; }
+.ss-q-o:hover { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
+.ss-q-o.on { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; background: color-mix(in srgb, var(--blue) 8%, var(--surface, var(--page))); }
+.ss-q-o > input { position: absolute; opacity: 0; pointer-events: none; }
+.ss-q-o:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ss-q-k { flex: none; width: 20px; height: 20px; border-radius: 3px; display: grid; place-items: center; font: 600 11px var(--mono); color: var(--muted); border: 1px solid var(--line-2); }
+.ss-q-o.on .ss-q-k { background: var(--blue); border-color: var(--blue); color: #fff; }
+.ss-q-o .grow { display: grid; gap: 2px; min-width: 0; }
+.ss-q-o b { font-size: 13.5px; font-weight: 600; } .ss-q-o .grow > span { font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
+.ss-q-in { font: inherit; font-size: 13px; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--field); color: var(--text); width: 100%; box-sizing: border-box; }
+.ss-q-in:focus { outline: none; border-color: var(--blue); }
+.ss-plan { max-height: 420px; overflow-y: auto; padding: 10px 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface, var(--page)); }
+.ss-plan-fb { font: inherit; font-size: 13.5px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--field); color: var(--text); resize: vertical; }
+.ss-qa { display: grid; gap: 8px; } .ss-qa > div { display: grid; gap: 2px; } .ss-qa b { font-weight: 600; font-size: 13px; }
+.ss-q-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.ss-q-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.ss-q-tab:hover { color: var(--text); } .ss-q-tab.on { color: var(--text); border-bottom-color: var(--blue); font-weight: 600; }
+.ss-q-done { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line-2); box-sizing: border-box; }
+.ss-q-tab.done .ss-q-done { border-color: var(--blue); background: var(--blue) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 10px no-repeat; }
+.ss-q[hidden] { display: none; }

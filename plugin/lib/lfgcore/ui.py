@@ -366,7 +366,8 @@ def session_action(what, body):
             att = body.get("attachments")
             return {"status": CS.live(sid).say(CS._check(body.get("text"), att), att)}
         if what == "sess_decide":
-            CS.live(sid).decide(str(body.get("request") or ""), str(body.get("decision") or ""))
+            CS.live(sid).decide(str(body.get("request") or ""), str(body.get("decision") or ""),
+                                answers=body.get("answers"), message=str(body.get("message") or ""))
             return {"saved": True}
         if what == "sess_mode":
             CS.live(sid).set_mode(str(body.get("mode") or ""))

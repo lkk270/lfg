@@ -77,6 +77,26 @@ ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 NOISE = re.compile(r"^\s*<(local-command-stdout|local-command-caveat|system-reminder|bash-input|bash-stdout|"
                    r"bash-stderr|user-prompt-submit-hook|task-notification)", re.S)
 AGENT_TOOLS = ("Agent", "Task")
+INTERACTIVE = {"AskUserQuestion": "question", "ExitPlanMode": "plan"}  # prompts that want an answer, not an OK
+
+
+def _check_answers(inp, answers):
+    """Your answers to AskUserQuestion, keyed by each question's text as Claude Code expects: a chosen label, several
+    joined with ", " (multiSelect), or your own words. Every question needs one."""
+    qs = (inp or {}).get("questions") or []
+    if not isinstance(answers, dict):
+        raise Invalid("answers missing")
+    out = {}
+    for q in qs:
+        text = str(q.get("question") or "")
+        a = answers.get(text)
+        if isinstance(a, list):
+            a = ", ".join(str(x).strip() for x in a if str(x).strip())
+        a = str(a or "").strip()
+        if not a:
+            raise Invalid("answer every question (%s)" % (q.get("header") or text[:40]))
+        out[text] = a[:4000]
+    return out
 NOTE = re.compile(r"<task-notification>(.*?)</task-notification>", re.S)
 TASK_ID = re.compile(r"\b(?:ID|id|agentId|task_id)[:=]\s*`?([A-Za-z0-9_-]{5,})")
 DONE = {"completed": "done", "success": "done", "failed": "failed", "error": "failed", "killed": "stopped",
@@ -548,16 +568,25 @@ class Live:
     def _ask(self, ev):
         req = ev.get("request") or {}
         tool = req.get("tool_name") or "?"
-        if tool in self.allowed:  # "Allow for this session" earlier
+        kind = INTERACTIVE.get(tool, "permission")
+        if kind == "permission" and tool in self.allowed:  # "Allow for this session" earlier
             self._answer(ev["request_id"], req, True)
             return
-        self.pending[ev["request_id"]] = {"id": ev["request_id"], "tool": tool, "input": req.get("input") or {},
+        self.pending[ev["request_id"]] = {"id": ev["request_id"], "tool": tool, "kind": kind,
+                                          "input": req.get("input") or {},
                                           "description": req.get("description") or "", "at": C.now_iso(),
-                                          "can_remember": bool(req.get("permission_suggestions")), "raw": req}
+                                          "can_remember": kind == "permission" and bool(req.get("permission_suggestions")),
+                                          "raw": req}
         self.state = "needs-you"
-        N.add("session", "Claude needs your OK in “%s”" % _one_line(self.title)[:60], "%s: %s" % (
-            tool, _one_line(req.get("description") or json.dumps(req.get("input") or {}))[:120]),
-            "#sessions/" + self.sid, self.rid)
+        qs = (req.get("input") or {}).get("questions") or []
+        head, body = {
+            "question": ("Claude has %s for you in “%s”" % ("a question" if len(qs) < 2 else "%d questions" % len(qs),
+                                                           _one_line(self.title)[:60]),
+                         _one_line(str((qs[0] if qs else {}).get("question") or ""))[:140]),
+            "plan": ("Claude's plan is ready in “%s”" % _one_line(self.title)[:60], "Approve it, or say what to change"),
+        }.get(kind, ("Claude needs your OK in “%s”" % _one_line(self.title)[:60], "%s: %s" % (
+            tool, _one_line(req.get("description") or json.dumps(req.get("input") or {}))[:120])))
+        N.add("session", head, body, "#sessions/" + self.sid, self.rid)
 
     def _answer(self, rid_, req, allow, message="", remember=False):
         resp = {"behavior": "allow", "updatedInput": req.get("input") or {}} if allow else \
@@ -567,14 +596,44 @@ class Live:
         self._write({"type": "control_response", "response": {"subtype": "success", "request_id": rid_,
                                                                 "response": resp}})
 
-    def decide(self, request_id, decision):
-        p = self.pending.pop(request_id, None)
+    def decide(self, request_id, decision, answers=None, message=""):
+        """Answer a prompt. A permission: once / session / always / deny. Claude's questions (AskUserQuestion):
+        "answer" with {question text: chosen label(s) or your own words}, which goes back as the tool's input, the way
+        Claude Code's own picker answers; or "skip". A plan (ExitPlanMode): "approve", or "revise" with what to
+        change. Questions and plans are never remembered: each one needs its own answer."""
+        p = self.pending.get(request_id)
         if not p:
             raise Invalid("that request was already answered")
-        if decision in ("always", "session"):
-            self.allowed.add(p["tool"])
-        self._answer(request_id, p["raw"], decision in ("once", "always", "session"), remember=decision == "always")
+        kind, raw = p.get("kind", "permission"), p["raw"]
+        if kind == "question":
+            if decision == "answer":
+                resp = {"behavior": "allow", "updatedInput": dict(raw.get("input") or {},
+                                                                  answers=_check_answers(raw.get("input"), answers))}
+            elif decision == "skip":
+                resp = {"behavior": "deny", "message": "The user skipped these questions without answering. Carry on "
+                        "with your best judgement and say which assumptions you made, or ask again later if it matters."}
+            else:
+                raise Invalid("answer the questions, or skip them")
+            self._respond(request_id, resp)
+        elif kind == "plan":
+            if decision == "approve":
+                self._respond(request_id, {"behavior": "allow", "updatedInput": raw.get("input") or {}})
+            elif decision == "revise":
+                self._respond(request_id, {"behavior": "deny", "message": "The user wants changes to the plan before "
+                              "you start: %s\nRevise the plan and present it again." % (str(message or "").strip()
+                                                                                       or "(no details given)")})
+            else:
+                raise Invalid("approve the plan, or say what to change")
+        else:
+            if decision in ("always", "session"):
+                self.allowed.add(p["tool"])
+            self._answer(request_id, raw, decision in ("once", "always", "session"), remember=decision == "always")
+        self.pending.pop(request_id, None)
         self.state = "needs-you" if self.pending else "working"
+
+    def _respond(self, rid_, resp):
+        self._write({"type": "control_response", "response": {"subtype": "success", "request_id": rid_,
+                                                                "response": resp}})
 
     def control(self, request, timeout=30):
         """Ask Claude Code something on its control channel and wait for the answer (rewind, context usage)."""
