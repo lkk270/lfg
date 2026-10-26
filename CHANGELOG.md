@@ -4,7 +4,11 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+### Fixed
+- Clicking an option in Claude's questions could scroll the page into empty space (a black screen) and miss the click: each option's hidden checkbox was placed against the page instead of its own row, which also made the Studio page taller than the window.
+
 ### Added
+- Studio's background-work panel is an accordion: the panel folds to its header (remembered in this browser), and each subagent or command is one line that opens to its details; what's open survives the page's refreshes.
 - **Claude's questions and plans in Studio**: when Claude asks (AskUserQuestion), the session shows each question with its options to pick (several for multi-select, 1-9 keys, or your own answer) and Send or Skip, instead of an Allow/Deny prompt with the raw JSON. Answers go back the way Claude Code's own picker sends them. A plan (ExitPlanMode) shows as a document with Approve plan or Keep planning (with what to change). Neither is ever auto-allowed by "Allow for this session", which used to let later questions through unanswered. Several questions in one ask show as tabs in one card (Next, Back, a tick on each answered tab), so the card stays one question tall. Answered questions show what you picked.
 - Toasts are one short line with a dot in your accent colour (red when something failed), gone after 6 seconds; the details stay in the bell. Bell icons use the accent colour too.
 - **What a session changed**: a session's header shows "N files changed +x −y · View changes", which opens every file it edited or created as diffs (the Reviews diff view: file tree, filter, folding), one hunk per edit with when it was made. Built from the session's own transcript, so it shows exactly what Claude did there, even after commits, and leaves out denied or rewound edits. Shell commands that can change files (sed, scripts, installs, formatters) are listed alongside, since they aren't recorded as edits. Select lines there (drag down the numbers, or click then shift-click) to **Ask** about them or **Make this change**: it goes into the same session as the next message, with the file, the line range and the selected lines, so Claude knows exactly what you mean. A session that isn't running is continued first.

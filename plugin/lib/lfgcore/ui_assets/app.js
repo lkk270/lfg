@@ -3648,19 +3648,41 @@ const SS_ACT = { running: ["Running", "run"], quiet: ["No news for 15 min", "qui
 function ssAct(d) {
   const xs = (d.activity || []).slice().sort((a, b) => (a.status === "running" ? 0 : a.status === "quiet" ? 1 : 2) - (b.status === "running" ? 0 : b.status === "quiet" ? 1 : 2));
   if (!xs.length) return "";
-  const n = xs.filter(a => a.status === "running").length;
+  // an accordion: the panel folds to its header line, and each item folds to one line (its details on open).
+  // What's open is kept across the page's refreshes, and the panel's fold in this browser.
+  const open = state.ssActOpen = state.ssActOpen || new Set();
+  let shut = false; try { shut = localStorage.getItem("lfg.ssAct.shut") === "1"; } catch (e) { /* private window */ }
+  const n = xs.filter(a => a.status === "running").length, done = xs.length - n;
   const row = a => {
     const [word, cls] = SS_ACT[a.status] || [a.status, "off"];
     const kind = a.kind === "agent" ? `${a.type ? esc(a.type) : "Subagent"}${a.background ? " · background" : ""}` : a.kind === "command" ? "Background command" : `Background ${esc(a.tool || "task")}`;
     const when = a.status === "running" || a.status === "quiet" ? `started ${ago(a.started)}` : ago(a.ended);
-    return `<div class="ss-act-i ${cls}"><span class="ss-act-dot" aria-hidden="true"></span><div class="grow">
-      <div class="ss-act-k">${icon(a.kind === "agent" ? "agent" : "terminal")}<span>${kind}</span></div>
-      <b title="${esc(a.label)}">${esc(a.label)}</b>
+    return `<details class="ss-act-i ${cls}" data-act="${esc(a.id)}"${open.has(a.id) ? " open" : ""}><summary><span class="ss-act-dot" aria-hidden="true"></span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="ss-act-st">${word === "Running" ? (a.steps ? plural(a.steps, "step") : "") : word}</span><span class="ss-act-chev">${icon("chev")}</span></summary>
+      <div class="ss-act-d"><div class="ss-act-k">${icon(a.kind === "agent" ? "agent" : "terminal")}<span>${kind}</span></div>
       ${a.now && (a.status === "running" || a.status === "quiet") ? `<span class="ss-act-now" title="${esc(a.now)}">${esc(a.now)}</span>` : ""}
-      ${a.summary && a.status !== "running" ? `<span class="ss-act-now">${esc(a.summary)}</span>` : ""}
-      <span class="ss-act-m">${word === "Running" ? "" : `<span class="tg ${cls}">${word}</span>`}${a.steps ? `${plural(a.steps, "step")} · ` : ""}${when}</span></div></div>`;
+      ${a.summary && a.status !== "running" ? `<span class="ss-act-now" title="${esc(a.summary)}">${esc(a.summary)}</span>` : ""}
+      <span class="ss-act-m">${a.steps ? `${plural(a.steps, "step")} · ` : ""}${when}</span></div></details>`;
   };
-  return `<div class="ss-act-h"><b>${n ? `${n} running` : "Background work"}</b><span class="muted small">${n ? "besides this chat" : "nothing running now"}</span></div>${xs.map(row).join("")}`;
+  return `<button type="button" class="ss-act-h" data-act-fold aria-expanded="${!shut}"><span class="ss-act-chev">${icon("chev")}</span><b>${n ? `${n} running` : "Background work"}</b><span class="muted small">${[n ? "" : "nothing running", done ? `${done} finished` : ""].filter(Boolean).join(" · ")}</span></button>
+    <div class="ss-act-list"${shut ? " hidden" : ""}>${xs.map(row).join("")}</div>`;
+}
+/* the accordion's clicks: delegated, so they keep working after each refresh redraws the panel */
+function wireAct(box) {
+  if (!box || box.dataset.wired) return;
+  box.dataset.wired = "1";
+  box.addEventListener("click", e => {
+    const h = e.target.closest("[data-act-fold]");
+    if (!h) return;
+    const list = $(".ss-act-list", box), shut = !list.hidden;
+    list.hidden = shut; h.setAttribute("aria-expanded", String(!shut));
+    try { localStorage.setItem("lfg.ssAct.shut", shut ? "1" : "0"); } catch (err) { /* private window */ }
+  });
+  box.addEventListener("toggle", e => {
+    const it = e.target.closest && e.target.closest("[data-act]");
+    if (!it) return;
+    const open = state.ssActOpen = state.ssActOpen || new Set();
+    it.open ? open.add(it.dataset.act) : open.delete(it.dataset.act);
+  }, true);
 }
 
 /* a file for a message: big images are scaled down first (to 2000px and under ~3.5 MB, as Claude Code does) */
@@ -4105,7 +4127,8 @@ function wireSessions(root) {
   let sig = "";
   const sigOf = n => JSON.stringify([n.items.length, n.state, (n.pending || []).length, (n.queued || []).length, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null]);
   const busyBg = n => (n.activity || []).some(a => a.status === "running");
-  const drawAct = n => { const box = $("#ss-act", root); if (box) box.innerHTML = ssAct(n); const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };
+  wireAct($("#ss-act", root));
+  const drawAct = n => { const box = $("#ss-act", root); if (box) { const html = ssAct(n); if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; } } const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };
   sig = sigOf(d);
   async function refresh() {
     clearTimeout(ssPoll);

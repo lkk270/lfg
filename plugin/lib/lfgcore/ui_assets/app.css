@@ -1956,17 +1956,25 @@ body.sg-open { overflow: hidden; }
 .ss-one.has-act > .ss-comp, .ss-one.has-act > .ss-forking { grid-column: 1; }
 .ss-one.has-act > .ss-act { grid-column: 2; grid-row: 2 / span 2; }
 .ss-act:empty { display: none; }
-.ss-act { min-height: 0; overflow-y: auto; align-self: start; max-height: 100%; display: grid; gap: 8px; align-content: start; }
-.ss-act-h { display: grid; gap: 1px; padding: 2px 2px 4px; }
-.ss-act-h b { font-size: 13px; }
-.ss-act-i { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface, var(--page)); min-width: 0; }
-.ss-act-i .grow { display: grid; gap: 3px; min-width: 0; }
-.ss-act-i b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-act { min-height: 0; overflow-y: auto; align-self: start; max-height: 100%; display: grid; gap: 6px; align-content: start; }
+.ss-act-h { display: flex; gap: 8px; align-items: center; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ss-act-h:hover { background: var(--hover); }
+.ss-act-h b { font-size: 13px; } .ss-act-h .muted { margin-left: auto; }
+.ss-act-chev { display: inline-flex; color: var(--muted); transition: transform .15s; } .ss-act-chev .ico { width: 13px; height: 13px; }
+.ss-act-h[aria-expanded="false"] .ss-act-chev { transform: rotate(-90deg); }
+.ss-act-list { display: grid; gap: 6px; } .ss-act-list[hidden] { display: none; }
+.ss-act-i { display: block; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface, var(--page)); min-width: 0; }
+.ss-act-i > summary { display: flex; gap: 8px; align-items: center; padding: 8px 10px; cursor: pointer; list-style: none; min-width: 0; }
+.ss-act-i > summary::-webkit-details-marker { display: none; }
+.ss-act-i > summary b { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-act-st { flex: none; font-size: 11px; color: var(--muted); }
+.ss-act-i > summary .ss-act-chev { transform: rotate(-90deg); } .ss-act-i[open] > summary .ss-act-chev { transform: none; }
+.ss-act-d { display: grid; gap: 3px; padding: 0 10px 9px 25px; min-width: 0; }
 .ss-act-k { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--muted); }
 .ss-act-k .ico { width: 13px; height: 13px; }
 .ss-act-now { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-act-m { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--muted); }
-.ss-act-dot { flex: none; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: var(--faint); }
+.ss-act-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .ss-act-i.run { border-color: color-mix(in srgb, var(--blue) 35%, var(--line)); }
 .ss-act-i.run .ss-act-dot { background: var(--blue); box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue) 50%, transparent); animation: ss-act-pulse 1.6s ease-out infinite; }
 .ss-act-i.ok .ss-act-dot { background: var(--green); } .ss-act-i.bad .ss-act-dot { background: var(--red); }
@@ -2023,7 +2031,10 @@ body.sg-open { overflow: hidden; }
 .ss-q-o { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface, var(--page)); cursor: pointer; }
 .ss-q-o:hover { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
 .ss-q-o.on { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; background: color-mix(in srgb, var(--blue) 8%, var(--surface, var(--page))); }
-.ss-q-o > input { position: absolute; opacity: 0; pointer-events: none; }
+/* the real input sits inside its own row (the row is its containing block), so focusing it never scrolls the
+   conversation somewhere else */
+.ss-q-o { position: relative; }
+.ss-q-o > input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; pointer-events: none; }
 .ss-q-o:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
 .ss-q-k { flex: none; width: 20px; height: 20px; border-radius: 3px; display: grid; place-items: center; font: 600 11px var(--mono); color: var(--muted); border: 1px solid var(--line-2); }
 .ss-q-o.on .ss-q-k { background: var(--blue); border-color: var(--blue); color: #fff; }
