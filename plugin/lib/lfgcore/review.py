@@ -228,11 +228,25 @@ def rescore(rec):
                 credits.append(f)
         credits += [fs[0] for fs in nits.values() if all(f["status"] == "drop" or checked_fixed(f) for f in fs)]
         credits.sort(key=lambda f: [int(x) for x in f["id"].split(".") if x.isdigit()])
+        earlier = [f for f in counted[len(p.get("findings") or []):] if POINTS.get(f["severity"])]
+        if earlier:  # earlier findings it still counted, so the page can name them instead of "not itemized"
+            p["earlier_points"] = sum(POINTS[f["severity"]] for f in earlier)
+        # everything it held against the PR is fixed or passed, and no question that costs points is open: the
+        # "almost" or "not" it gave no longer holds, so neither does its cap
+        clear = credits and p.get("verdict") in SCORE_CAP and all(
+            f["status"] == "drop" or checked_fixed(f) for f in counted if POINTS.get(f["severity"])) and not any(
+            q.get("costs") and not q.get("answer") for q in p.get("questions") or [])
+        if clear:
+            p["verdict_now"] = "mergeable"
+        else:
+            p.pop("verdict_now", None)
         if credits:
             p["score_at_review"] = base
             p["credits"] = [{"id": f["id"], "points": POINTS[f["severity"]],
                              "why": "passed" if f["status"] == "drop" else "fixed"} for f in credits]
-            p["score"] = cap_score(min(100, base + sum(c["points"] for c in p["credits"])), p.get("verdict"))
+            start = p.get("score_given", base) if clear else base  # the verdict's cap is gone with the verdict
+            p["score"] = cap_score(min(100, start + sum(c["points"] for c in p["credits"])),
+                                   p.get("verdict_now") or p.get("verdict"))
         elif "score_at_review" in p:
             p["score"] = p.pop("score_at_review")
             p.pop("credits", None)
@@ -458,11 +472,12 @@ def save(repo, number, data, ticket=None, meta=None):
     verdict = data.get("verdict") or None
     if verdict not in (None,) + VERDICTS:
         raise ReviewError("verdict must be one of %s, or left out" % ", ".join(VERDICTS))
-    score = cap_score(score, verdict)
+    given, score = score, cap_score(score, verdict)
     rec["passes"].append({
         "n": n, "kind": "first" if n == 1 else "re-review", "ts": C.now_iso(), "reviewer": data.get("reviewer") or "",
         "head_sha": data.get("head_sha") or meta["head_sha"], "base": meta["base"],
         "summary": _text(data.get("summary"), "summary"), "score": score, "verdict": verdict,
+        **({"score_given": given} if given != score else {}),  # before the verdict's cap, for when it lifts
         "verdict_why": _text(data.get("verdict_why"), "verdict_why", 400) if verdict else "",
         "approach_notes": [_text(x, "approach note", 4000) for x in data.get("approach_notes") or []],
         "questions": [{"id": "q%d" % k, "ask": _text(q.get("ask"), "question", 1000), "why": _text(q.get("why"), "why",
@@ -1448,7 +1463,10 @@ def cap_score(score, verdict):
 
 
 def verdict_of(p):
-    """The review's own call on whether it can merge, else one worked out from what's still open (older reviews)."""
+    """The review's own call on whether it can merge, else one worked out from what's still open (older reviews).
+    Once everything it raised is fixed or passed, mergeable."""
+    if p.get("verdict_now") in VERDICTS:
+        return p["verdict_now"]
     if p.get("verdict") in VERDICTS:
         return p["verdict"]
     open_ = [f for f in p.get("findings") or [] if f["status"] != "drop" and not (f.get("fixed") or {}).get("commit")]
