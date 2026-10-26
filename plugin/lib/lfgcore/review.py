@@ -110,7 +110,18 @@ def gh_status(repo, number, max_age=300):
 
 REWRITE = ("Rewrite this code review comment as asked. Keep it accurate to the finding, in the same voice. Reply "
            "with only the new comment, no preamble.\n\nWhat was asked: %s\n\nThe finding (for context, not "
-           "posted):\n%s\n\nThe comment as it is now:\n%s")
+           "posted):\n%s\n\nThe comment as it is now:\n%s%s")
+STYLE_FILE = re.compile(r"(comment|voice|style|tone)[\w-]*\.md$", re.I)
+
+
+def comment_style(rec, f):
+    """How comments should read, from the method the finding's review used: its style files (comment-style.md and
+    the like) under ~/.claude/skills, else the saved method's. "" for LFG's built-in method."""
+    p = next((x for x in rec["passes"] if f in x["findings"]), {})
+    root = os.path.join(C.HOME, ".claude", "skills")
+    files = [os.path.join(root, x) for x in ((p.get("run") or {}).get("used") or {}).get("method_files") or []]
+    files = [x for x in files if STYLE_FILE.search(x)] or [x for x in sources()["files"] if STYLE_FILE.search(x)]
+    return "\n\n".join(C.read_text(x)[:8000] for x in files[:2] if os.path.isfile(x))
 
 
 def rewrite(repo, number, fid, instruction):
@@ -121,13 +132,16 @@ def rewrite(repo, number, fid, instruction):
         raise ReviewError("say how to change it, e.g. \"make it two sentences\"")
     if not C.which("claude"):
         raise ReviewError("Claude Code (`claude`) is not on PATH")
-    f = find(need(repo, number), fid)
+    rec = need(repo, number)
+    f = find(rec, fid)
+    style = comment_style(rec, f)
     ctx = "\n".join(x for x in ("Title: " + (f.get("title") or ""), "Issue: " + (f.get("issue") or ""),
                                  "Fix: " + (f.get("fix") or ""), "Where: %s:%s" % (f.get("file") or "-", f.get("line")
                                                                                    or "-")) if x)
     cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
                         + _model() + _direct(),
-                        input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"]),
+                        input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"],
+                                         "\n\nWrite it the way this style guide says:\n" + style if style else ""),
                         capture_output=True, text=True, timeout=300)
     try:
         text = (json.loads(cp.stdout).get("result") or "").strip()
@@ -332,6 +346,7 @@ def others(repo, number):
     """What other reviewers already said on a PR: inline comments (with file and line), review summaries and
     conversation comments, from people and bots (CodeRabbit, Sonar, other agents). LFG's own posted comments are
     left out. Read-only."""
+    _not_in_fresh_eyes("other reviewers' comments")
     rec = load(repo, number) or {}
     mine = {f.get("comment_id") for f in findings(rec) if f.get("comment_id")} if rec.get("passes") else set()
     out = []
@@ -355,6 +370,37 @@ def others(repo, number):
 
 
 NEAR = 3  # lines: another reviewer's inline comment this close to a finding is about the same spot
+
+
+def mark_repeats(repo, number):
+    """After a Fresh eyes review: tag each new finding that an earlier LFG review already raised (same file within
+    NEAR lines, or the same title), with what you decided about it then. The review never saw them; posting says so."""
+    rec = load(repo, number)
+    if not rec or len(rec.get("passes") or []) < 2:
+        return 0
+    *old, p = rec["passes"]
+    n = 0
+    for f in p["findings"]:
+        hits = [{"pass": q["n"], "id": g["id"], "status": g["status"], "posted": bool(g.get("comment_url")),
+                 "url": g.get("comment_url") or ""}
+                for q in old for g in q["findings"]
+                if (f.get("file") and f["file"] == g.get("file") and f.get("line") and g.get("line")
+                    and abs(int(f["line"]) - int(g["line"])) <= NEAR)
+                or (f.get("title") and f["title"].strip().lower() == (g.get("title") or "").strip().lower())]
+        if hits:
+            f["repeats"] = hits
+            n += 1
+    if n:
+        store(rec)
+    return n
+
+
+def already_said(f):
+    """Who raised a finding before: other reviewers (echoes) and earlier LFG reviews (repeats), in words."""
+    said = {"drop": ", you dropped it", "keep": ", you kept it"}
+    return ["%s%s" % ("" if e.get("bot") else "@", e["who"]) for e in f.get("echoes") or []] + [
+        "LFG review %d (%s%s%s)" % (r["pass"], r["id"], said.get(r["status"], ""), ", posted" if r["posted"] else "")
+        for r in f.get("repeats") or []]
 
 
 def mark_echoes(repo, number, said=None):
@@ -496,7 +542,8 @@ def plan_post(rec, event, body="", lines=None):
     if event == "request-changes" and not inline and not parts:
         raise ReviewError("request changes needs at least one kept finding or a body")
     return {"pass": p["n"], "event": EVENTS[event], "commit_id": p["head_sha"], "body": "\n\n".join(parts),
-            "comments": inline, "in_body": [f["id"] for f in general]}
+            "comments": inline, "in_body": [f["id"] for f in general],
+            "already": [{"id": f["id"], "who": already_said(f)} for f in kept if already_said(f)]}
 
 
 def post(repo, number, event, body="", dry_run=False):
@@ -560,6 +607,7 @@ def _threads(repo, number):
 def threads(repo, number):
     """For each posted finding: resolved, outdated, the author's replies, and whether its file changed since the
     pass that posted it. Plus the commits since the last pass. Read-only; the agent judges what it means."""
+    _not_in_fresh_eyes("earlier reviews")
     rec = need(repo, number)
     meta = pr_meta(repo, number)
     last = rec["passes"][-1]
@@ -701,13 +749,23 @@ def agents_md(repo, head_sha, files):
     return sorted(want, key=lambda p: (p.count("/"), p))
 
 
+def fresh_eyes():
+    """A Fresh eyes run: the review sees only the code, never earlier reviews or what anyone else said."""
+    return os.environ.get("LFG_REVIEW_FRESH_EYES") == "1"
+
+
+def _not_in_fresh_eyes(what):
+    if fresh_eyes():
+        raise ReviewError("this is a Fresh eyes review: %s stay hidden; review only the code" % what)
+
+
 def context(repo, number):
     meta = pr_meta(repo, number)
     files = [f["path"] for f in gh_json(["pr", "view", str(number), "-R", repo, "--json", "files"])["files"]]
-    rec = load(repo, number)
+    rec = None if fresh_eyes() else load(repo, number)
     src = sources()
     return {"repo": repo, "number": number, "head_sha": meta["head_sha"], "author": meta["author"],
-            "mine": meta["author"] == me(), "re_review": bool(rec and rec.get("passes")),
+            "mine": meta["author"] == me(), "re_review": bool(rec and rec.get("passes")), "fresh_eyes": fresh_eyes(),
             "last_pass": rec["passes"][-1]["n"] if rec and rec.get("passes") else None,
             "record": record_path(repo, number), "sources": src["files"], "missing_sources": src["missing"],
             "agents_md": agents_md(repo, meta["head_sha"], files),
@@ -828,6 +886,20 @@ RUN_ALLOW = ["Read", "Grep", "Glob", "Bash(lfg review context *)", "Bash(lfg rev
 RUN_DENY = ["Bash(gh api * -X *)", "Bash(gh api * --method *)", "Bash(gh api * -f *)", "Bash(gh api * -F *)",
             "Bash(gh api * --field *)", "Bash(gh api * --raw-field *)", "Bash(gh api * --input *)",
             "Bash(gh api -X *)", "Bash(gh api --method *)", "Bash(lfg review post *)", "Edit", "Write", "NotebookEdit"]
+# Fresh eyes: nothing that shows earlier reviews or what anyone else said on the PR
+FRESH_DENY = ["Read(~/.lfg/reviews/**)", "Grep(~/.lfg/reviews/**)", "Bash(gh pr view *comments*)",
+              "Bash(gh pr view *reviews*)", "Bash(gh api repos/*/pulls/*/comments*)",
+              "Bash(gh api repos/*/pulls/*/reviews*)", "Bash(gh api repos/*/issues/*/comments*)",
+              "Bash(gh api graphql*)", "Bash(lfg review show *)", "Bash(lfg review threads *)",
+              "Bash(lfg review others *)"]
+
+
+def run_tools(fresh_eyes=False):
+    """(allowed, denied) tools for an unattended review run."""
+    if not fresh_eyes:
+        return RUN_ALLOW, RUN_DENY
+    hidden = ("lfg review show", "lfg review threads", "lfg review others")
+    return [x for x in RUN_ALLOW if not any(h in x for h in hidden)], RUN_DENY + FRESH_DENY
 
 
 def together(p):
@@ -925,7 +997,7 @@ def method_label(srcs):
     return ", ".join(os.path.basename(x.rstrip("/")) or x for x in srcs)
 
 
-def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None):
+def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False):
     """Start `lfg review run` detached (the dashboard's Review / Re-review / Review together buttons). together: more
     (repo, number) PRs to review in the same session."""
     import subprocess
@@ -938,7 +1010,8 @@ def start(repo, number, ticket=None, fresh=False, together=(), model=None, metho
     for x in prs[1:]:
         args += ["--with", ref(*x)]
     args += ["--ticket", ticket] if ticket else []
-    args += ["--fresh"] if fresh else []
+    args += ["--fresh"] if fresh or fresh_eyes else []
+    args += ["--fresh-eyes"] if fresh_eyes else []
     args += ["--model", model] if model else []
     if method:
         m = next((x for x in method_choices() if x["id"] == method), None)
@@ -982,7 +1055,7 @@ def _passes(repo, number):
     return len((load(repo, number) or {}).get("passes") or [])
 
 
-def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None):
+def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False):
     """Review one PR with Claude Code in print mode, on your own login, and wait for it. together: more PRs reviewed
     in the same session as one change (a backend and the frontend that calls it): each gets its own review, and the
     session also checks they agree with each other. Every review it saves remembers the session, so you can resume it,
@@ -1002,7 +1075,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
             "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model(),
-            "method": label})
+            "method": label, "fresh_eyes": bool(fresh_eyes)})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     if len(prs) == 1:
         what = "to review %s" % refs[0]
@@ -1023,15 +1096,22 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
                  " This is a new full review: review the whole PR from scratch, every new finding with since "
                  "\"first\". Where there are earlier reviews, still check each earlier finding still open and "
                  "fill `prior`, and never raise a settled one, as the skill's New full review step says."
-                 if fresh else ""))
+                 if fresh and not fresh_eyes else
+                 " This is a Fresh eyes review: review the whole PR as if nobody had reviewed it. `lfg review "
+                 "context` says re_review false; skip the Re-review and Other reviewers steps, leave `prior` and "
+                 "`echoes` empty, and never look for earlier reviews or other people's comments. Every finding has "
+                 "since \"first\"." if fresh_eyes else ""))
+    allow, deny = run_tools(fresh_eyes)
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
-           "--allowedTools", ",".join(RUN_ALLOW), "--disallowedTools", ",".join(RUN_DENY)] + _model(model)
+           "--allowedTools", ",".join(allow), "--disallowedTools", ",".join(deny)] + _model(model)
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         # this code's own `lfg` first on PATH, so the session saves with the same version that started it
         env = dict(os.environ, PATH=os.path.join(C.PLUGIN_ROOT, "bin") + os.pathsep + os.environ.get("PATH", ""))
         if method:
             env["LFG_REVIEW_SOURCES"] = method  # `lfg review context` in that session reads this run's method
+        if fresh_eyes:
+            env["LFG_REVIEW_FRESH_EYES"] = "1"  # its `lfg review` commands hide earlier reviews and others' comments
         cp = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
     sid = session_id(log)
     first = None
@@ -1042,12 +1122,14 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
         ok = _passes(*x) > before[x]
         if ok:
             mark_echoes(*x)
+            if fresh_eyes:
+                mark_repeats(*x)
             rec = load(*x)
             p = rec["passes"][-1]
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
             shutil.copyfile(log, kept)
             p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)],
-                        "used": used(log), "method": label}
+                        "used": used(log), "method": label, "fresh_eyes": bool(fresh_eyes)}
             if fresh and p["n"] > 1:
                 p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)

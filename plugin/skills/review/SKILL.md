@@ -40,7 +40,9 @@ preflight: graphs
    around each hunk at `head_sha`: from a worktree (`git fetch origin pull/<n>/head:review/pr-<n>` then
    `lfg worktree new review/pr-<n>`) when the repo is local, else `gh api repos/<repo>/contents/<path>?ref=<sha>`.
 6. **First review** (`re_review` false): one full pass over the whole diff, following the method. Every finding
-   gets `since: "first"`.
+   gets `since: "first"`. **Fresh eyes** (`fresh_eyes` true) is a first review on a PR that has earlier ones: skip
+   steps 7 and 8, leave `prior` and `echoes` empty, and don't look for earlier reviews or others' comments (the
+   commands that show them refuse). LFG notes repeats itself after saving.
 7. **Re-review** (`re_review` true): `lfg review show <pr> --json` and `lfg review threads <pr>`, then three passes:
    - **Earlier findings.** For each row in `threads.posted`, read the code at the new head and set a state:
      `fixed` (the problem is gone, verified in the code), `replied` (the author answered and the issue is still

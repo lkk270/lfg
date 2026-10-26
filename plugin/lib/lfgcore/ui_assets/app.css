@@ -966,6 +966,7 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .sess-recent .used { margin-bottom: 12px; }
 
 /* The model reviews run on, beside the buttons that start them */
+.fresh-eyes { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); cursor: pointer; }
 .model-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .model-pick select { font-size: 13px; padding-top: 4px; padding-bottom: 4px; min-width: 150px; }
 

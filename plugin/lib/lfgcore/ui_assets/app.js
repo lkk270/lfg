@@ -2456,7 +2456,7 @@ async function prStart(pr, btn) {
   const fresh = btn.dataset.fresh === "1";
   btn.style.minWidth = btn.offsetWidth + "px";  // a shorter label must not pull the buttons beside it left
   btn.disabled = true; btn.textContent = "Starting…";
-  const d = await save("review_run", { pr, fresh, method: state.reviewMethod || "" });
+  const d = await save("review_run", { pr, fresh, fresh_eyes: fresh && !!state.freshEyes, method: state.reviewMethod || "" });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
   btn.textContent = d.started ? "Started" : "Already running";
   setTimeout(softRoute, 1200);
@@ -2852,6 +2852,7 @@ function prFinding(f, pr, unlocked, live, own) {
   const where = f.file ? `${f.file}${f.line ? ":" + f.line : ""}` : "the PR as a whole";
   const tags = [f.since !== "first" && SINCE[f.since], ORIGIN[f.origin]].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("")
     + (f.echoes || []).map(e => `<a class="tag warn" ${e.url ? `href="${esc(e.url)}" target="_blank" rel="noopener noreferrer"` : ""} title="${esc((e.near ? "Commented within a few lines of this: " : "") + (e.said || ""))}">Also raised by ${e.bot ? "" : "@"}${esc(e.who)}${e.url ? " ↗" : ""}</a>`).join("")
+    + (f.repeats || []).map(r => `<span class="tag warn" title="This Fresh eyes review didn't see earlier reviews; review ${r.pass} raised this as ${esc(r.id)}${r.status === "drop" ? " and you dropped it" : r.status === "keep" ? " and you kept it" : ""}${r.posted ? ", and it was posted" : ""}">Also in review ${r.pass} (${esc(r.id)}${r.status === "drop" ? ", dropped" : ""})</span>`).join("")
     + (f.status === "drop" && f.dropped_by === "claude" ? `<span class="tag" title="You said it wasn't needed and Claude agreed after checking the code">Claude agreed: not needed</span>` : "")
     + ((f.fixed || {}).commit ? `<span class="tag ok">Fixed in ${esc(f.fixed.commit.slice(0, 8))}</span>` : "")
     + (f.raised_by ? `<a class="tag" ${f.raised_by.url ? `href="${esc(f.raised_by.url)}" target="_blank" rel="noopener noreferrer"` : ""}>From ${f.raised_by.bot ? "" : "@"}${esc(f.raised_by.who)}${f.raised_by.url ? " ↗" : ""}</a>${WORTH[f.worth] ? `<span class="tag ${WORTH[f.worth][1]}">${WORTH[f.worth][0]}</span>` : ""}` : "");
@@ -3106,7 +3107,7 @@ async function prDetail(arg) {
     : j && j.status === "cancelled" && Date.now() - Date.parse(j.ended) < 3600000 ? `<div class="callout">You cancelled the ${esc(kindOf)} started ${ago(j.started)}. Nothing from it was saved.</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button><label class="fresh-eyes" title="With Review from scratch"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
   const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
@@ -3341,7 +3342,7 @@ function wirePrs(root) {
   $$("[data-ticket-run]", root).forEach(b => b.onclick = async () => {
     const [t, refs] = JSON.parse(b.dataset.ticketRun);
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t, fresh: b.dataset.fresh === "1", method: state.reviewMethod || "" });
+    const r = await save("review_run", { pr: refs[0], with: refs.slice(1), ticket: t, fresh: b.dataset.fresh === "1", fresh_eyes: b.dataset.fresh === "1" && !!state.freshEyes, method: state.reviewMethod || "" });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     setTimeout(softRoute, 1000);
   });
@@ -3352,7 +3353,7 @@ function wirePrs(root) {
   $$("[data-pr-together]", root).forEach(b => b.onclick = async () => {
     const [pr, others] = JSON.parse(b.dataset.prTogether);
     b.disabled = true; b.textContent = "Starting…";
-    const r = await save("review_run", { pr, with: others, fresh: b.dataset.fresh === "1", method: state.reviewMethod || "" });
+    const r = await save("review_run", { pr, with: others, fresh: b.dataset.fresh === "1", fresh_eyes: b.dataset.fresh === "1" && !!state.freshEyes, method: state.reviewMethod || "" });
     if (!r.ok) { b.disabled = false; b.textContent = "Try again"; return alertMsg(b, r); }
     setTimeout(softRoute, 1000);
   });
@@ -3414,6 +3415,7 @@ function wirePrs(root) {
     setTimeout(() => (b.textContent = was), 1500);
   });
   $$("[data-pr-start]", root).forEach(b => b.onclick = e => { e.stopPropagation(); prStart(b.dataset.prStart, b); });
+  $$("[data-fresh-eyes]", root).forEach(c => c.onchange = () => { state.freshEyes = c.checked; });
   $$("[data-pr-cancel]", root).forEach(b => b.onclick = async () => {
     b.style.minWidth = b.offsetWidth + "px";
     b.disabled = true; b.textContent = "Cancelling…";
@@ -3530,6 +3532,7 @@ function wirePrs(root) {
     const verb = { APPROVE: "Approve", REQUEST_CHANGES: "Request changes", COMMENT: "Comment" }[d.event];
     openDrawer(`${verb}: what will be posted`, `<div class="readable">
       <p>${plural(d.comments.length, "comment")} on lines of code${d.in_body.length ? `, and ${plural(d.in_body.length, "finding")} in the review text because GitHub can't attach ${d.in_body.length === 1 ? "it" : "them"} to a changed line` : ""}.</p>
+      ${(d.already || []).length ? `<div class="callout warn"><b>Raised before:</b><ul>${d.already.map(a => `<li><span class="mono">${esc(a.id)}</span>: ${esc(a.who.join(", "))}</li>`).join("")}</ul>Check you're not posting the same comment twice.</div>` : ""}
       ${d.body ? `<div class="k">Review text</div><div class="box pad md">${md(d.body)}</div>` : ""}
       ${d.comments.map(c => `<div class="card"><div class="muted small mono">${esc(c.path)}:${esc(c.line)}</div><div class="md">${md(c.body)}</div></div>`).join("")}
       <div class="set-actions"><button class="btn primary" id="pr-post-go">${verb} on GitHub</button><span class="save-msg" id="pr-post-msg"></span></div></div>`);

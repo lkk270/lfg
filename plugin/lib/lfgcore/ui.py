@@ -544,7 +544,8 @@ def review_action(what, body):
             if not isinstance(together, list):
                 raise S.Invalid("with must be a list of PRs")
             return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")),
-                           together=[R.parse_pr(str(x)) for x in together], method=body.get("method") or None)
+                           together=[R.parse_pr(str(x)) for x in together], method=body.get("method") or None,
+                           fresh_eyes=bool(body.get("fresh_eyes")))
         if what == "review_link":
             return R.link(R.ref(repo, number), str(body.get("other") or ""), on=body.get("on", True) is not False)
         if what == "review_link_session":

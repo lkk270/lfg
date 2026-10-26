@@ -3735,6 +3735,58 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((p2["score"], [c["id"] for c in p2["credits"]]), (95, ["2.1"]))
         self.assertEqual(R.undecided(p2), ["2.2"])  # a finding checked fixed needs no Fix or Pass
 
+    def test_fresh_eyes_hides_earlier_reviews_and_others_then_notes_repeats_before_posting(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(title="Empty input breaks it"), f(line=40, title="b")]})
+        R.mark("o/r", 7, ["1.2"], status="drop")
+        with mock.patch.object(R, "fresh_eyes", return_value=True), \
+                mock.patch.object(R, "pr_meta", return_value=self.META), \
+                mock.patch.object(R, "gh_json", return_value={"files": []}), \
+                mock.patch.object(R, "agents_md", return_value=[]):
+            ctx = R.context("o/r", 7)
+            self.assertEqual((ctx["re_review"], ctx["fresh_eyes"], ctx["last_pass"]), (False, True, None))
+            with self.assertRaises(R.ReviewError):
+                R.others("o/r", 7)
+            with self.assertRaises(R.ReviewError):
+                R.threads("o/r", 7)
+        allow, deny = R.run_tools(fresh_eyes=True)
+        self.assertFalse([x for x in allow if "review show" in x or "review threads" in x or "review others" in x])
+        self.assertIn("Read(~/.lfg/reviews/**)", deny)
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [f(line=4), f(line=41, title="other words"),
+                                                          f(line=90, title="new")]})
+        R.mark_repeats("o/r", 7)
+        p = R.load("o/r", 7)["passes"][-1]
+        self.assertEqual([[(x["pass"], x["id"], x["status"]) for x in g.get("repeats") or []] for g in p["findings"]],
+                         [[(1, "1.1", "pending")], [(1, "1.2", "drop")], []])
+        R.mark("o/r", 7, ["2.1", "2.2", "2.3"], status="keep")
+        plan = R.plan_post(R.load("o/r", 7), "comment", lines={"app.py": {4, 41, 90}})
+        self.assertEqual([(a["id"], a["who"]) for a in plan["already"]],
+                         [("2.1", ["LFG review 1 (1.1)"]), ("2.2", ["LFG review 1 (1.2, you dropped it)"])])
+
+    def test_ask_claude_to_change_a_comment_follows_the_methods_comment_style(self):
+        home = self.tmp_dir()  # never the real ~/.claude
+        patch = mock.patch.object(C, "HOME", home)
+        patch.start()
+        self.addCleanup(patch.stop)
+        skill = os.path.join(home, ".claude", "skills", "mine")
+        C.write_text(os.path.join(skill, "SKILL.md"), "# Review\n")
+        C.write_text(os.path.join(skill, "comment-style.md"), "lowercase. short. no exclamation marks.")
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["run"] = {"used": {"method_files": ["mine/SKILL.md", "mine/comment-style.md"]}}
+        R.store(rec)
+        seen = {}
+
+        def fake(cmd, input=None, **kw):
+            seen["prompt"] = input
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "shorter one"}), "")
+        with mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
+            self.assertEqual(R.rewrite("o/r", 7, "1.1", "shorter")["body"], "shorter one")
+        self.assertIn("lowercase. short. no exclamation marks.", seen["prompt"])
+
     def test_a_re_review_follows_up_findings_you_never_decided_on(self):
         f = self.finding
         with mock.patch.object(R, "pr_meta", return_value=self.META):

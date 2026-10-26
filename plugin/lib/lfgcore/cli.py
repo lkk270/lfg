@@ -973,7 +973,7 @@ def _review(R, a):
         _print(R.others(repo, number))
     elif a.action == "run":
         j = R.run(repo, number, ticket=a.ticket, fresh=a.fresh, together=[R.parse_pr(x) for x in a.with_ or []],
-                  model=a.model, method=a.method)
+                  model=a.model, method=a.method, fresh_eyes=a.fresh_eyes)
         print("review of %s#%d: %s%s (log %s)" % (repo, number, j["status"], " - " + j["why"] if j["why"] else "",
                                                   j["log"]))
         return 0 if j["status"] == "done" else 1
@@ -1439,6 +1439,8 @@ def main(argv=None):
     rv.add_argument("--event", choices=["approve", "request-changes", "comment"])
     rv.add_argument("--dry-run", action="store_true", help="post: show what would be sent")
     rv.add_argument("--fresh", action="store_true", help="run: a full new review, not a re-review")
+    rv.add_argument("--fresh-eyes", action="store_true",
+                    help="run: a full review that never sees earlier reviews or anyone else's comments")
     rv.add_argument("--model", help="run: the model to review with (default: Settings → Model for reviews)")
     rv.add_argument("--method", help="run: this review's method, a JSON list of files or folders (default: Settings)")
     rv.add_argument("--with", dest="with_", action="append", metavar="PR",
