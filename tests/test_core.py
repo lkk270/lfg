@@ -4313,6 +4313,33 @@ class ReviewTest(unittest.TestCase):
         save = save[:save.index("});")]
         self.assertIn('$("textarea.editor", box).value', save)  # the box also holds the Ask Claude textarea, first
 
+    def test_reviews_open_as_tabs_above_the_page_and_in_the_sidebar(self):
+        """Run the tab helpers in node with a stand-in browser: open, retitle, close the one you're on."""
+        node = C.which("node")
+        if not node:
+            self.skipTest("node isn't installed")
+        with open(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        block = js[js.index("/* Reviews open as tabs inside the dashboard"):js.index("function renderNav(active)")]
+        script = """
+const store = {}, localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
+const location = { hash: "#prs/o/r/7" }, document = { addEventListener() {} };
+const esc = s => String(s), $$ = () => [];
+let navs = 0; const renderNav = () => { navs++; };
+%s
+prTabOpen("o/r#7", "Add thing"); prTabOpen("o/r#8", "Other"); prTabOpen("o/r#7", "Add thing, renamed");
+const before = openTabs().map(t => t.pr + "|" + t.title);
+const strip = prTabStrip();
+prTabClose("o/r#7");
+console.log(JSON.stringify({before, strip, after: openTabs().map(t => t.pr), hash: location.hash, navs}));
+""" % block
+        out = json.loads(subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(out["before"], ["o/r#7|Add thing, renamed", "o/r#8|Other"])
+        self.assertIn('class="prtab on" href="#prs/o/r/7"', out["strip"])
+        self.assertEqual((out["after"], out["hash"]), (["o/r#8"], "prs/o/r/8"))  # closing the open one moves on
+        self.assertIn("prTabOpen(pr, ", js)
+        self.assertIn("${prTabStrip()}${head(rec.title || pr", js)
+
     def test_dead_running_job_reads_as_failed(self):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
         self.assertEqual(R.job("o/r", 9)["status"], "failed")
