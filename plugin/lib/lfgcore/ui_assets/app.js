@@ -2538,21 +2538,35 @@ function modelName(id) {
 }
 /* What a session or review used, one row of tags per kind: the model, skills, subagents, MCP servers and claude.ai
    connectors, the plugins those came from, lfg commands and Claude Code's own tools. */
-function usedTags(u) {
+/* A small (i) that explains a term on hover or keyboard focus, for words a newcomer won't know. */
+const info = text => `<span class="info" tabindex="0" role="note" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
+const USED_INFO = {
+  Method: "The checklist this review followed: what to look for, how serious each finding is, and how comments are worded. LFG's built-in method or one of your own skills.",
+  Model: "The Claude model the review ran on.",
+  Skills: "Claude Code skills the session used, and how often.",
+  Agents: "Subagents the session started for parts of the work.",
+  MCP: "MCP servers and claude.ai connectors it called, such as Linear or dev-graph.",
+  Plugins: "The Claude Code plugins those skills and servers came from.",
+  LFG: "lfg commands it ran, for example to read earlier reviews or other reviewers' comments.",
+  Tools: "Claude Code's own tools and how often it called each: Read opens files, Bash runs commands, Grep searches.",
+};
+const RUNNER_INFO = "Runs every review started from the dashboard, whatever the method: reads the PR and the earlier reviews, follows up earlier findings, then saves the findings, summary and score. The method decides what to look for and how comments read.";
+function usedTags(u, method) {
   if (!u) return "";
   const times = (x, w) => (x.count ? ` · ${plural(x.count, w)}` : "");
   const chip = (cls, label, title, count) => `<span class="chip ${cls}" title="${esc(title)}">${esc(label)}${count > 1 ? `<span class="n">${n(count)}</span>` : ""}</span>`;
   const where = x => (x.kind === "connector" ? "claude.ai connector" : x.kind === "plugin" ? `MCP server from the ${x.plugin} plugin` : "MCP server");
   const rows = [
     ["Model", (u.models || []).map(m => chip("c-purple", modelName(m), m))],
-    ["Skills", (u.skills || []).map(x => chip("c-blue", x.name, `Skill${times(x, "time")}`, x.count))],
+    ["Method", method ? [`<span class="chip c-blue">${esc(method)}</span>`, ...(method !== "LFG's built-in method" ? (u.method_files || []).map(f => chip("c-gray mono", f, "A file from your skill that this review read")) : [])] : []],
+    ["Skills", (u.skills || []).map(x => x.runner ? `<span class="chip c-blue">${esc(x.name)}<span class="n">runs every review</span></span>${info(RUNNER_INFO)}` : chip("c-blue", x.name, `Skill${times(x, "time")}`, x.count))],
     ["Agents", (u.agents || []).map(x => chip("c-pink", x.name, `Subagent${times(x, "run")}`, x.count))],
     ["MCP", (u.mcp || []).map(x => chip(x.kind === "connector" ? "c-orange connector" : "c-orange", x.name, `${where(x)}${times(x, "call")}`, x.count))],
     ["Plugins", (u.plugins || []).map(x => chip("c-green", x, "Plugin"))],
     ["LFG", (u.lfg || []).map(x => chip("c-gray mono", "lfg " + x.name, `Command${times(x, "run")}`, x.count))],
     ["Tools", (u.tools || []).map(x => chip("c-gray", x.name, `Claude Code tool${times(x, "call")}`, x.count))],
   ].filter(r => r[1].length);
-  return rows.length ? `<div class="used">${rows.map(([k, cs]) => `<div class="used-k">${k}</div><div class="used-v">${cs.join("")}</div>`).join("")}</div>` : "";
+  return rows.length ? `<div class="used">${rows.map(([k, cs]) => `<div class="used-k">${k}${USED_INFO[k] ? info(USED_INFO[k]) : ""}</div><div class="used-v">${cs.join("")}</div>`).join("")}</div>` : "";
 }
 /* Which model reviews run on, next to the buttons that start them. One setting for every review, chat and fix. */
 /* Which method the next review here follows: your saved one (Settings), LFG's built-in, or one of your skills. Only
@@ -2563,11 +2577,11 @@ function methodPick(d, unlocked) {
   const all = state.reviewMethodsAll, shown = d.methods.filter(m => all || m.fits || m.id === cur);
   const opt = m => `<option value="${esc(m.id)}" ${m.id === cur ? "selected" : ""} title="${esc(m.about || "")}">${esc(m.label)}${m.saved ? " (saved)" : ""}</option>`;
   const others = d.methods.length - d.methods.filter(m => m.fits || m.id === cur).length;
-  return `<label class="model-pick" title="The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded. Your saved one is in Review method, below the lists">Method<select data-review-method ${unlocked ? "" : "disabled"}>${shown.map(opt).join("")}${!all && others ? `<option value="__all">Other skill… (${others})</option>` : ""}</select></label>`;
+  return `<label class="model-pick" >Method${info("The checklist the next review follows: what to look for, how serious each finding is, and how comments are worded. lfg:review still runs the review around it. Your saved one is in Review method, below the lists.")}<select data-review-method ${unlocked ? "" : "disabled"}>${shown.map(opt).join("")}${!all && others ? `<option value="__all">Other skill… (${others})</option>` : ""}</select></label>`;
 }
 function modelPick(d, unlocked) {
   if (!d.models) return "";
-  return `<label class="model-pick" title="The model every review, re-review, chat and fix runs on, from now on">Model<select data-review-model ${unlocked ? "" : "disabled"}>${d.models.map(m => `<option value="${esc(m.id)}" ${m.id === (d.model || "") ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>`;
+  return `<label class="model-pick" >Model${info("The model every review, re-review, chat and fix runs on, from now on.")}<select data-review-model ${unlocked ? "" : "disabled"}>${d.models.map(m => `<option value="${esc(m.id)}" ${m.id === (d.model || "") ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>`;
 }
 const prTabs = on => `<div class="tabs page-tabs"><a class="tab ${on === "list" ? "on" : ""}" href="#prs">Pull requests</a><a class="tab ${on === "scores" ? "on" : ""}" href="#prs/scores">Scores</a></div>`;
 /* How PRs score, per person and per repo. The first review scores the code as it was handed in; later reviews
@@ -3130,7 +3144,7 @@ async function prDetail(arg) {
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
-        ${p.run.used ? `<div class="k mt">What it used</div>${p.run.method ? `<div class="used"><div class="used-k">Method</div><div class="used-v"><span class="chip c-blue" title="The checklist this review followed: what to look for, how serious, how to word comments">${esc(p.run.method)}</span></div></div>` : ""}${usedTags(p.run.used)}` : ""}
+        ${p.run.used ? `<div class="k mt">What it used</div>${usedTags(p.run.used, p.run.method)}` : ""}
         <details class="more" data-pr-activity='${esc(JSON.stringify([pr, p.n]))}'><summary class="small">What Claude did</summary><div class="small muted"><span class="loading-inline">Loading…</span></div></details>` : ""}</div>
       ${questionsBox(pr, p, unlocked)}
       ${prior}

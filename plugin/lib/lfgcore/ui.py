@@ -282,12 +282,10 @@ def api(view, q):
                 rec = R.need(repo, number)
                 p = next((x for x in rec["passes"] if x["n"] == int(_arg(q, "n") or 0)), None)
                 return {"steps": R.activity((p or {}).get("run", {}).get("log") or "")}
-            rec = R.backfill(repo, number)
+            rec = R.refresh_used(R.backfill(repo, number))
             for p in (rec or {}).get("passes") or []:
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
-                    if "used" not in p["run"] and p["run"].get("log"):  # reviews from before LFG kept this
-                        p["run"]["used"] = R.used(p["run"]["log"])
                     p["together"] = R.together(p)
             fj = R.fix_job(repo, number)
             return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,

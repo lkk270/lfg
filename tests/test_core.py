@@ -4068,6 +4068,23 @@ class ReviewTest(unittest.TestCase):
         C.write_json(R.job_path("o/r", 7), {"status": "done", "log": log, "pid": None})
         self.assertEqual(R.progress("o/r", 7)["steps"], ["Bash gh pr diff 7", "finished: saved pass 1"])
 
+    def test_what_a_review_used_names_the_runner_and_the_method_files_it_read(self):
+        skills = os.path.join(C.HOME, ".claude", "skills")
+        log = os.path.join(tempfile.mkdtemp(), "x.log")
+        reads = [os.path.join(skills, "review-pr", "SKILL.md"), os.path.join(skills, "review-pr", "checklists",
+                 "backend.md"), os.path.join(skills, "review-pr", "SKILL.md"), "/elsewhere/app.py"]
+        with open(log, "w") as f:
+            for path in reads:
+                f.write(json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": path}}]}}) + "\n")
+        u = R.used(log)
+        self.assertEqual(u["skills"][0], {"name": "lfg:review", "count": 1, "plugin": "lfg", "runner": True})
+        self.assertEqual(u["method_files"], ["review-pr/SKILL.md", "review-pr/checklists/backend.md"])
+        with open(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        self.assertIn("runs every review", js)
+        self.assertIn("const info = text =>", js)
+
     def test_dead_running_job_reads_as_failed(self):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
         self.assertEqual(R.job("o/r", 9)["status"], "failed")
