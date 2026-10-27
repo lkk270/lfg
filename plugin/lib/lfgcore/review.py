@@ -848,13 +848,27 @@ SEARCHES = {"requested": "--review-requested=@me", "mine": "--author=@me"}
 def queue(max_age=120, which="requested"):
     """Open PRs where GitHub has you as a requested reviewer ("requested") or that you opened ("mine"), each search
     cached for max_age seconds. GitHub never asks you to review your own PR, so "mine" is the only way to see them."""
-    import time
+    import threading
     hit = _QUEUE.get(which)
     if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    if hit and max_age > 0:  # shown at once, asked again behind the page; Refresh (max_age=0) waits
+        if which not in _REFRESHING:
+            _REFRESHING.add(which)
+            threading.Thread(target=_refresh_queue, args=(which,), daemon=True).start()
         return hit[1]
     data = _search([SEARCHES[which]], 50)
     _QUEUE[which] = (time.time(), data)
     return data
+
+
+def _refresh_queue(which):
+    try:
+        _QUEUE[which] = (time.time(), _search([SEARCHES[which]], 50))
+    except ReviewError:
+        pass
+    finally:
+        _REFRESHING.discard(which)
 
 
 def _search(terms, limit):
@@ -2158,12 +2172,20 @@ def mentions(raw, repo, number):
 
 
 _SESS_SEEN = {}  # (transcript, size, mtime, repo, number) -> its row when it mentions the PR, else None
+_SESS_INDEX = {}  # transcript -> [size, mtime, PR numbers it could mention]
+PR_NUMBER_RX = re.compile(rb"(?:#|/pull/|pr diff |pr view |review )(\d+)")  # every place mentions() looks
 
 
-def sessions_for(repo, number, days=30):
-    """Your Claude Code sessions from the last `days` that mention this PR, newest first. A transcript is read again
-    only when it changed since the last look (reading all of them took a second on every PR page)."""
-    cut, out = time.time() - days * 86400, []
+def _index_path():
+    return C.lfg_path("reviews", "session-index.json")
+
+
+def session_index(days=30):
+    """Which PR numbers each recent transcript could mention, read once per transcript version (a gigabyte of
+    transcripts took a second or two to search on every new PR page). Kept on disk so a restart starts warm."""
+    if not _SESS_INDEX:
+        _SESS_INDEX.update(C.read_json(_index_path(), {}) or {})
+    cut, live, changed = time.time() - days * 86400, set(), False
     for p in glob.glob(os.path.join(SESSION_DIR, "*", "*.jsonl")):
         try:
             st = os.stat(p)
@@ -2171,7 +2193,34 @@ def sessions_for(repo, number, days=30):
             continue
         if st.st_mtime < cut:
             continue
-        key = (p, st.st_size, st.st_mtime, repo, number)
+        live.add(p)
+        hit = _SESS_INDEX.get(p)
+        if not hit or hit[0] != st.st_size or hit[1] != st.st_mtime:
+            try:
+                with open(p, "rb") as fh:
+                    nums = sorted({int(m) for m in PR_NUMBER_RX.findall(fh.read()) if len(m) < 8})
+            except OSError:
+                continue
+            _SESS_INDEX[p], changed = [st.st_size, st.st_mtime, nums], True
+    for p in [p for p in _SESS_INDEX if p not in live]:
+        del _SESS_INDEX[p]
+        changed = True
+    if changed:
+        try:
+            C.write_json(_index_path(), _SESS_INDEX)
+        except OSError:
+            pass
+    return _SESS_INDEX
+
+
+def sessions_for(repo, number, days=30):
+    """Your Claude Code sessions from the last `days` that mention this PR, newest first. Only transcripts the index
+    says name this PR's number are read, and each only again once it changes."""
+    out = []
+    for p, (size, mtime, nums) in list(session_index(days).items()):
+        if int(number) not in nums:
+            continue
+        key = (p, size, mtime, repo, number)
         if key not in _SESS_SEEN:
             _SESS_SEEN[key] = _session_row(p, repo, number)
         if _SESS_SEEN[key]:

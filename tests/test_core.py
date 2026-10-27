@@ -4848,6 +4848,26 @@ class ReviewTest(unittest.TestCase):
             os.utime(b, (time.time() + 5, time.time() + 5))
             self.assertEqual(sorted(s["id"] for s in R.sessions_for("o/r", 7)), ["a", "b"])
             self.assertNotIn("a.jsonl", [x for x in opened if x == "a.jsonl" and opened.count(x) > 1])
+            opened.clear()
+            self.assertEqual(R.sessions_for("o/r", 9), [])
+            self.assertEqual(opened, [])  # a PR no transcript names: nothing read at all
+            R._SESS_INDEX.clear()
+            opened.clear()
+            self.assertEqual(sorted(s["id"] for s in R.sessions_for("o/r", 7)), ["a", "b"])
+            self.assertNotIn("x.jsonl", opened)
+            self.assertTrue(set(opened) <= {"a.jsonl", "b.jsonl"})  # the saved index survives a restart
+
+    def test_the_review_queue_is_shown_at_once_and_asked_again_behind_the_page(self):
+        R._QUEUE.clear()
+        rows = [{"repo": "o/r", "number": 1}]
+        with mock.patch.object(R, "_search", return_value=rows) as s:
+            self.assertEqual(R.queue(120, "requested"), rows)
+            R._QUEUE["requested"] = (time.time() - 3600, rows)
+            with mock.patch.object(R, "_search", side_effect=lambda *a: time.sleep(2) or rows):
+                t = time.time()
+                self.assertEqual(R.queue(120, "requested"), rows)
+                self.assertLess(time.time() - t, 1)
+        self.assertEqual(s.call_count, 1)
 
     def test_the_review_chat_takes_any_file_and_slash_commands(self):
         import base64

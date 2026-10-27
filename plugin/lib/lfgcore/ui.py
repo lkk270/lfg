@@ -8,6 +8,7 @@ never from the repo, never secrets. Changes (settings, todos, reviews...) are PO
 page can send: Host and Origin must be this dashboard on 127.0.0.1/localhost, with its X-LFG header (which no other
 site can add without a CORS preflight this server never grants) and a JSON body. Author: Varun Singh.
 """
+import concurrent.futures
 import glob
 import html
 import http.server
@@ -307,10 +308,14 @@ def api(view, q):
                     p["run"]["resume"] = R.resume(p["run"])
                     p["together"] = R.together(p)
             fj = R.fix_job(repo, number)
+            # GitHub and the session search don't wait on each other
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                gh = pool.submit(R.gh_status, repo, number, 0 if _arg(q, "fresh") == "1" else 300)
+                sess = pool.submit(R.sessions_for, repo, number)
+                gh, sess = gh.result(), sess.result()
             return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
                     "fix_job": R.progress(repo, number, j=fj) if fj else None,
-                    "gh": R.gh_status(repo, number, max_age=0 if _arg(q, "fresh") == "1" else 300),
-                    "sessions": pr_sessions(R.sessions_for(repo, number), R.linked_sessions(pr))[:12],
+                    "gh": gh, "sessions": pr_sessions(sess, R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],
                     "groups": SS.groups_of(pr), "all_groups": SS.listing()["folders"],
                     "models": R.models(), "model": R.chosen_model(), "methods": R.method_choices(),
@@ -1117,6 +1122,8 @@ def serve(port, open_browser=True):
     _exit_with_terminal()
     # tool/MCP checks take a few seconds; warm them so the first overview shows every integration
     threading.Thread(target=dash.tools, daemon=True).start()
+    from . import review as R
+    threading.Thread(target=R.session_index, daemon=True).start()  # the first PR page then reads only its sessions
     threading.Thread(target=_restart_on_update, args=(srv,), daemon=True).start()
     from . import notify as N
     N.DESK["port"] = port  # macOS notifications when no dashboard tab is in front
