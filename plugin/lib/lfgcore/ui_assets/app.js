@@ -1504,6 +1504,7 @@ async function wireSonar(root) {
 
 PAGES.checks = async () => {
   const [r, s] = await Promise.all([api("reviews"), api("security")]);
+  for (const d of [r, s]) if (d.available === false) return unavailable(d);
   const last = s.secure[0], ship = s.shipcheck[0], rev = r.verdicts[0];
   const open = r.findings.filter(f => !f.feedback);
   const sum = `<div class="cols">${stat("Latest code review", rev ? say(rev.verdict)[0] : "None yet", rev ? plural(rev.findings, "finding") : "run <code>/lfg:expert</code>")}${stat("Latest security check", last ? say(last.verdict)[0] : "None yet", last ? (last.blocking ? `${plural(last.blocking, "problem")} to fix` : "nothing blocking") : "run <code>/lfg:secure</code>")}${stat("Latest ship check", ship ? (ship.pass ? "Passed" : "Failed") : "None yet", ship ? `${ship.ok} of ${ship.total} checks passed${(ship.manual || []).length ? ` · ${ship.manual.length} for you to do` : ""}` : "run <code>/lfg:ship</code>")}</div>`;
@@ -2456,8 +2457,10 @@ async function prStart(pr, btn) {
   const fresh = btn.dataset.fresh === "1";
   btn.style.minWidth = btn.offsetWidth + "px";  // a shorter label must not pull the buttons beside it left
   btn.disabled = true; btn.textContent = "Starting…";
-  const d = await save("review_run", { pr, fresh, fresh_eyes: fresh && !!state.freshEyes, method: state.reviewMethod || "" });
+  const notes = ((state.reviewNotes || {})[pr] || "").trim();
+  const d = await save("review_run", { pr, fresh, fresh_eyes: fresh && !!state.freshEyes, method: state.reviewMethod || "", notes });
   if (!d.ok) { btn.disabled = false; btn.textContent = "Try again"; btn.title = d.why || ""; return; }
+  if (d.started) { delete (state.reviewNotes || {})[pr]; delete (state.reviewNotesOpen || {})[pr]; }  // notes are for this one review
   btn.textContent = d.started ? "Started" : "Already running";
   setTimeout(softRoute, 1200);
 }
@@ -2970,7 +2973,7 @@ function verdictHero(p, together, gh) {
   const qpts = (p.questions || []).filter(q => !q.answer).reduce((a, q) => a + (q.costs || 0), 0);
   const epts = p.earlier_points || 0, atReview = p.score_at_review ?? raw;
   const other = raw == null ? 0 : Math.max(0, 100 - atReview - fpts - qpts - epts);
-  const breakdown = raw == null || together ? "" : `<div class="score-why small" title="The score is 100 minus these">100 <span class="muted">−</span> <b>${fpts}</b> <span class="muted">findings</span>${epts ? ` <span class="muted">−</span> <b>${epts}</b> <span class="muted" title="Earlier reviews' findings this review still counted as open">earlier findings</span>` : ""}${qpts ? ` <span class="muted">−</span> <b>${qpts}</b> <span class="muted">open questions</span>` : ""}${other ? ` <span class="muted">−</span> <b>${other}</b> <span class="muted" title="The review took these off without tying them to a finding or question, often risks named in the summary">not itemized</span>` : ""} <span class="muted">=</span> <b>${raw}</b></div>${(p.credits || []).length ? `<div class="score-why small">${esc(p.score_at_review)} when reviewed, <b>${raw}</b> now: ${p.credits.map(c => `+${c.points} for ${esc(c.id)} ${c.why === "fixed" ? "fixed" : "passed on"}`).join(", ")}</div>` : ""}`;
+  const breakdown = raw == null || together ? "" : `<div class="score-why small" title="The score is 100 minus these">100 <span class="muted">−</span> <b>${fpts}</b> <span class="muted">findings</span>${epts ? ` <span class="muted">−</span> <b>${epts}</b> <span class="muted" title="Earlier reviews' findings this review still counted as open">earlier findings</span>` : ""}${qpts ? ` <span class="muted">−</span> <b>${qpts}</b> <span class="muted">open questions</span>` : ""}${other ? ` <span class="muted">−</span> <b>${other}</b> <span class="muted" title="The review took these off without tying them to a finding or question, often risks named in the summary">not itemized</span>` : ""} <span class="muted">=</span> <b>${atReview}</b></div>${(p.credits || []).length ? `<div class="score-why small">${esc(p.score_at_review)} when reviewed, <b>${raw}</b> now: ${[...p.credits.map(c => `+${c.points} for ${esc(c.id)} ${c.why === "fixed" ? "fixed" : "passed on"}`), ...(p.cleared ? [`+${p.cleared} for the rest, since nothing is open now`] : [])].join(", ")}</div>` : ""}`;
   return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}${breakdown}${RUBRIC}</div>${together ? "" : trend(upTo)}</div>${clash ? `<div class="callout ${clash.others ? "bad" : "warn"} approved-anyway">${dot(clash.others ? "bad" : "warn")}<span>${esc(clash.text)}</span></div>` : ""}`;
 }
 /* Which way the score is heading: against the review before, and a small line of every score so far. */
@@ -3017,7 +3020,7 @@ function talkPane(pr, p, unlocked, byId) {
   const about = (state.chatAbout || {})[pr], f = about && byId[about];
   const key = f ? `f:${pr}:${f.id}` : `r:${pr}:${p.n}`;
   const turns = [...(f ? f.chat || [] : p.chat || [])], waiting = (state.chatPending || {})[key];
-  const toSess = !f && ((state.prSessions || {})[pr] || []).find(x => x.id === (state.chatTo || {})[pr]);
+  const toSess = ((state.prSessions || {})[pr] || []).find(x => x.id === (state.chatTo || {})[pr]);
   if (waiting) turns.push({ q: waiting, a: null, session: toSess ? toSess.title : "" });
   turns.push(...((state.chatQueue || {})[key] || []).map(q => ({ q, a: null, queued: true })));
   const mode = chatMode(), count = (p.chat || []).length;
@@ -3026,13 +3029,13 @@ function talkPane(pr, p, unlocked, byId) {
   const icon = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
   return `<button class="chat-fab" data-chat-mode="side" ${mode === "hidden" ? "" : "hidden"}>${icon("M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z")}Chat${count ? `<span class="n">${count}</span>` : ""}</button>
   <aside class="pr-talk ${mode}" ${mode === "hidden" ? "hidden" : ""} data-chat="${esc(JSON.stringify([pr, p.n, f ? f.id : ""]))}">
-    <div class="pr-talk-h"><b>Chat</b>${!f && ((state.prSessions || {})[pr] || []).length ? `<select class="chat-to" data-chat-to="${esc(pr)}" title="Who your messages go to: this review's session, which can change the review, or one of your sessions about this PR, which only answers"><option value="">with the review</option>${state.prSessions[pr].map(x => `<option value="${esc(x.id)}" ${(state.chatTo || {})[pr] === x.id ? "selected" : ""}>with ${esc(x.title.slice(0, 40))}</option>`).join("")}</select>` : ""}<span class="grow"></span>
+    <div class="pr-talk-h"><b>Chat</b>${((state.prSessions || {})[pr] || []).length ? `<select class="chat-to" data-chat-to="${esc(pr)}" title="Who your messages go to, about the whole review or the finding you're discussing: this review's session, which can change the review, or one of your sessions about this PR, which only answers"><option value="">with the review</option>${state.prSessions[pr].map(x => `<option value="${esc(x.id)}" ${(state.chatTo || {})[pr] === x.id ? "selected" : ""}>with ${esc(x.title.slice(0, 40))}</option>`).join("")}</select>` : ""}<span class="grow"></span>
       <button class="icon-btn" data-chat-mode="${mode === "wide" ? "side" : "wide"}" title="${mode === "wide" ? "Back to the side" : "Make it bigger"}">${icon(mode === "wide" ? "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" : "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")}</button>
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
     <div class="pr-thread">${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
     <div class="pr-compose big"><div class="chat-atts" data-chat-atts></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
-      <div class="pr-compose-bar"><label class="btn small" title="Attach an image, or paste one into the box">Image<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden data-chat-file ${unlocked ? "" : "disabled"}></label><span class="muted small grow">Enter to send · Shift+Enter for a new line${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
+      <div class="pr-compose-bar"><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop or paste an image${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
 }
 /* Copy one finding or earlier comment: short for a person, everything an agent needs to act on it. */
 const copyBtns = (person, agent) => `<button class="btn small" data-copy="${esc(person)}" title="What's wrong, where, and the comment: to paste to a person">Copy</button><button class="btn small" data-copy="${esc(agent)}" title="Everything needed to act on it: file and line, issue, fix, the evidence, the comment and its status">Copy for an agent</button>`;
@@ -3115,7 +3118,9 @@ async function prDetail(arg) {
     : j && j.status === "cancelled" && Date.now() - Date.parse(j.ended) < 3600000 ? `<div class="callout">You cancelled the ${esc(kindOf)} started ${ago(j.started)}. Nothing from it was saved.</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>${rec ? AGAIN_HELP : ""}`;
+  const notes = (state.reviewNotes || {})[pr] || "", notesOpen = !!notes || (state.reviewNotesOpen || {})[pr];
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><button class="btn" data-pr-notes ${can ? "" : "disabled"} aria-expanded="${notesOpen ? "true" : "false"}" title="Tell the next review what to look into on top of its method: an angle, some context, a worry">${notes ? "Notes added" : "Add notes…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>
+    <div class="pr-notes" ${notesOpen ? "" : "hidden"}><textarea data-grow rows="2" data-pr-notes-text="${esc(pr)}" placeholder="What should the next review look into? E.g. &quot;focus on the retry logic and whether a failed fetch can leave a run half-done&quot;. Only for the next review you start." ${can ? "" : "disabled"}>${esc(notes)}</textarea></div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
   (state.prSessions || (state.prSessions = {}))[pr] = (d.sessions || []).filter(x => !x.dashboard && x.cwd);
@@ -3155,7 +3160,7 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-split"><div class="pr-pass-body">
-      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · reviewed at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${d.gh && d.gh.head_sha && d.gh.head_sha !== p.head_sha ? ` · <span class="tag warn" title="Commits were pushed after this review. Is it fixed? checks a finding against the newest code; a re-review reads them all">PR is now at <span class="mono">${esc(d.gh.head_sha.slice(0, 8))}</span></span>` : ""}${p.imported_from ? " · imported from a session" : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
+      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · reviewed at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${d.gh && d.gh.head_sha && d.gh.head_sha !== p.head_sha ? ` · <span class="tag warn" title="Commits were pushed after this review. Is it fixed? checks a finding against the newest code; a re-review reads them all">PR is now at <span class="mono">${esc(d.gh.head_sha.slice(0, 8))}</span></span>` : ""}${p.imported_from ? " · imported from a session" : ""}${(p.run || {}).notes ? ` · <span class="tag" title="${esc(p.run.notes)}">with your notes</span>` : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
@@ -3312,7 +3317,14 @@ function wireChatPane(root) {
     if (!d.ok) return prefToast(d.why || "Couldn't attach the image", true);
     atts.push({ path: d.path, url: URL.createObjectURL(file) }); drawAtts();
   };
-  $("[data-chat-file]", pane).onchange = e => { [...e.target.files].forEach(attach); e.target.value = ""; };
+  const files = e => [...(e.dataTransfer || {}).types || []].includes("Files");
+  pane.ondragover = e => { if (!files(e) || input.disabled) return; e.preventDefault(); pane.classList.add("drop"); };
+  pane.ondragleave = e => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("drop"); };
+  pane.ondrop = e => {
+    if (!files(e)) return;
+    e.preventDefault(); pane.classList.remove("drop");
+    if (!input.disabled) [...e.dataTransfer.files].forEach(attach);
+  };
   input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []].filter(x => x.type.startsWith("image/")); if (fs.length) { e.preventDefault(); fs.forEach(attach); } };
   const go = async () => {
     const said = input.value.trim();
@@ -3336,12 +3348,14 @@ function wireChatPane(root) {
   input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } };
   if (pane.classList.contains("wide")) document.onkeydown = e => { if (e.key === "Escape" && $(".pr-talk.wide")) { localStorage.setItem("lfg.chat", "side"); softRoute(); } };
 }
+/* A file dropped anywhere but the chat would open in place of the dashboard: ignore it. */
+["dragover", "drop"].forEach(t => document.addEventListener(t, e => { if ([...(e.dataTransfer || {}).types || []].includes("Files") && !e.defaultPrevented) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; } }));
 /* Send one chat message, then the next one queued behind it, in order. A failed one goes back in the box. */
 async function chatSend(key, pr, n, fid, text) {
   (state.chatPending || (state.chatPending = {}))[key] = text;
-  const to = !fid && (state.chatTo || {})[pr];
-  const d = fid ? await save("review_discuss", { pr, id: fid, question: text })
-    : to ? await save("review_ask_session", { pr, pass: n, session: to, question: text })
+  const to = (state.chatTo || {})[pr];
+  const d = to ? await save("review_ask_session", { pr, pass: n, session: to, question: text, ...(fid ? { id: fid } : {}) })
+    : fid ? await save("review_discuss", { pr, id: fid, question: text })
     : await save("review_ask", { pr, pass: n, question: text });
   delete state.chatPending[key];
   const queue = (state.chatQueue || {})[key] || [];
@@ -3394,6 +3408,18 @@ function wirePrs(root) {
     prefToast(`Reviews now run on ${s.selectedOptions[0].textContent}.`);
   });
   wireMethod(root);
+  $$("[data-pr-notes]", root).forEach(b => b.onclick = () => {
+    const box = b.closest(".pr-actions").nextElementSibling, t = $("textarea", box), pr = t.dataset.prNotesText;
+    box.hidden = !box.hidden;
+    b.setAttribute("aria-expanded", String(!box.hidden));
+    (state.reviewNotesOpen || (state.reviewNotesOpen = {}))[pr] = !box.hidden;
+    if (!box.hidden) t.focus();
+  });
+  $$("[data-pr-notes-text]", root).forEach(t => t.oninput = () => {
+    (state.reviewNotes || (state.reviewNotes = {}))[t.dataset.prNotesText] = t.value;
+    const b = $("[data-pr-notes]", root);
+    if (b) b.textContent = t.value.trim() ? "Notes added" : "Add notes…";
+  });
   /* on the page, not each box: sorting a table redraws its rows */
   root.onchange = e => { const c = e.target.closest && e.target.closest("[data-pr-pick]"); if (!c) return; c.checked ? state.prPick.add(c.dataset.prPick) : state.prPick.delete(c.dataset.prPick); $$(`[data-pr-pick="${CSS.escape(c.dataset.prPick)}"]`).forEach(x => (x.checked = c.checked)); pickBar(); };
   $$("[data-ticket-run]", root).forEach(b => b.onclick = async () => {
@@ -3543,6 +3569,7 @@ function wirePrs(root) {
     if (!d.ok) { b.disabled = false; b.textContent = "Is it fixed?"; return alertMsg(b, d); }
     b.closest(".row").insertAdjacentHTML("beforebegin", checkLine(d));
     b.disabled = false; b.textContent = "Check again";
+    softRoute();  // a finding found fixed gives its points back: show the new score now
   });
   $$("[data-pr-fix]", root).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
@@ -3686,7 +3713,7 @@ function prTabClose(pr) {
 const prTabLabel = t => `${esc(t.pr.split("#")[1] ? "#" + t.pr.split("#")[1] : t.pr)} <span class="prtab-t">${esc(t.title)}</span>`;
 function prTabStrip() {
   const tabs = openTabs();
-  return tabs.length ? `<div class="pr-doc-tabs" role="tablist">${tabs.map(t => `<a class="prtab ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" title="${esc(t.pr + " · " + t.title)}">${prTabLabel(t)}<span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("")}</div>` : "";
+  return tabs.length ? `<div class="pr-doc-tabs" role="tablist">${tabs.map(t => `<a class="prtab ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" draggable="true" data-prtab="${esc(t.pr)}" title="${esc(t.pr + " · " + t.title)}">${prTabLabel(t)}<span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("")}</div>` : "";
 }
 document.addEventListener("click", e => {
   const x = e.target.closest("[data-prtab-x]");
@@ -3694,8 +3721,49 @@ document.addEventListener("click", e => {
   e.preventDefault(); e.stopPropagation();
   prTabClose(x.dataset.prtabX);
 }, true);
+/* Drag a tab, above the page or in the sidebar, to reorder: both follow the one order kept in this browser. */
+let prTabDrag = null;
+function prTabMove(from, to, after) {
+  const tabs = openTabs(), i = tabs.findIndex(t => t.pr === from);
+  if (i < 0 || from === to) return;
+  const [t] = tabs.splice(i, 1);
+  const j = tabs.findIndex(x => x.pr === to);
+  tabs.splice(j < 0 ? tabs.length : j + (after ? 1 : 0), 0, t);
+  prTabsSave(tabs);
+  renderNav("prs");
+  $$(".pr-doc-tabs").forEach(el => { el.outerHTML = prTabStrip(); });
+}
+const prTabAfter = (e, el) => {
+  const r = el.getBoundingClientRect();
+  return el.classList.contains("nav-sub") ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+};
+document.addEventListener("dragstart", e => {
+  const el = e.target.closest && e.target.closest("[data-prtab]");
+  if (!el) return;
+  prTabDrag = el.dataset.prtab;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", prTabDrag);
+  el.classList.add("dragging");
+});
+document.addEventListener("dragover", e => {
+  const el = prTabDrag && e.target.closest && e.target.closest("[data-prtab]");
+  if (!el) return;
+  e.preventDefault();
+  $$(".drop-before, .drop-after").forEach(x => x.classList.remove("drop-before", "drop-after"));
+  if (el.dataset.prtab !== prTabDrag) el.classList.add(prTabAfter(e, el) ? "drop-after" : "drop-before");
+});
+document.addEventListener("drop", e => {
+  const el = prTabDrag && e.target.closest && e.target.closest("[data-prtab]");
+  if (!el) return;
+  e.preventDefault();
+  prTabMove(prTabDrag, el.dataset.prtab, prTabAfter(e, el));
+});
+document.addEventListener("dragend", () => {
+  prTabDrag = null;
+  $$(".dragging, .drop-before, .drop-after").forEach(x => x.classList.remove("dragging", "drop-before", "drop-after"));
+});
 function renderNav(active) {
-  const subs = k => k !== "prs" ? "" : openTabs().map(t => `<a class="nav-sub ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" title="${esc(t.pr + " · " + t.title)}"><span>${prTabLabel(t)}</span><span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("");
+  const subs = k => k !== "prs" ? "" : openTabs().map(t => `<a class="nav-sub ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" draggable="true" data-prtab="${esc(t.pr)}" title="${esc(t.pr + " · " + t.title)}"><span>${prTabLabel(t)}</span><span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("");
   $("#nav").innerHTML = NAV_GROUPS.map(([g, ks]) => `<div class="nav-grp">${esc(g)}</div>${ks.map(k => `<a class="${k === active && !(k === "prs" && openTabs().some(t => location.hash === prTabHref(t.pr))) ? "on" : ""}" href="#${k}"${k === active ? ' aria-current="page"' : ""}>${icon(k)}<span>${esc(TITLES[k])}</span></a>${subs(k)}`).join("")}`).join("");
 }
 /* Breadcrumb in the top bar: project / page / item. Pages that open an item call crumbs() again with it. */

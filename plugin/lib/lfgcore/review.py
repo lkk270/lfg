@@ -198,7 +198,8 @@ POINTS = {"blocker": 25, "major": 12, "minor": 4, "nitpick": 1, "note": 0}  # th
 
 
 def checked_fixed(f):
-    return (f.get("check") or {}).get("state") == "fixed"
+    """Fixed: "Is it fixed?" said so, or LFG's own fix pass committed a fix for it."""
+    return (f.get("check") or {}).get("state") == "fixed" or bool((f.get("fixed") or {}).get("commit"))
 
 
 def undecided(p):
@@ -211,7 +212,9 @@ def rescore(rec):
     """Each review's score as things stand: the score it gave, plus the points of every finding it counted that you
     since passed on or that "Is it fixed?" found fixed (`credits`; `score_at_review` keeps the original). A finding
     counts in its own review and in later ones that still listed it as open. Nitpicks cost once per kind, so a kind
-    comes back only when every one of them is settled."""
+    comes back only when every one of them is settled. Once nothing it held against the PR is open, it is 100: the
+    points it took off without tying them to a finding come back too (`cleared`), unless Claude has since said what
+    the score is as things stand (`score_said`)."""
     by_id = {f["id"]: f for p in rec.get("passes") or [] for f in p.get("findings") or []}
     for p in rec.get("passes") or []:
         if p.get("score") is None:
@@ -250,11 +253,17 @@ def rescore(rec):
             p["credits"] = [{"id": f["id"], "points": POINTS[f["severity"]],
                              "why": "passed" if f["status"] == "drop" else "fixed"} for f in credits]
             start = p.get("score_given", base) if clear else base  # the verdict's cap is gone with the verdict
-            p["score"] = cap_score(min(100, start + sum(c["points"] for c in p["credits"])),
-                                   p.get("verdict_now") or p.get("verdict"))
+            score = start + sum(c["points"] for c in p["credits"])
+            if not still and not p.get("score_said") and score < 100 \
+                    and not any(q.get("costs") and not q.get("answer") for q in p.get("questions") or []):
+                p["cleared"] = 100 - score
+            else:
+                p.pop("cleared", None)
+            p["score"] = cap_score(min(100, score + p.get("cleared", 0)), p.get("verdict_now") or p.get("verdict"))
         elif "score_at_review" in p:
             p["score"] = p.pop("score_at_review")
             p.pop("credits", None)
+            p.pop("cleared", None)
     return rec
 
 
@@ -1017,9 +1026,9 @@ def method_label(srcs):
     return ", ".join(os.path.basename(x.rstrip("/")) or x for x in srcs)
 
 
-def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False):
+def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False, notes=None):
     """Start `lfg review run` detached (the dashboard's Review / Re-review / Review together buttons). together: more
-    (repo, number) PRs to review in the same session."""
+    (repo, number) PRs to review in the same session. notes: what you want this one review to look into."""
     import subprocess
     import sys
     prs = [(repo, number)] + [tuple(x) for x in together if tuple(x) != (repo, number)]
@@ -1038,6 +1047,8 @@ def start(repo, number, ticket=None, fresh=False, together=(), model=None, metho
         if not m:
             raise ReviewError("no review method %r" % method)
         args += ["--method", json.dumps(m["sources"])]
+    notes = str(notes or "").strip()
+    args += ["--notes", _text(notes, "notes", 4000)] if notes else []
     with open(os.devnull, "wb") as dn:
         subprocess.Popen(args, stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True,
                          close_fds=True)
@@ -1075,7 +1086,11 @@ def _passes(repo, number):
     return len((load(repo, number) or {}).get("passes") or [])
 
 
-def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False):
+REVIEW_NOTES = (" Lee's notes for this review, on top of the method: look into these as well, and say in the summary "
+                "what you found about each: %s")
+
+
+def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False, notes=None):
     """Review one PR with Claude Code in print mode, on your own login, and wait for it. together: more PRs reviewed
     in the same session as one change (a backend and the frontend that calls it): each gets its own review, and the
     session also checks they agree with each other. Every review it saves remembers the session, so you can resume it,
@@ -1095,7 +1110,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
             "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model(),
-            "method": label, "fresh_eyes": bool(fresh_eyes)})
+            "method": label, "fresh_eyes": bool(fresh_eyes), "notes": notes or ""})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     if len(prs) == 1:
         what = "to review %s" % refs[0]
@@ -1121,6 +1136,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
                  "context` says re_review false; skip the Re-review and Other reviewers steps, leave `prior` and "
                  "`echoes` empty, and never look for earlier reviews or other people's comments. Every finding has "
                  "since \"first\"." if fresh_eyes else ""))
+    prompt += REVIEW_NOTES % notes if notes else ""
     allow, deny = run_tools(fresh_eyes)
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
            "--allowedTools", ",".join(allow), "--disallowedTools", ",".join(deny)] + _model(model)
@@ -1149,7 +1165,8 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
             shutil.copyfile(log, kept)
             p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)],
-                        "used": used(log), "method": label, "fresh_eyes": bool(fresh_eyes)}
+                        "used": used(log), "method": label, "fresh_eyes": bool(fresh_eyes),
+                        **({"notes": notes} if notes else {})}
             if fresh and p["n"] > 1:
                 p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)
@@ -1365,8 +1382,10 @@ def apply_changes(repo, number, n, out):
         if p and p.get("score") != score:
             # what Claude now says is the score as things stand: work back the one before anything settled
             p["score"] = p["score_at_review"] = score
+            p["score_said"] = True
             rescore(rec)
-            p["score_at_review"] = max(0, score - sum(c["points"] for c in p.get("credits") or []))
+            back = sum(c["points"] for c in p.get("credits") or []) + p.get("cleared", 0)
+            p["score_at_review"] = max(0, score - back)
             p["score"] = score
             recs[(repo, number)] = rec
             done.append("score %d" % score)
@@ -2135,6 +2154,8 @@ def sessions_for(repo, number, days=30):
 ASK_SESSION = ("Lee is reviewing pull request %s from the LFG dashboard and asks you about it. You worked on this, so "
                "answer from what you know and from the code: a few plain sentences he could hand to the reviewer as "
                "they are. Don't change any files, commit or push.\n\n%s")
+ASK_FINDING = ("It's about one finding of the review, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\n\n"
+               "Lee asks: %s")
 SESSION_TOOLS = ["Read", "Grep", "Glob", "Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git blame *)",
                  "Bash(git grep *)", "Bash(gh pr view *)", "Bash(gh pr diff *)"]
 
@@ -2153,10 +2174,11 @@ def _session_about(repo, number, sid):
     return {"id": sid, "title": s["title"], "cwd": s["cwd"]}
 
 
-def ask_session(repo, number, sid, question, n=None):
+def ask_session(repo, number, sid, question, n=None, fid=None):
     """Ask one of your sessions about this PR (say the one where you built it), from the review page. The first
     question forks it, so the session itself is never changed; later ones continue the fork. With `n`, the turn is
-    kept in that review's chat; the review itself doesn't change (only its own session's answers do that)."""
+    kept in that review's chat; with `fid`, it is about that one finding and kept in the finding's chat. The review
+    itself doesn't change (only its own session's answers do that)."""
     import subprocess
     if not str(question or "").strip():
         raise ReviewError("ask something")
@@ -2168,7 +2190,12 @@ def ask_session(repo, number, sid, question, n=None):
     q = _text(question, "question", 4000)
     rec = need(repo, number)
     fork = (rec.get("session_forks") or {}).get(s["id"])
-    prompt, images = _chat_prompt(ASK_SESSION % (ref(repo, number), q), q)
+    about = q
+    if fid:
+        f = find(rec, fid)
+        about = ASK_FINDING % (fid, f.get("title") or f.get("issue") or "", f.get("file") or "the PR as a whole",
+                               f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", q)
+    prompt, images = _chat_prompt(ASK_SESSION % (ref(repo, number), about), q)
     cmd = ["claude", "-p", prompt, "--resume", fork or s["id"]] + ([] if fork else ["--fork-session"]) + [
         "--output-format", "json", "--permission-mode", "dontAsk", "--allowedTools", ",".join(SESSION_TOOLS),
         "--disallowedTools", ",".join(RUN_DENY)] + _model() + _direct()
@@ -2184,8 +2211,10 @@ def ask_session(repo, number, sid, question, n=None):
     if out.get("session_id"):
         rec.setdefault("session_forks", {})[s["id"]] = out["session_id"]
     turn = {"q": q, "a": text, "at": C.now_iso(), "session": s["title"], "session_id": s["id"]}
-    p = next((x for x in rec["passes"] if x["n"] == int(n)), None) if n else None
-    if p:
+    p = next((x for x in rec["passes"] if x["n"] == int(n)), None) if n and not fid else None
+    if fid:
+        find(rec, fid).setdefault("chat", []).append(turn)
+    elif p:
         p.setdefault("chat", []).append(turn)
     store(rec)
     return turn

@@ -2015,6 +2015,19 @@ class RunSummaryTest(unittest.TestCase):
         self.assertEqual(dash._blocking({"blocking": 3}), 3)
         self.assertEqual(dash._blocking({"verdict": {"overall": "don't", "blocking": ["a", "b"]}}), 2)
         self.assertEqual(dash._blocking({"findings": [{"blocking": True}, {"blocking": False}]}), 1)
+        self.assertEqual(dash._blocking({"blocking": []}), 0)
+
+    def test_security_reads_a_report_with_lists_and_text_where_dicts_go(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        p = os.path.join(d, "run", "05-secure.json")
+        C.write_json(p, {"verdict": "safe_with_caveats", "blocking": [], "scanners": "not run",
+                         "inventory": ["migration: enum value", "terraform routers"], "findings": [{"id": "S1"}]})
+        only = lambda rid, name, branch=None: [p] if name == "05-secure.json" else []  # noqa: E731
+        with mock.patch.object(dash, "stage_files", only), mock.patch.object(dash, "sonar_view", lambda rid: None):
+            s = dash.security("r")["secure"][0]
+        self.assertEqual((s["blocking"], s["inventory"]), (0, {"items": 2}))
+        self.assertEqual(s["scanners"], [{"tool": None, "exit": None, "note": "not run"}])
 
 
 class UpdatesTest(unittest.TestCase):
@@ -3518,6 +3531,32 @@ class ReviewTest(unittest.TestCase):
         with self.assertRaises(R.ReviewError):
             R.start("o/r", 7, method="no-such-skill")
 
+    def test_notes_tell_one_review_what_to_look_into(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1",
+                   "result": "```json\n%s\n```" % json.dumps({"summary": "s", "findings": []})}]
+        prompts = []
+
+        def run(cmd, cwd=None, stdout=None, env=None, **kw):
+            if cmd[0] == "claude":
+                prompts.append(cmd[cmd.index("-p") + 1])
+            return self.fake_claude(events)(cmd, cwd=cwd, stdout=stdout, **kw)
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=run):
+            R.run("o/r", 7, notes="check the retry logic")
+            R.run("o/r", 7)
+        self.assertIn("Lee's notes for this review", prompts[0])
+        self.assertIn("check the retry logic", prompts[0])
+        self.assertNotIn("Lee's notes", prompts[1])
+        passes = R.load("o/r", 7)["passes"]
+        self.assertEqual((passes[0]["run"]["notes"], "notes" in passes[1]["run"]), ("check the retry logic", False))
+        started = []
+        with mock.patch("subprocess.Popen", side_effect=lambda args, **kw: started.append(args)):
+            R.start("o/r", 7, notes="  look at auth  ")
+        self.assertEqual(started[0][started[0].index("--notes") + 1], "look at auth")
+
     def test_a_question_says_what_it_costs_and_steps_repeat_once(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "score": 71, "findings": [],
@@ -3754,6 +3793,22 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((p2["score"], [c["id"] for c in p2["credits"]]), (95, ["2.1"]))
         self.assertEqual(R.undecided(p2), ["2.2"])  # a finding checked fixed needs no Fix or Pass
 
+    def test_the_score_is_100_once_nothing_is_open(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):  # 26 off, 16 of it tied to findings
+            R.save("o/r", 7, {"summary": "s", "score": 74, "verdict": "not",
+                              "findings": [f(severity="major", title="a"), f(severity="minor", title="b", line=9)]})
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["check"] = {"state": "fixed", "head": "b" * 40}
+        R.store(rec)
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["score"], p.get("cleared")), (86, None))  # 1.2 still open: 74 + 12
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][1]["fixed"] = {"commit": "c" * 40}  # LFG's fix pass fixed it
+        R.store(rec)
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["score"], p["cleared"], p["verdict_now"]), (100, 10, "mergeable"))
+
     def test_fresh_eyes_hides_earlier_reviews_and_others_then_notes_repeats_before_posting(self):
         f = self.finding
         with mock.patch.object(R, "pr_meta", return_value=self.META):
@@ -3868,6 +3923,22 @@ class ReviewTest(unittest.TestCase):
         self.assertNotIn("Edit", first[first.index("--allowedTools") + 1])
         chat = R.load("o/r", 7)["passes"][0]["chat"]
         self.assertEqual([(x["q"], x["session"]) for x in chat], [("and the timeout?", "build ATO-1")])
+
+    def test_ask_a_session_about_one_finding_keeps_it_on_the_finding(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding(title="No retry on fetch")]})
+        built = {"id": "b" * 36, "title": "build ATO-1", "cwd": self.tmp_dir()}
+        sent = []
+
+        def fake(cmd, **kw):
+            sent.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "on purpose", "session_id": "f" * 36}), "")
+        with mock.patch.object(R, "sessions_for", return_value=[built]), \
+                mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
+            R.ask_session("o/r", 7, built["id"], "why no retry?", n=1, fid="1.1")
+        self.assertIn("1.1: No retry on fetch", sent[0][sent[0].index("-p") + 1])
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual(([x["q"] for x in p["findings"][0]["chat"]], p.get("chat")), (["why no retry?"], None))
 
     def test_the_review_chat_takes_images_and_slash_commands(self):
         import base64
