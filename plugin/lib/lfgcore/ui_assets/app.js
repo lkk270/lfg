@@ -3959,8 +3959,9 @@ const chatTurn = (x, pr) => {
   const tag = m ? `<a href="#" class="chip c-blue msg-tag" ${x.qid ? `data-goto-q="${esc(x.qid)}"` : ""} title="${esc(m[1])}">Answer to: ${esc(m[1].length > 60 ? m[1].slice(0, 59) + "…" : m[1])}</a>` : "";
   return chatTurnOf({ ...x, q: m ? m[2] : x.q }, pr, tag);
 };
-const chatImgs = q => (String(q || "").match(/\[image: [^\]\s]+\]/g) || []).length;
-const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(/\s*\[image: [^\]\s]+\]/g, "").trim())}${chatImgs(x.q) ? `<div class="msg-imgs">${plural(chatImgs(x.q), "image")} attached</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
+const CHAT_ATT = /\s*\[(?:image|file): ([^\]\s]+)\]/g;
+const chatFiles = q => [...String(q || "").matchAll(CHAT_ATT)].map(m => m[1].split("/").pop());
+const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(CHAT_ATT, "").trim())}${chatFiles(x.q).length ? `<div class="msg-imgs">Attached: ${chatFiles(x.q).map(esc).join(", ")}</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
 const typing = who => '<div class="msg claude"><div class="who">' + (who ? "Session: " + esc(who) : "Claude") + '</div><div class="bubble typing" aria-label="Claude is thinking"><i></i><i></i><i></i></div></div>';
 /* What a reply changed in the review, as chips that jump to the finding. */
 function changedChips(changed, pr) {
@@ -4100,8 +4101,8 @@ function talkPane(pr, p, unlocked, byId) {
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
     <div class="pr-thread">${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
-    <div class="pr-compose big"><div class="chat-atts" data-chat-atts></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
-      <div class="pr-compose-bar"><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop or paste an image${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
+    <div class="pr-compose big"><div class="ss-att" data-chat-atts hidden></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
+      <div class="pr-compose-bar"><button type="button" class="icon-btn ss-clip" data-chat-attach title="Attach files or images. You can also drop them here or paste them." ${unlocked ? "" : "disabled"}>${icon("clip")}</button><input type="file" data-chat-file multiple hidden><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop, paste or attach any file${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
 }
 /* Copy one finding or earlier comment: short for a person, everything an agent needs to act on it. */
 const copyBtns = (person, agent) => `<button class="btn small" data-copy="${esc(person)}" title="What's wrong, where, and the comment: to paste to a person">Copy</button><button class="btn small" data-copy="${esc(agent)}" title="Everything needed to act on it: file and line, issue, fix, the evidence, the comment and its status">Copy for an agent</button>`;
@@ -4374,28 +4375,45 @@ function wireChatPane(root) {
   const key = fid ? `f:${pr}:${fid}` : `r:${pr}:${n}`;
   const atts = (state.chatAtts || (state.chatAtts = {}))[key] || (state.chatAtts[key] = []);
   const attBox = $("[data-chat-atts]", pane);
-  const drawAtts = () => { attBox.innerHTML = atts.map((a, i) => `<span class="chat-att"><img src="${a.url}" alt=""><button class="icon-btn" data-att-x="${i}" aria-label="Remove image">×</button></span>`).join(""); $$("[data-att-x]", attBox).forEach(x => x.onclick = () => { atts.splice(+x.dataset.attX, 1); drawAtts(); }); };
-  drawAtts();
-  const attach = async file => {
-    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return prefToast("Only PNG, JPEG, GIF or WebP images", true);
-    const data = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(",")[1]); fr.readAsDataURL(file); });
-    const d = await save("chat_image", { data, type: file.type });
-    if (!d.ok) return prefToast(d.why || "Couldn't attach the image", true);
-    atts.push({ path: d.path, url: URL.createObjectURL(file) }); drawAtts();
+  const drawAtts = () => {
+    attBox.hidden = !atts.length;
+    attBox.innerHTML = atts.map((a, i) => `<span class="ss-chip${a.path ? "" : " up"}" title="${esc(a.name)}${a.path ? "" : " (adding…)"}">${a.thumb ? `<img src="${a.thumb}" alt="">` : icon("docs")}<span>${esc(a.name)}</span><button type="button" data-att-x="${i}" aria-label="Remove ${esc(a.name)}">&times;</button></span>`).join("");
+    $$("[data-att-x]", attBox).forEach(x => x.onclick = () => { atts.splice(+x.dataset.attX, 1); drawAtts(); });
   };
+  drawAtts();
+  // any file: an image, a CSV, a document, code. Several at once say what went wrong in one message, not one each.
+  const attach = async list => {
+    const bad = [];
+    for (const file of Array.from(list || [])) {
+      if (atts.length >= 10) { bad.push("up to 10 files at a time"); break; }
+      const a = { name: file.name || "pasted-image.png" }; atts.push(a); drawAtts();
+      try {
+        const x = await ssPrepFile(file); a.thumb = x.thumb; drawAtts();
+        const d = await save("chat_file", { data: x.data, type: x.type, name: a.name });
+        if (!d.ok) throw new Error(d.why || "couldn't attach it");
+        Object.assign(a, { path: d.path, image: d.image });
+      } catch (e) { atts.splice(atts.indexOf(a), 1); bad.push(`${a.name}: ${e.message || e}`); }
+      drawAtts();
+    }
+    if (bad.length) prefToast(bad.join(" · "), true);
+  };
+  const fileIn = $("[data-chat-file]", pane);
+  $("[data-chat-attach]", pane).onclick = () => fileIn.click();
+  fileIn.onchange = () => { attach(fileIn.files); fileIn.value = ""; };
   const files = e => [...(e.dataTransfer || {}).types || []].includes("Files");
-  pane.ondragover = e => { if (!files(e) || input.disabled) return; e.preventDefault(); pane.classList.add("drop"); };
+  pane.ondragover = e => { if (!files(e) || input.disabled) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; pane.classList.add("drop"); };
   pane.ondragleave = e => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("drop"); };
   pane.ondrop = e => {
     if (!files(e)) return;
     e.preventDefault(); pane.classList.remove("drop");
-    if (!input.disabled) [...e.dataTransfer.files].forEach(attach);
+    if (!input.disabled) attach(e.dataTransfer.files);
   };
-  input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []].filter(x => x.type.startsWith("image/")); if (fs.length) { e.preventDefault(); fs.forEach(attach); } };
+  input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []]; if (fs.length) { e.preventDefault(); attach(fs); } };
   const go = async () => {
     const said = input.value.trim();
     if (!said && !atts.length) return input.focus();
-    const text = [said, ...atts.splice(0).map(a => `[image: ${a.path}]`)].join("\n").trim();
+    if (atts.some(a => !a.path)) return prefToast("Wait for the files to finish adding", true);
+    const text = [said, ...atts.splice(0).map(a => `[${a.image ? "image" : "file"}: ${a.path}]`)].join("\n").trim();
     input.value = ""; drawAtts(); grow(input);
     const thread = $(".pr-thread", pane);
     $(".chat-empty", thread)?.remove();

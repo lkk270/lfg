@@ -398,7 +398,6 @@ def api(view, q):
 
 
 MAX_BODY = 600_000
-IMAGE_BODY = 7_000_000  # 5 MB of image as base64
 MAX_UPLOAD = 28_000_000  # a file dropped on a session's composer, base64 in JSON (files up to 20 MB)
 NO_KEY = {"/api/save/graphs_build", "/api/save/tour_done"}  # neither changes your settings
 
@@ -589,8 +588,8 @@ def review_action(what, body):
     `lfg review post` away from agents."""
     from . import review as R
     try:
-        if what == "chat_image":
-            return R.save_image(body.get("data"), str(body.get("type") or ""))
+        if what == "chat_file":
+            return R.save_attachment(body.get("data"), str(body.get("type") or ""), body.get("name"))
         if what == "review_sources":
             return R.set_sources(body.get("sources"))
         if what == "review_model":
@@ -872,7 +871,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if u.path not in NO_KEY and not S.key_ok(self.headers.get("X-LFG-Key")):
             return no(403, "editing is locked: run `lfg ui --unlock` in your terminal")
         size = int(self.headers.get("Content-Length") or 0)
-        limit = {"/api/save/chat_image": IMAGE_BODY, "/api/save/sess_upload": MAX_UPLOAD}.get(u.path, MAX_BODY)
+        limit = MAX_UPLOAD if u.path in ("/api/save/chat_file", "/api/save/sess_upload") else MAX_BODY
         if not (self.headers.get("Content-Type") or "").startswith("application/json") or not 0 < size <= limit:
             return no(400, "expected a JSON body")
         try:

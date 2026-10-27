@@ -26,6 +26,10 @@ A repo's LFG knowledge now lives in the repo, in `.lfg/`, committed with the wor
 ### Upgrading
 Install this version first, then run `lfg knowledge migrate --dry-run` in each repo, then without `--dry-run`. Until a repo is migrated, its old runs stay in `~/.lfg` and session start says so.
 
+### Changed
+
+- PR review chat takes any file, not only images: drop, paste or attach (paperclip) CSVs, documents, text and code files, up to 10 at a time. Files show as chips with their names, and several that can't be added say why in one message.
+
 ### From upstream (varun-singhh/lfg)
 
 ### Fixed

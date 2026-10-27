@@ -4730,13 +4730,25 @@ class ReviewTest(unittest.TestCase):
         p = R.load("o/r", 7)["passes"][0]
         self.assertEqual(([x["q"] for x in p["findings"][0]["chat"]], p.get("chat")), (["why no retry?"], None))
 
-    def test_the_review_chat_takes_images_and_slash_commands(self):
+    def test_the_review_chat_takes_any_file_and_slash_commands(self):
         import base64
         png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()
-        path = R.save_image(png, "image/png")["path"]
-        self.assertTrue(path.startswith(R.chat_images_dir()) and os.path.isfile(path))
+        img = R.save_attachment(png, "image/png", "shot.png")
+        path = img["path"]
+        self.assertTrue(path.startswith(R.chat_files_dir()) and os.path.isfile(path) and img["image"])
+        csv = R.save_attachment(base64.b64encode(b"a,b\n1,2\n").decode(), "text/csv", "../../Q3 numbers.csv")
+        self.assertEqual((csv["name"], csv["image"], os.path.dirname(os.path.dirname(csv["path"]))),
+                         ("Q3-numbers.csv", False, R.chat_files_dir()))  # any kind; the name can't leave the folder
+        again = R.save_attachment(base64.b64encode(b"x").decode(), "text/csv", "Q3 numbers.csv")["path"]
+        self.assertNotEqual(again, csv["path"])  # the same name twice keeps both
+        self.assertEqual(open(csv["path"]).read(), "a,b\n1,2\n")
+        self.assertTrue(R.save_attachment(base64.b64encode(b"PK\x03\x04").decode(), "", "notes.docx")["path"])
         with self.assertRaises(R.ReviewError):
-            R.save_image(png, "text/html")
+            R.save_attachment(base64.b64encode(b"0" * (R.FILE_MAX + 1)).decode(), "text/plain", "big.txt")
+        with self.assertRaises(R.ReviewError):
+            R.save_attachment(base64.b64encode(b"0" * (R.IMAGE_MAX + 1)).decode(), "image/png", "big.png")
+        with self.assertRaises(R.ReviewError):
+            R.save_attachment("not base64!", "text/plain", "x.txt")
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
         rec = R.load("o/r", 7)
@@ -4748,11 +4760,12 @@ class ReviewTest(unittest.TestCase):
             sent.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok"}), "")
         with mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
-            R.ask("o/r", 7, 1, "what is this?\n[image: %s]\n[image: /etc/passwd]" % path)
+            R.ask("o/r", 7, 1, "what is this?\n[image: %s]\n[file: %s]\n[file: /etc/passwd]" % (path, csv["path"]))
             R.ask("o/r", 7, 1, "/review-pr 7 look again")
         prompt, tools = sent[0][2], sent[0][sent[0].index("--allowedTools") + 1]
-        self.assertIn("Open each attached image with the Read tool before answering: %s" % path, prompt)
-        self.assertNotIn("/etc/passwd,", prompt.split("before answering:")[1])  # only images saved by the chat
+        self.assertIn("Open each attached file with the Read tool before answering: %s, %s" % (path, csv["path"]),
+                      prompt)
+        self.assertNotIn("/etc/passwd", prompt.split("before answering:")[1])  # only files saved by the chat
         self.assertNotIn("Skill", tools)
         self.assertTrue(sent[1][2].startswith("/review-pr 7 look again"))  # a command goes first, as typed
         self.assertIn("Skill", sent[1][sent[1].index("--allowedTools") + 1].split(","))
