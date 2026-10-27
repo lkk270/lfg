@@ -836,7 +836,20 @@ def context(repo, number):
             "agents_md": agents_md(repo, meta["head_sha"], files),
             "read_agents_md": "gh api repos/%s/contents/<path>?ref=%s -H 'Accept: application/vnd.github.raw'"
                               % (repo, meta["head_sha"]),
-            "changed_files": len(files)}
+            "changed_files": len(files), "answered": answered(repo, number)}
+
+
+def answered(repo, number):
+    """Every question about this PR you already answered, from any of its reviews. Given to every new review, Fresh
+    eyes too: they're facts from you, not an earlier review's opinion, so no review asks them again."""
+    out, seen = [], set()
+    for p in (load(repo, number) or {}).get("passes") or []:
+        for q in p.get("questions") or []:
+            key = re.sub(r"\W+", " ", str(q.get("ask") or "")).strip().lower()
+            if q.get("answer") and key not in seen:
+                seen.add(key)
+                out.append({"ask": q["ask"], "answer": q["answer"]})
+    return out
 
 
 # ---------------------------------------------------------------- the dashboard: queue, checkouts, background runs

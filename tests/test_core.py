@@ -4931,6 +4931,26 @@ class ReviewTest(unittest.TestCase):
         with self.assertRaises(R.ReviewError):
             R.session_history("not-an-id")
 
+    def test_a_new_review_knows_every_question_you_already_answered(self):
+        # answered questions came back in later reviews, Fresh eyes and from-scratch ones most of all
+        q = [{"id": "q1", "ask": "Is the old endpoint still called?", "answer": "No, removed in 2026-09.", "costs": 4},
+             {"id": "q2", "ask": "Open one?", "answer": None}]
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding()], "questions": q})
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["questions"][0]["answer"] = "No, removed in 2026-09."  # you answered it on the page
+        R.store(rec)
+        files = {"files": [{"path": "app.py"}]}
+        for fresh in (False, True):
+            with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="x"), \
+                    mock.patch.object(R, "gh_json", return_value=files), mock.patch.object(R, "fresh_eyes", return_value=fresh), \
+                    mock.patch.object(R, "agents_md", return_value=[]):
+                got = R.context("o/r", 7)
+            self.assertEqual(got["answered"], [{"ask": "Is the old endpoint still called?",
+                                                "answer": "No, removed in 2026-09."}], fresh)
+        skill = C.read_text(os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md"))
+        self.assertIn("`answered`", skill)
+
     def test_the_review_chat_takes_any_file_and_slash_commands(self):
         import base64
         png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()

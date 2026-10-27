@@ -75,7 +75,10 @@ preflight: graphs
    their voice (one or two sentences: why not, or what was done instead). `body` stays your own read of it.
 9. **Questions.** Anything you couldn't settle from the code, the ticket or the sources and that would change a
    finding (intent, a product decision, whether a caller exists elsewhere) goes in `questions`, at most five, each
-   with `why` it matters. Don't ask what the code can answer.
+   with `why` it matters. Don't ask what the code can answer. `lfg review context` lists in `answered` every
+   question the user already answered about this PR, from any earlier review: take each answer as a fact, never ask
+   it again (in other words either), and let it settle the findings it bears on. Fresh eyes too: answers aren't an
+   earlier review's opinion. Also check dev-graph Decisions for this repo before asking; a saved one is an answer.
 10. **Save.** Write the JSON below to a scratch file and `lfg review save <pr> --file <path> [--ticket <ID>]`. Fix
    and re-run on a validation error.
 
