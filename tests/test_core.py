@@ -4900,6 +4900,11 @@ class ReviewTest(unittest.TestCase):
                 self.assertLess(time.time() - t, 1)
         self.assertEqual(s.call_count, 1)
 
+    def test_a_review_can_read_back_what_headroom_shortened(self):
+        # a review stopped at 0 when it couldn't get the review skill's full text back from Headroom
+        self.assertIn("mcp__plugin_lfg_headroom__headroom_retrieve", R.RUN_ALLOW)
+        self.assertFalse([x for x in R.RUN_ALLOW if "headroom" in x and "retrieve" not in x])
+
     def test_the_review_chat_takes_any_file_and_slash_commands(self):
         import base64
         png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()

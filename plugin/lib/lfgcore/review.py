@@ -961,7 +961,9 @@ RUN_ALLOW = ["Read", "Grep", "Glob", "Bash(lfg review context *)", "Bash(lfg rev
              "Bash(gh pr view *)", "Bash(gh pr diff *)", "Bash(gh search prs *)", "Bash(gh api repos/*)",
              "Bash(git fetch *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git blame *)",
              "Bash(git grep *)", "mcp__linear__get_issue", "mcp__linear__list_comments",
-             "mcp__plugin_lfg_code-review-graph"]
+             "mcp__plugin_lfg_code-review-graph",
+             # Headroom shortens long tool output (the review skill itself); this reads it back in full
+             "mcp__plugin_lfg_headroom__headroom_retrieve", "mcp__headroom__headroom_retrieve"]
 RUN_DENY = ["Bash(gh api * -X *)", "Bash(gh api * --method *)", "Bash(gh api * -f *)", "Bash(gh api * -F *)",
             "Bash(gh api * --field *)", "Bash(gh api * --raw-field *)", "Bash(gh api * --input *)",
             "Bash(gh api -X *)", "Bash(gh api --method *)", "Bash(lfg review post *)", "Edit", "Write", "NotebookEdit"]
