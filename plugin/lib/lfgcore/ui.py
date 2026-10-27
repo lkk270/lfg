@@ -4,15 +4,16 @@ One place for everything LFG knows about a repo: runs, the Linear mirror, review
 graphs, generated docs/playbooks, dev-graph, second-brain, token usage (incl. Headroom), tool health, the Claude Code
 settings that matter for LFG and every skill Claude Code loads (control.py).
 Data comes from dash.py; the page is ui_assets/ (no external resources). Serves files only from ~/.lfg,
-never from the repo, never secrets. Everything is read-only except the Settings page (config.json, LFG
-skills, global CLAUDE.md, see settings.py): those POSTs need the local edit key that `lfg ui` gives the
-browser, a same-origin request and JSON. Author: Varun Singh.
+never from the repo, never secrets. Changes (settings, todos, reviews...) are POSTs that only the dashboard's own
+page can send: Host and Origin must be this dashboard on 127.0.0.1/localhost, with its X-LFG header (which no other
+site can add without a CORS preflight this server never grants) and a JSON body. Author: Varun Singh.
 """
 import glob
 import html
 import http.server
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -28,6 +29,7 @@ ASSET_TYPES = {"html": "text/html", "js": "text/javascript", "css": "text/css", 
 
 # The dashboard itself loads nothing from outside 127.0.0.1.
 PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "media-src 'self' https://github.com https://github-production-user-asset-6210df.s3.amazonaws.com; "
             "connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; "
             "frame-ancestors 'none'")
 # Tool-generated views (graphify graph/call-flow, code-review-graph graph) pull their chart libraries from
@@ -241,6 +243,22 @@ def api(view, q):
     if view == "integrations":
         from . import control as K
         return K.integrations_view()
+    if view == "todos":
+        from . import todos as T
+        return T.listing()
+    if view == "notifications":
+        from . import notify as N
+        N.page_seen(_arg(q, "visible") == "1")
+        from . import claudesess as CS
+        live = [x for x in CS._LIVE.values() if x.state != "ended"]
+        return dict(N.recent(_arg(q, "since")), sessions={"live": len(live),
+                                                          "needs_you": sum(x.state == "needs-you" for x in live)})
+    if view == "linear_options":  # Linear's teams, projects and people for the Create Linear ticket sheet
+        from . import todos as T
+        try:
+            return T.linear_options(fresh=_arg(q, "fresh") == "1")
+        except T.Invalid as e:
+            return {"available": False, "why": str(e)}
     if view == "tours":
         from . import control as K
         return K.tours_view()
@@ -302,26 +320,16 @@ def api(view, q):
     if view == "stack":  # stacked PRs and their epic; from a PR page there may be no repo picked
         from . import stacks as SK
         return SK.view(rid=_rid(q), gh=_arg(q, "gh"), pr=_arg(q, "pr"), run=_arg(q, "run"), ticket=_arg(q, "ticket"))
+    if view == "github":
+        from . import ghstar
+        return ghstar.view()
+    if view in ("features", "onboarding"):  # about LFG itself, not a repo: work before any project exists
+        from . import onboard as OB
+        return OB.view()
     rid = _rid(q)
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
                                            "on the first session."}
-    if view in ("insight_hotspots", "insight_why", "insight_files"):  # read-only git, only files git knows
-        from . import insights as IN
-        root = dash.repo_root(rid)
-        if not root or not os.path.isdir(root):
-            return {"error": "this project's folder isn't known yet; open Claude Code in it once"}
-        try:
-            if view == "insight_hotspots":
-                return dash.cached("hotspots:%s:%s" % (root, C.git_head(root)), 600, lambda: IN.hotspots(root))
-            if view == "insight_files":
-                q = (_arg(q, "q") or "").lower()
-                return {"files": [f for f in IN.files(root) if q in f.lower()][:40]}
-            s, e = _arg(q, "start"), _arg(q, "end")
-            return IN.why(root, IN.tracked(root, _arg(q, "file")), int(s) if s.isdigit() else None,
-                          int(e) if e.isdigit() else None)
-        except ValueError as e:
-            return {"error": str(e)}
     if view == "overview":
         return dash.overview(rid, _arg(q, "branch"))
     if view == "issues":
@@ -330,8 +338,32 @@ def api(view, q):
         from . import sonar as SQ
         root = dash.repo_root(rid)
         return (SQ.cloud(root) or {"found": False}) if root and os.path.isdir(root) else {"found": False}
+    if view in ("studio", "studio_session"):  # Studio: Claude Code sessions run from the dashboard
+        from . import claudesess as CS
+        root = dash.repo_root(rid)
+        return CS.listing(rid, root) if view == "studio" else CS.detail(rid, root, _arg(q, "id"))
+    if view == "studio_changes":  # every file a session changed, as diffs, from its transcript
+        from . import claudesess as CS
+        return CS.changes(rid, dash.repo_root(rid), _arg(q, "id"))
+    if view == "studio_where":
+        from . import claudesess as CS
+        return CS.where(rid, dash.repo_root(rid))
+    if view in ("studio_image", "studio_context"):  # an image from a transcript; how full the context is
+        from . import claudesess as CS
+        try:
+            if view == "studio_image":
+                return CS.image(_arg(q, "id"), dash.repo_root(rid), _arg(q, "u"), _arg(q, "i") or "0")
+            return CS.live(_arg(q, "id")).context()
+        except (CS.Invalid, ValueError) as e:
+            return {"available": False, "why": str(e)}
+    if view in ("studio_suggest", "studio_files"):
+        from . import claudesess as CS
+        root = dash.repo_root(rid)
+        return CS.suggestions(rid, root) if view == "studio_suggest" else CS.files(root, _arg(q, "q"))
     if view == "runs":
         return dash.runs(rid, _arg(q, "branch"))
+    if view == "runs_search":  # vector search over what each run is about (local only)
+        return dash.search_runs(rid, _arg(q, "q"))
     if view == "run":
         return dash.run_detail(rid, os.path.basename(_arg(q, "run")))
     if view == "file":
@@ -344,6 +376,8 @@ def api(view, q):
         return dash.docs_index(rid)
     if view == "doc":
         return dash.doc(rid, _arg(q, "src"), _arg(q, "path"))
+    if view == "knowledge_local":
+        return {"items": dash.knowledge_list(rid), "dir": dash.knowledge_dir(rid)}
     if view == "view":
         return graph_view(rid, _arg(q, "kind"))
     if view == "reviews":
@@ -356,11 +390,16 @@ def api(view, q):
         return dash.usage(rid, int(_arg(q, "days")) if (_arg(q, "days") or "").isdigit() else 30)
     if view == "graphs":
         return dash.graph_state(rid)
+    if view in ("insight_files", "insight_review", "insight_hotspots", "insight_explain", "insight_why",
+                "insight_tests"):
+        from . import insights as IN
+        return IN.view(view, rid, q)
     return {"available": False, "why": "unknown view"}
 
 
 MAX_BODY = 600_000
 IMAGE_BODY = 7_000_000  # 5 MB of image as base64
+MAX_UPLOAD = 28_000_000  # a file dropped on a session's composer, base64 in JSON (files up to 20 MB)
 NO_KEY = {"/api/save/graphs_build", "/api/save/tour_done"}  # neither changes your settings
 
 
@@ -381,8 +420,35 @@ def save(what, body):
         return S.save_rule(body.get("name"), body.get("text"))
     if what == "rule_reset":
         return S.reset_rule(body.get("name"))
+    if what.startswith("todo_"):
+        return todo_action(what, body)
+    if what.startswith("sess_"):
+        return session_action(what, body)
     if what == "sonar_scan":
         return sonar_scan(str(body.get("repo") or ""))
+    if what == "run_needed":
+        rid = _rid({"repo": [str(body.get("repo") or "")]})
+        try:
+            return dash.set_needed(rid, body.get("run"), bool(body.get("needed")))
+        except ValueError as e:
+            raise S.Invalid(str(e)) from None
+    if what in ("onboarding_save", "feature_toggle", "pages_show_all", "feature_suggestion"):
+        from . import onboard as OB
+        if what == "feature_suggestion":
+            return OB.answer_suggestion(body.get("feature"), body.get("answer") == "yes")
+        if what == "onboarding_save":
+            return OB.choose(body.get("features"), everything=bool(body.get("skip")))
+        if what == "feature_toggle":
+            return OB.toggle(body.get("feature"), bool(body.get("enabled")))
+        return OB.set_show_all(body.get("on"))
+    if what in ("doc_save", "knowledge_add"):
+        rid = _rid({"repo": [str(body.get("repo") or "")]})
+        if not rid:
+            raise S.Invalid("open a project first")
+        return dash.doc_save(rid, body) if what == "doc_save" else dash.knowledge_add(rid, body)
+    if what == "github_star":  # the user clicked Star: the only way the dashboard writes to GitHub
+        from . import ghstar
+        return ghstar.star()
     if what == "run_checks":
         return run_checks(_rid({"repo": [str(body.get("repo") or "")]}), body.get("run"))
     if what == "graphs_build":
@@ -586,6 +652,101 @@ def review_action(what, body):
     raise S.Invalid("unknown action")
 
 
+def session_action(what, body):
+    """The Sessions page: start, continue, message, answer a permission prompt, change mode, stop or end a session.
+    Each runs Claude Code in the project's checkout, as you would in a terminal there."""
+    from . import claudesess as CS
+    rid = _rid({"repo": [str(body.get("repo") or "")]})
+    root = dash.repo_root(rid) if rid else None
+    sid = str(body.get("id") or "")
+    try:
+        if what == "sess_start":
+            return CS.start(rid, root, body.get("text"), body.get("model"), body.get("mode") or "default",
+                            where=body.get("where"), attachments=body.get("attachments"))
+        if what == "sess_upload":
+            return CS.upload(body.get("name"), str(body.get("type") or ""), body.get("data"))
+        if what == "sess_fork":
+            return CS.fork(rid, root, sid, str(body.get("at") or ""), body.get("text"), body.get("attachments"))
+        if what in ("sess_rewind", "sess_rewind_preview"):  # a saved session is started again to rewind it
+            CS.resume(rid, root, sid)
+            live = CS.live(sid)
+            for _ in range(50):  # it's ready once Claude Code has answered `initialize`
+                if live.state != "starting":
+                    break
+                time.sleep(0.1)
+            msg = str(body.get("message") or "")
+            if not re.match(r"^[0-9a-f-]{36}$", msg):
+                raise CS.Invalid("pick a message to rewind to")
+            if what == "sess_rewind_preview":
+                return live.rewind_preview(msg)
+            return live.rewind(msg, str(body.get("what") or ""))
+        if what == "sess_compact":
+            return {"status": CS.live(sid).say("/compact " + CS._one_line(body.get("focus"))[:300]
+                                               if body.get("focus") else "/compact")}
+        if what == "sess_resume":
+            return CS.resume(rid, root, sid)
+        if what == "sess_say":
+            att = body.get("attachments")
+            return {"status": CS.live(sid).say(CS._check(body.get("text"), att), att)}
+        if what == "sess_decide":
+            CS.live(sid).decide(str(body.get("request") or ""), str(body.get("decision") or ""),
+                                answers=body.get("answers"), message=str(body.get("message") or ""))
+            return {"saved": True}
+        if what == "sess_mode":
+            CS.live(sid).set_mode(str(body.get("mode") or ""))
+            return {"saved": True}
+        if what == "sess_interrupt":
+            CS.live(sid).interrupt()
+            return {"saved": True}
+        if what == "sess_end":
+            CS.live(sid).stop()
+            return {"saved": True}
+        if what in ("wt_merge", "wt_merge_all", "wt_remove"):  # the worktrees on the Sessions page
+            from . import worktree as W
+            try:
+                if what == "wt_remove":
+                    return W.remove(root, str(body.get("name") or ""))
+                if what == "wt_merge_all":
+                    into = str(body.get("into") or "")
+                    return {"done": W.merge_all(root, into, True, bool(body.get("merge_commit")))}
+                return W.merge(root, str(body.get("name") or ""), None, bool(body.get("remove")),
+                               bool(body.get("merge_commit")))
+            except W.NeedsMergeCommit as e:
+                return {"needs_merge_commit": True, "why": str(e)}
+            except (ValueError, RuntimeError) as e:
+                raise CS.Invalid(str(e)) from None
+        if what == "sess_rename":
+            title = CS._one_line(body.get("title"))[:90]
+            if not title:
+                raise CS.Invalid("give it a name")
+            CS._remember(sid, title=title)
+            if sid in CS._LIVE:
+                CS._LIVE[sid].title = title
+            return {"saved": True}
+    except CS.Invalid as e:
+        raise S.Invalid(str(e)) from None
+    raise S.Invalid("unknown action")
+
+
+def todo_action(what, body):
+    """The Todos page. `todo_linear` files one Linear issue, only from its Create Linear ticket button."""
+    from . import todos as T
+    tid = str(body.get("id") or "")
+    try:
+        if what == "todo_add":
+            return T.add(body.get("text"), repo=body.get("repo"), notes=body.get("notes") or "")
+        if what == "todo_update":
+            return T.update(tid, text=body.get("text"), notes=body.get("notes"), status=body.get("status"))
+        if what == "todo_delete":
+            return T.delete(tid)
+        if what == "todo_linear":  # the Create Linear ticket button, after the user confirmed the exact text
+            return T.create_linear(tid, body.get("title"), body.get("description") or "", body.get("team") or "",
+                                   body.get("project") or "", body.get("assignee") or "")
+    except T.Invalid as e:
+        raise S.Invalid(str(e)) from None
+    raise S.Invalid("unknown action")
+
+
 def build_graphs(rid, what):
     """Start building/refreshing a repo's code map (or its docs) in the background, like the hooks do."""
     from . import docs as D
@@ -697,8 +858,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self._send(404, "not found: %s" % html.escape(u.path), "text/plain")
 
     def do_POST(self):
-        """Settings writes only: same host and origin, the dashboard's header, JSON, and the edit key. Building the
-        code map changes no settings or files of yours (the hooks start the same job), so it needs no key."""
+        """Changes from the dashboard's own page only: same host and origin, the dashboard's header, and JSON."""
         def no(code, why):
             return self._send(code, json.dumps({"ok": False, "why": why}), "application/json")
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
@@ -712,7 +872,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if u.path not in NO_KEY and not S.key_ok(self.headers.get("X-LFG-Key")):
             return no(403, "editing is locked: run `lfg ui --unlock` in your terminal")
         size = int(self.headers.get("Content-Length") or 0)
-        limit = IMAGE_BODY if u.path == "/api/save/chat_image" else MAX_BODY  # a pasted screenshot is bigger
+        limit = {"/api/save/chat_image": IMAGE_BODY, "/api/save/sess_upload": MAX_UPLOAD}.get(u.path, MAX_BODY)
         if not (self.headers.get("Content-Type") or "").startswith("application/json") or not 0 < size <= limit:
             return no(400, "expected a JSON body")
         try:
@@ -872,6 +1032,73 @@ def _restart_on_update(srv, every=3):
         return
 
 
+def watch_jobs(quiet=False):
+    """One pass over every project's background jobs: anything that finished is read in and announced (notify.py),
+    even when nobody has its page open. Reviews, answers and comment reading, fix runs, Diff-tab threads, Linear
+    tickets, the SonarQube scans and checks started from here, and reviews whose PR was merged or closed. `quiet`
+    (the first pass after start) marks scans and checks that ended before the dashboard started as seen instead of
+    announcing old news."""
+    import glob
+    from . import notify as N
+    from . import prdiff as PD
+    from . import prreview as PR
+    for rid in dash.repo_ids():
+        for d in glob.glob(os.path.join(PR.folder(rid), "pr-*")):
+            n = int(os.path.basename(d)[3:]) if os.path.basename(d)[3:].isdigit() else None
+            if n is None:
+                continue
+            if os.path.exists(os.path.join(d, "job.json")):
+                PR.settle(rid, n)
+            if '"job"' in C.read_text(os.path.join(d, "diffchat.json")):
+                PD.settle(rid, n)
+        if any(m.get("status") != "closed" for _n, m in PR._metas(rid)):  # merged or closed on GitHub since?
+            root = dash.repo_root(rid)
+            if root and os.path.isdir(root):
+                PR.sync_states(rid, root, PR.open_prs(rid, root))
+        if glob.glob(C.lfg_path("runs", rid, "*", "run.json")):  # PR states for the runs' tags, every 10 minutes
+            dash.refresh_pr_states(rid)
+        for d in glob.glob(C.lfg_path("runs", rid, "*", "fix-job.json")):
+            PR.settle_fix(os.path.dirname(d))
+        for p in glob.glob(C.lfg_path("runs", rid, "*", "gate-running.json")):
+            job = C.read_json(p, None)
+            if isinstance(job, dict) and not job.get("announced") and not N.alive(job.get("pid")):
+                ready = C.read_json(os.path.join(os.path.dirname(p), "ready.json"), None) or {}
+                run = os.path.basename(os.path.dirname(p))
+                if not quiet:
+                    N.add("checks", "Checks passed" if ready.get("green") else "Checks failed", run,
+                          "#runs/%s" % run, rid, ok=bool(ready.get("green")))
+                C.write_json(p, dict(job, announced=True))
+        p = C.lfg_path("repos", rid, "sonar-running.json")
+        job = C.read_json(p, None)
+        if isinstance(job, dict) and not job.get("announced") and not N.alive(job.get("pid")):
+            from . import sonar as SQ
+            res = SQ.last(rid) or {}
+            fresh = res.get("ts") and res["ts"] >= (job.get("started") or "")
+            if not quiet:
+                gate = "passed" if res.get("gate") == "OK" else "failed" if res.get("gate") else "unknown"
+                N.add("sonar", "SonarQube scan done: quality gate %s" % gate if fresh
+                      else "The SonarQube scan didn't finish",
+                      "%s issues on this branch" % res.get("mine", 0) if fresh
+                      else "See the scan log on the Checks page",
+                      "#checks", rid, ok=bool(fresh and res.get("gate") == "OK"))
+            C.write_json(p, dict(job, announced=True))
+    if os.path.exists(C.lfg_path("todos.json")) and '"linear_job"' in C.read_text(C.lfg_path("todos.json")):
+        from . import todos as T
+        T.listing()
+
+
+def _watcher(every=4):
+    import time
+    first = True
+    while True:
+        try:
+            watch_jobs(quiet=first)
+            first = False
+        except Exception:  # a bad file must never stop the dashboard; the page shows the job's state anyway
+            pass
+        time.sleep(every)
+
+
 def serve(port, open_browser=True):
     Handler.port = port
     try:
@@ -890,6 +1117,9 @@ def serve(port, open_browser=True):
     # tool/MCP checks take a few seconds; warm them so the first overview shows every integration
     threading.Thread(target=dash.tools, daemon=True).start()
     threading.Thread(target=_restart_on_update, args=(srv,), daemon=True).start()
+    from . import notify as N
+    N.DESK["port"] = port  # macOS notifications when no dashboard tab is in front
+    threading.Thread(target=_watcher, daemon=True).start()  # announces finished AI jobs, scans and checks
     print("LFG dashboard: http://127.0.0.1:%d  (Ctrl-C to stop)" % port)
     if open_browser:
         threading.Timer(0.5, open_editor, (port,)).start()
@@ -897,6 +1127,9 @@ def serve(port, open_browser=True):
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        from . import claudesess as CS
+        CS.stop_all()  # live sessions end with the dashboard; each can be continued later
     if getattr(srv, "restart", False):
         srv.server_close()
         argv = getattr(sys, "orig_argv", None) or [sys.executable] + sys.argv  # keeps python's own flags (3.10+)

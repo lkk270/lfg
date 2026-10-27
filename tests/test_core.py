@@ -5,6 +5,7 @@ import glob
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -525,15 +526,39 @@ class DocsTest(unittest.TestCase):
         C.branch_docs_dir(root, "empty-branch")
         idx = dash.docs_index(rid)
         self.assertEqual([i["title"] for i in idx["root"]["items"]], ["Glossary", "How billing retries work"])
-        wiki, adr = idx["root"]["folders"]
-        self.assertEqual((wiki["name"], [i["title"] for i in wiki["items"]]),
-                         ("Wiki", ["Onboarding tour", "Landmines", "How to add a route"]))
+        (adr,) = idx["root"]["folders"]  # playbooks are LFG's own notes for its agents: not listed as docs
         self.assertEqual((adr["name"], adr["items"][0]["title"]), ("Decisions", "Use Postgres"))
+        self.assertEqual([i["title"] for i in idx["intro"]], ["What LFG is", "How it works", "Everyday commands"])
+        self.assertIn("lfg enable", dash.doc(rid, "intro", idx["intro"][1]["path"])["text"])
         self.assertEqual(len(idx["branches"]), 1)  # folders with no docs are left out
         b = idx["branches"][0]
         self.assertEqual((b["name"], b["items"][0]["title"]), ("feature/retry-v2", "Retry v2 design"))
         self.assertIn("Retry v2", dash.doc(rid, "repo", b["items"][0]["path"])["text"])
         self.assertEqual(dash.doc(rid, "repo", "branches/../../x.md")["text"], "not found")
+
+    def test_docs_written_in_the_dashboard_and_pasted_knowledge(self):
+        from lfgcore import settings as ST
+        rid = "docs-test-write"
+        r = dash.doc_save(rid, {"title": "How refunds work", "text": "Refunds go through `refund()`.",
+                                "where": "project"})
+        self.assertEqual(r["path"], "how-refunds-work.md")
+        self.assertTrue(dash.doc(rid, "repo", r["path"])["text"].startswith("# How refunds work\n"))
+        again = dash.doc_save(rid, {"title": "How refunds work", "text": "x"})
+        self.assertEqual(again["path"], "how-refunds-work-2.md")
+        dash.doc_save(rid, {"title": "How refunds work", "text": "Edited.", "path": r["path"]})  # edits keep the file
+        self.assertIn("Edited.", dash.doc(rid, "repo", r["path"])["text"])
+        with self.assertRaises(ST.Invalid):
+            dash.doc_save(rid, {"title": "x", "text": "y", "path": "../../config.json"})
+        with self.assertRaises(ST.Invalid):
+            dash.doc_save(rid, {"title": "keys", "text": "AKIAIOSFODNN7EXAMPLE and ghp_" + "a" * 36})
+        with self.assertRaises(ST.Invalid):
+            dash.doc_save(rid, {"title": "", "text": "no title"})
+        k = dash.knowledge_add(rid, {"title": "Money is integer cents", "text": "Never floats.", "kind": "decision"})
+        items = dash.knowledge_list(rid)
+        self.assertEqual((items[0]["title"], items[0]["kind"], items[0]["file"]),
+                         ("Money is integer cents", "decision", k["file"]))
+        with self.assertRaises(ST.Invalid):
+            dash.knowledge_add(rid, {"title": "Empty", "text": "  "})
 
     def test_community_pages_get_readable_names(self):
         rid = "docs-test-0003"
@@ -753,6 +778,7 @@ class HeadroomTest(unittest.TestCase):
         self.write({"permissions": {}})
         with mock.patch.object(HR, "wait_live", return_value=True):
             self.assertEqual(HR.setup(new_scope="everywhere")["upstream"], HR.DEFAULT_UPSTREAM)
+        self.assertEqual(self.read()["env"]["ENABLE_TOOL_SEARCH"], "true")  # MCP tool search kept on behind it
         with mock.patch.object(C, "run"):
             HR.off()
         self.assertEqual(self.read(), {"permissions": {}})
@@ -1162,7 +1188,6 @@ class RulesAndLeanOutputTest(unittest.TestCase):
     def test_graph_build_needs_a_known_repo(self):
         with self.assertRaises(ST.Invalid):
             ui.build_graphs("nope-12345678", "update")
-        self.assertIn("/api/save/graphs_build", ui.NO_KEY)
 
     def test_lean_output_drops_passing_check_logs(self):
         from lfgcore import cli
@@ -1738,6 +1763,759 @@ class OwnRunTest(unittest.TestCase):
         self.assertFalse(dash._for_repo(summary, [])["stages"]["tasks"])
         planned = dict(summary, stages=dict(summary["stages"], tasks=True))
         self.assertTrue(dash._for_repo(planned, [])["stages"]["tasks"])
+class TodosTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import todos as T
+        self.T = T
+        if os.path.exists(T._path()):
+            os.remove(T._path())
+
+    def test_todo_statuses_and_an_old_done_flag(self):
+        T = self.T
+        C.write_json(T._path(), {"todos": [{"id": "old1", "text": "From before", "done": True, "created": "2026"}]})
+        a = T.add("  Fix the   flaky login test ", repo="app-1")["id"]
+        b = T.add("Write the release notes")["id"]
+        d = T.listing()
+        self.assertEqual([(t["text"], t["status"]) for t in d["todos"]],
+                         [("Write the release notes", "todo"), ("Fix the flaky login test", "todo"),
+                          ("From before", "done")])
+        T.update(a, status="in_progress")
+        T.update(b, status="cancelled")
+        self.assertEqual(T.listing()["counts"], {"todo": 0, "in_progress": 1, "cancelled": 1, "done": 1})
+        for bad in ("blocked", ""):
+            with self.assertRaises(T.Invalid):
+                T.update(a, status=bad)
+        with self.assertRaises(T.Invalid):
+            T.add("   ")
+        with self.assertRaises(T.Invalid):  # a secret never lands in the list
+            T.add("token AKIA" + "ABCDEFGHIJKLMNOP")
+        T.delete(b)
+        with self.assertRaises(T.Invalid):
+            T.update(b, status="done")
+
+    def test_linear_ticket_only_on_create_then_the_todo_is_tagged(self):
+        T = self.T
+        a = T.add("Fix the flaky login test", notes="fails on CI")["id"]
+        self.assertNotIn("linear", T.listing()["todos"][0])  # adding or editing never touches Linear
+        seen, answer = {}, {}
+
+        def popen(argv, **kw):
+            seen.update(argv=argv, env=kw["env"])
+            kw["stdout"].write(json.dumps({"result": answer["text"]}).encode())
+            buf = types.SimpleNamespace(data=b"")
+            buf.write = lambda x: setattr(buf, "data", buf.data + x)
+            buf.close = lambda: seen.update(prompt=buf.data.decode())
+            return types.SimpleNamespace(pid=999999999, stdin=buf)
+        with mock.patch.object(T.subprocess, "Popen", popen), mock.patch.object(C, "which", lambda x: "/bin/claude"):
+            no_team = dict(C.DEFAULT_CONFIG, linear={"team": "", "workspace": ""})
+            with mock.patch.object(C, "config", lambda: no_team), self.assertRaises(T.Invalid):  # no team anywhere
+                T.create_linear(a, "Fix the flaky login test")
+            answer["text"] = "Done.\n```json\n{\"identifier\": \"ATO-42\", \"url\": " \
+                             "\"https://linear.app/atomus/issue/ATO-42/fix-the-flaky-login-test\"}\n```"
+            self.assertTrue(T.create_linear(a, "Fix the flaky login test", "fails on CI", team="ATO")["started"])
+            self.assertIn("Team: ATO", seen["prompt"])
+            self.assertIn("Title: Fix the flaky login test", seen["prompt"])
+            allowed = seen["argv"][seen["argv"].index("--allowedTools") + 1].split(",")
+            self.assertIn("mcp__linear__create_issue", allowed)
+            self.assertFalse([x for x in allowed if "delete" in x or "comment" in x or x == "Bash"])
+            argv = seen["argv"]  # only Linear is loaded: no other MCP servers, tools, skills or user plugins
+            self.assertIn("--strict-mcp-config", argv)
+            self.assertEqual(list(json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]), ["linear"])
+            self.assertEqual((argv[argv.index("--tools") + 1], argv[argv.index("--setting-sources") + 1]),
+                             ("", "project"))
+            self.assertIn("--disable-slash-commands", argv)
+            t = T.listing()["todos"][0]
+            self.assertEqual(t["linear"]["key"], "ATO-42")
+            self.assertEqual(t["linear"]["url"], "https://linear.app/atomus/issue/ATO-42/fix-the-flaky-login-test")
+            self.assertNotIn("linear_job", t)
+            with self.assertRaises(T.Invalid):  # one ticket per todo
+                T.create_linear(a, "again", team="ATO")
+            b = T.add("Second one")["id"]
+            answer["text"] = "Linear isn't connected.\n```json\n{\"error\": \"Linear MCP needs authentication\"}\n```"
+            T.create_linear(b, "Second one", team="ATO")
+            t = next(x for x in T.listing()["todos"] if x["id"] == b)
+            self.assertEqual(t["linear_error"], T.SIGN_IN)
+            from lfgcore import notify as N
+            titles = [e["title"] for e in N.recent()["events"]][:2]
+            self.assertEqual(titles, ["Linear ticket not created", "ATO-42 created in Linear"])
+            self.assertNotIn("linear", t)
+            answer["text"] = "```json\n{\"identifier\": \"ATO-9\", \"url\": \"https://evil.example/issue/ATO-9\"}\n```"
+            T.create_linear(b, "Second one", team="ATO")  # a link that isn't Linear's is never kept
+            self.assertNotIn("linear", next(x for x in T.listing()["todos"] if x["id"] == b))
+
+
+class TodoLinearOptionsTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import todos as T
+        self.T = T
+        for f in ("linear-options.json", "linear-options.job.json"):
+            p = T._opt_path(f)
+            if os.path.exists(p):
+                os.remove(p)
+        if os.path.exists(T._path()):
+            os.remove(T._path())
+
+    def test_options_come_from_linear_and_only_picked_fields_are_sent(self):
+        T = self.T
+        def call(i, tool, result):  # one tool call and Linear's answer, as stream-json prints them
+            return [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": i,
+                                                                   "name": "mcp__linear__" + tool}]}},
+                    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": i,
+                                                              "content": [{"type": "text",
+                                                                           "text": json.dumps(result)}]}]}}]
+        ato = {"key": "ATO", "name": "Atomus"}
+        stream = (call("1", "list_teams", {"teams": [ato, {"key": "EEL", "name": "eel"},
+                                                     {"key": "CS", "name": "CS", "retiredAt": "2026-05-01"},
+                                                     {"key": "bad key!", "name": "x"}]})
+                  + call("2", "list_projects", {"projects": [
+                      {"name": "Aegis Agent v2", "teams": [ato], "status": {"type": "started"}},
+                      {"name": "Old one", "teams": [ato], "status": {"type": "canceled"}}], "hasNextPage": True})
+                  + call("3", "list_projects", {"projects": [
+                      {"name": "Page two", "teams": [ato], "status": {"type": "backlog"}}], "hasNextPage": False})
+                  + call("4", "list_users", {"users": [
+                      {"name": "Varun Singh", "displayName": "varun", "isActive": True},
+                      {"name": "Lee Park", "displayName": "lee", "isActive": True},
+                      {"name": "Gone", "isActive": False}]})
+                  + [{"type": "result", "result": "done"}])
+        started, seen = [], {}
+
+        def popen(argv, **kw):
+            started.append(argv)
+            if "stream-json" in argv:
+                kw["stdout"].write("\n".join(json.dumps(x) for x in stream).encode())
+            else:
+                text = "```json\n{\"identifier\": \"ATO-7\", \"url\": \"https://linear.app/atomus/issue/ATO-7/x\"}\n```"
+                kw["stdout"].write(json.dumps({"result": text}).encode())
+            buf = types.SimpleNamespace(data=b"")
+            buf.write = lambda x: setattr(buf, "data", buf.data + x)
+            buf.close = lambda: seen.update(prompt=buf.data.decode())
+            return types.SimpleNamespace(pid=999999999, stdin=buf)
+        with mock.patch.object(T.subprocess, "Popen", popen), mock.patch.object(C, "which", lambda x: "/bin/claude"):
+            self.assertTrue(T.linear_options()["loading"])  # nothing cached: one read-only fetch starts
+            allowed = started[0][started[0].index("--allowedTools") + 1].split(",")
+            self.assertEqual(sorted(allowed), sorted(T.OPTION_TOOLS))  # reads only
+            denied = started[0][started[0].index("--disallowedTools") + 1].split(",")
+            self.assertFalse(set(T.OPTION_TOOLS) & set(denied))  # the reads it needs aren't hidden
+            self.assertIn("mcp__linear__save_issue", denied)
+            o = T.linear_options()  # the fetch finished: read in and cleaned
+            self.assertEqual([(t["key"], t["retired"]) for t in o["teams"]],
+                             [("ATO", False), ("EEL", False), ("CS", True)])  # every team; retired last
+            self.assertEqual(o["projects"], [{"name": "Aegis Agent v2", "teams": ["ATO"]},
+                                             {"name": "Page two", "teams": ["ATO"]}])  # all pages, none canceled
+            self.assertEqual([u["name"] for u in o["users"]], ["Lee Park", "Varun Singh"])
+            self.assertFalse(o["loading"])
+            self.assertEqual(len(started), 1)  # cached: no second fetch
+            a = T.add("Short-lived enrollment token", repo="aegis-agent-1")["id"]
+            for bad in ({"project": "aegis-agent"}, {"assignee": "Someone Else"}):
+                with self.assertRaises(T.Invalid):  # only what Linear listed
+                    T.create_linear(a, "Short-lived enrollment token", team="ATO", **bad)
+            T.create_linear(a, "Short-lived enrollment token", "Repo: aegis-agent", team="ATO",
+                            project="Aegis Agent v2", assignee="Lee Park")
+            self.assertIn("Project: Aegis Agent v2\nAssignee: Lee Park", seen["prompt"])
+            self.assertIn("never pick a project", seen["prompt"])
+            T.add("Another")
+            b = T.listing()["todos"][0]["id"]
+            T.create_linear(b, "Another", team="ATO")
+            self.assertIn("Project: (none)\nAssignee: (none)", seen["prompt"])
+            t = next(x for x in T.listing()["todos"] if x["id"] == a)
+            self.assertEqual((t["linear"]["key"], t["linear"]["project"], t["linear"]["assignee"]),
+                             ("ATO-7", "Aegis Agent v2", "Lee Park"))
+
+
+class NotifyTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import notify as N
+        self.N = N
+        if os.path.exists(N._path()):
+            os.remove(N._path())
+
+    def test_feed_newest_first_and_since(self):
+        N = self.N
+        a = N.add("review", "Review of #3 is ready", "Add four", "#review/3", "app-1")
+        b = N.add("fix", "Fix run failed", "", "#runs/x", "app-1", ok=False)
+        d = N.recent()
+        self.assertEqual([e["title"] for e in d["events"]], ["Fix run failed", "Review of #3 is ready"])
+        self.assertEqual(d["latest"], b["id"])
+        self.assertEqual([e["id"] for e in N.recent(since=a["id"])["events"]], [b["id"]])
+        self.assertEqual(N.recent(since=b["id"]), {"events": [], "latest": b["id"], "desktop": ""})  # no lfg ui
+        self.assertFalse(N.alive(999999999))
+
+    def test_macos_notification_only_when_no_dashboard_tab_is_in_front(self):
+        N = self.N
+        posted = []
+        tools = {"terminal-notifier": "/opt/homebrew/bin/terminal-notifier", "osascript": "/usr/bin/osascript"}
+        with mock.patch.dict(N.DESK, {"port": 7777, "seen": 0.0, "visible": False}), \
+                mock.patch.object(N.subprocess, "Popen", lambda argv, **kw: posted.append(argv)), \
+                mock.patch.object(C, "which", lambda x: tools.get(x)):
+            N.page_seen(True)  # the dashboard is the tab in front: its toast is enough
+            N.add("review", "Review of #34 is ready", "Harden install", "#review/34", "aegis-1")
+            self.assertEqual(posted, [])
+            N.page_seen(False)  # another tab or app is in front
+            N.add("review", "Review of #34 is ready", "Harden install", "#review/34", "aegis-1")
+            argv = posted[-1]
+            self.assertEqual(argv[0], "/opt/homebrew/bin/terminal-notifier")
+            self.assertEqual(argv[argv.index("-open") + 1], "http://127.0.0.1:7777/?repo=aegis-1#review/34")
+            self.assertEqual(argv[argv.index("-subtitle") + 1], "Review of #34 is ready")
+            N.page_seen(True)
+            N.DESK["seen"] -= 60  # the page stopped asking (closed, or a throttled background tab)
+            N.add("fix", "Fix run failed", "", "#runs/x", "", ok=False)
+            self.assertIn("http://127.0.0.1:7777/#runs/x", posted[-1])
+            self.assertIn("LFG · needs a look", posted[-1])
+            tools.pop("terminal-notifier")  # without it: osascript's banner, text passed as arguments
+            N.add("linear", 'ATO-1 "quoted" created', "x", "#todos", "")
+            self.assertEqual(posted[-1][:2], ["/usr/bin/osascript", "-e"])
+            self.assertIn('ATO-1 "quoted" created', posted[-1])
+            self.assertFalse([a for a in posted[-1] if "display notification" in a and "quoted" in a])
+            self.assertEqual(N.recent()["desktop"], "osascript")
+        N.add("x", "outside lfg ui")  # no dashboard running: nothing is posted
+        self.assertEqual(len(posted), 3)
+
+    def test_watcher_announces_checks_and_scans_once_and_not_old_ones(self):
+        from lfgcore import ui
+        N = self.N
+        rid = "watch-%08x" % (abs(hash(self._testMethodName)) % 16 ** 8)
+        run = C.ensure_dir(C.lfg_path("runs", rid, "20261023-1200-x"))
+        C.write_json(os.path.join(run, "gate-running.json"), {"pid": 999999999, "started": "2026-10-23T12:00:00"})
+        C.write_json(os.path.join(run, "ready.json"), {"green": False})
+        with mock.patch.object(dash, "repo_ids", lambda: [rid]):
+            ui.watch_jobs(quiet=True)  # the dashboard just started: old news is marked seen, not announced
+            self.assertEqual(N.recent()["events"], [])
+            C.write_json(os.path.join(run, "gate-running.json"), {"pid": 999999999, "started": "2026-10-23T13:00"})
+            C.write_json(os.path.join(run, "ready.json"), {"green": True})
+            ui.watch_jobs()
+            ui.watch_jobs()  # once only
+        ev = N.recent()["events"]
+        self.assertEqual([(e["title"], e["href"], e["repo"], e["ok"]) for e in ev],
+                         [("Checks passed", "#runs/20261023-1200-x", rid, True)])
+
+
+class RunTagsAndSearchTest(unittest.TestCase):
+    def setUp(self):
+        self.rid = "runs-%08x" % (abs(hash(self._testMethodName)) % 16 ** 8)
+
+    def _run(self, name, brief, **meta):
+        d = C.ensure_dir(C.lfg_path("runs", self.rid, name))
+        C.write_json(os.path.join(d, "run.json"), dict({"run_id": name, "slug": name[14:]}, **meta))
+        C.write_text(os.path.join(d, "01-brief.md"), brief)
+        return d
+
+    def test_tags_and_whether_a_run_is_still_needed(self):
+        prs = {7: {"number": 7, "state": "MERGED", "url": "https://github.com/o/r/pull/7", "headRefName": "feat/a"},
+               8: {"number": 8, "state": "OPEN", "url": "u8", "headRefName": "feat/b"}}
+        by_branch = {p["headRefName"]: p for p in prs.values()}
+        gb = {"default": "main", "merged": {"old/c"}, "local": [], "current": "main"}
+
+        def life(r):
+            return dash.run_life(dict({"stages": {"brief": True, "build": False}}, **r), prs, by_branch, gb)
+        fix = dash.run_life({"kind": "pr-fix", "pr": 7, "fix": {"ok": True, "done": {"failed": 0}}}, prs, by_branch, gb)
+        self.assertEqual([t["text"] for t in fix["tags"]], ["Fix run", "PR #7"])
+        self.assertEqual((fix["tags"][1]["tone"], fix["life"], fix["life_why"]),
+                         ("merged", "not-needed", "PR #7 merged"))
+        self.assertEqual(life({"branch": "feat/b"})["life"], "active")  # its PR is still open
+        self.assertEqual(life({"branch": "old/c"})["life_why"], "Branch merged")
+        self.assertEqual(life({"branch": "main"})["tags"], [])  # the default branch isn't any PR's
+        self.assertEqual(life({"branch": "x", "issue": "ato-12"})["tags"], [{"text": "ATO-12", "tone": ""}])
+        long = life({"branch": "x", "issue": "iss-rollout-devices-onboarding-backend-gap-analysis"})["tags"][0]
+        self.assertEqual((long["text"], long["title"]),
+                         ("Issue: rollout devices onboarding…", "iss-rollout-devices-onboarding-backend-gap-analysis"))
+        self.assertEqual(life({"branch": "x", "stages": {"brief": True, "build": True}})["life"], "done")
+        self.assertEqual(life({"branch": "feat/b", "archived": "2026"})["life_why"], "Marked not needed")
+
+    def test_pr_states_are_fetched_by_the_watcher_and_only_read_by_pages(self):
+        calls = []
+        out = json.dumps([{"number": 5, "headRefName": "feat/x", "state": "MERGED"},
+                          {"number": 9, "headRefName": "feat/x", "state": "OPEN"}])
+
+        def gh(argv, **k):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, out)
+        with mock.patch.object(dash, "repo_root", lambda rid: C.LFG_HOME), \
+                mock.patch.object(C, "which", lambda x: "/bin/gh"), mock.patch.object(C, "run", gh):
+            self.assertEqual(dash.pr_states(self.rid), ({}, {}))  # nothing fetched yet: a page doesn't ask GitHub
+            self.assertEqual(calls, [])
+            self.assertTrue(dash.refresh_pr_states(self.rid))
+            self.assertFalse(dash.refresh_pr_states(self.rid))  # fresh for 10 minutes
+            self.assertEqual(len(calls), 1)
+        by_n, by_branch = dash.pr_states(self.rid)
+        self.assertEqual((sorted(by_n), by_branch["feat/x"]["number"]), ([5, 9], 9))  # the newest PR of a branch
+
+    def test_mark_not_needed_and_back(self):
+        d = self._run("20261024-0900-thing", "a thing")
+        dash.set_needed(self.rid, "20261024-0900-thing", False)
+        self.assertTrue(C.read_json(os.path.join(d, "run.json"), {})["archived"])
+        dash.set_needed(self.rid, "20261024-0900-thing", True)
+        self.assertNotIn("archived", C.read_json(os.path.join(d, "run.json"), {}))
+        with self.assertRaises(ValueError):
+            dash.set_needed(self.rid, "../../etc", False)
+
+    def test_search_ranks_runs_by_what_they_are_about(self):
+        from lfgcore import runsearch as RS
+        a = self._run("20261020-1000-partition", "# Partition id for Windows devices\nEnroll each OS partition "
+                      "of a dual-boot machine separately using partition_id.", branch="varun/partitions")
+        b = self._run("20261021-1000-billing", "# Stripe billing webhooks\nRetry failed invoice events.")
+        c = self._run("20261022-1000-osquery", "# Harden osquery install on Windows\nVerify the MSI hash.")
+        dirs = [a, b, c]
+        with mock.patch.object(RS, "available", lambda: ("nomic-embed-text", False)):  # no model: TF-IDF
+            r = RS.search(self.rid, "dual boot partition enrollment", dirs)
+        self.assertEqual((r["engine"], r["results"][0]["run"]), ("tfidf", "20261020-1000-partition"))
+        self.assertNotIn("20261021-1000-billing", [x["run"] for x in r["results"]])
+        calls = []
+
+        def ollama(path, body=None, timeout=5):  # a fake local Ollama: vectors from a few keywords
+            calls.append(len(body["input"]))
+            keys = ["partition", "billing", "osquery"]
+            return {"embeddings": [[float(k in t.lower()) + 0.01 for k in keys] for t in body["input"]]}
+        from lfgcore import settings as ST
+        with mock.patch.object(RS, "available", lambda: ("nomic-embed-text", True)), \
+                mock.patch.object(ST, "_ollama_json", ollama):
+            r = RS.search(self.rid, "which run touched osquery?", dirs)
+            self.assertEqual((r["engine"], r["results"][0]["run"]), ("embeddings", "20261022-1000-osquery"))
+            RS.search(self.rid, "billing", dirs)  # the runs are embedded once, then only the query
+            self.assertEqual(calls, [3, 1, 1])
+            C.write_text(os.path.join(b, "02-design.md"), "now also about partitions")
+            os.utime(os.path.join(b, "02-design.md"), (time.time() + 5, time.time() + 5))
+            RS.search(self.rid, "billing", dirs)
+            self.assertEqual(calls[-2:], [1, 1])  # the changed run is embedded again
+
+
+FAKE_CLAUDE = r"""#!/usr/bin/env python3
+import json, sys, os
+argv = sys.argv
+sid = argv[argv.index("--session-id") + 1] if "--session-id" in argv else argv[argv.index("--resume") + 1]
+if os.environ.get("FAKE_ARGS"):
+    open(os.environ["FAKE_ARGS"], "a").write(json.dumps(argv[1:]) + "\n" + json.dumps(
+        {"ckpt": os.environ.get("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING")}) + "\n")
+REPLIES = {"rewind_files": {"canRewind": True, "filesChanged": ["/r/a.txt"], "insertions": 1, "deletions": 2},
+           "rewind_conversation": {"rewound": True, "prefillText": "the old prompt"},
+           "get_context_usage": {"percentage": 18, "totalTokens": 36000, "maxTokens": 200000,
+                                 "isAutoCompactEnabled": True, "autoCompactThreshold": 167000, "categories": [
+                                     {"name": "Messages", "tokens": 5000, "kind": "used"},
+                                     {"name": "Free space", "tokens": 160000, "kind": "free"}]}}
+def out(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    ev = json.loads(line)
+    if ev.get("type") == "control_request" and ev["request"]["subtype"] == "initialize":
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": ev["request_id"]}})
+        out({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "session_id": sid})
+    elif ev.get("type") == "control_request" and ev["request"]["subtype"] in REPLIES:
+        r = dict(REPLIES[ev["request"]["subtype"]])
+        if ev["request"].get("dry_run") is None and "filesChanged" in r:
+            r = {"canRewind": True}
+        if os.environ.get("FAKE_ARGS"):
+            open(os.environ["FAKE_ARGS"], "a").write(json.dumps(ev["request"]) + "\n")
+        out({"type": "control_response",
+             "response": {"subtype": "success", "request_id": ev["request_id"], "response": r}})
+    elif ev.get("type") == "user":
+        out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Write",
+                                                           "input": {"file_path": "x.txt", "content": "hi"}}]}})
+        out({"type": "control_request", "request_id": "r1", "request": {"subtype": "can_use_tool", "tool_name": "Write",
+             "input": {"file_path": "x.txt", "content": "hi"}, "description": "x.txt"}})
+        ans = json.loads(sys.stdin.readline())
+        ok = ans["response"]["response"]["behavior"] == "allow"
+        open(os.environ["FAKE_LOG"], "a").write(json.dumps({"said": ev["message"]["content"], "allowed": ok}) + "\n")
+        text = "Wrote it." if ok else "Skipped."
+        out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+        out({"type": "result", "subtype": "success", "total_cost_usd": 0.01})
+"""
+
+
+class ClaudeSessionsTest(unittest.TestCase):
+    def setUp(self):
+        from lfgcore import claudesess as CS
+        self.CS = CS
+        self.root = tempfile.mkdtemp(prefix="lfg-sess-")
+        self.proj = tempfile.mkdtemp(prefix="lfg-projects-")
+
+    def _transcript(self, sid, lines):
+        d = C.ensure_dir(os.path.join(self.proj, re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(self.root))))
+        C.write_text(os.path.join(d, sid + ".jsonl"), "".join(json.dumps(x) + "\n" for x in lines))
+
+    def test_questions_and_plans_are_answered_not_allowed(self):
+        CS = self.CS
+        lv = CS.Live.__new__(CS.Live)
+        sent = []
+        lv._write = lambda obj: sent.append(obj) or True
+        lv.pending, lv.allowed, lv.state, lv.sid, lv.rid, lv.title = {}, {"AskUserQuestion"}, "working", "s", "r", "T"
+        qs = [{"question": "Where?", "header": "Location", "options": [{"label": "Required"}, {"label": "Optional"}], "multiSelect": False},
+              {"question": "Which?", "header": "Kinds", "options": [{"label": "Printers"}, {"label": "Gateways"}], "multiSelect": True}]
+        with mock.patch.object(CS.N, "add"):
+            lv._ask({"request_id": "q1", "request": {"tool_name": "AskUserQuestion", "input": {"questions": qs}}})
+            lv._ask({"request_id": "p1", "request": {"tool_name": "ExitPlanMode", "input": {"plan": "1. do it"}}})
+        self.assertEqual(sent, [])  # never auto-allowed, even after "Allow for this session"
+        self.assertEqual((lv.pending["q1"]["kind"], lv.pending["p1"]["kind"], lv.state), ("question", "plan", "needs-you"))
+        with self.assertRaises(CS.Invalid):
+            lv.decide("q1", "answer", answers={"Where?": "Required"})  # every question needs an answer
+        lv.decide("q1", "answer", answers={"Where?": "Required", "Which?": ["Printers", "Gateways"]})
+        resp = sent[-1]["response"]["response"]
+        self.assertEqual(resp["behavior"], "allow")
+        self.assertEqual(resp["updatedInput"]["answers"], {"Where?": "Required", "Which?": "Printers, Gateways"})
+        self.assertEqual(resp["updatedInput"]["questions"], qs)
+        lv.decide("p1", "revise", message="split step 1")
+        self.assertEqual(sent[-1]["response"]["response"]["behavior"], "deny")
+        self.assertIn("split step 1", sent[-1]["response"]["response"]["message"])
+        self.assertEqual((lv.pending, lv.state), ({}, "working"))
+
+    def test_changes_are_the_sessions_own_edits_as_diffs(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-555555555555"
+        base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
+        fp = os.path.join(self.root, "src", "a.py")
+        self._transcript(sid, [
+            dict(base, type="assistant", message={"content": [
+                {"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": fp}},
+                {"type": "tool_use", "id": "e2", "name": "Write", "input": {"file_path": "/tmp/notes.md"}},
+                {"type": "tool_use", "id": "e3", "name": "Edit", "input": {"file_path": fp}},
+                {"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "sed -i '' s/a/b/ x.py"}},
+                {"type": "tool_use", "id": "b2", "name": "Bash", "input": {"command": "ls >/dev/null 2>&1"}}]}),
+            dict(base, type="user", toolUseResult={"filePath": fp, "structuredPatch": [
+                {"oldStart": 3, "oldLines": 2, "newStart": 3, "newLines": 2, "lines": [" keep", "-old", "+new"]}]},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e1", "content": "ok"}]}),
+            dict(base, type="user", toolUseResult={"type": "create", "filePath": "/tmp/notes.md", "content": "a\nb"},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e2", "content": "ok"}]}),
+            dict(base, type="user", toolUseResult={"filePath": fp, "structuredPatch": [
+                {"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-x", "+y"]}]},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e3", "content": "denied", "is_error": True}]}),
+            dict(base, type="user", message={"content": [{"type": "tool_result", "tool_use_id": "b1", "content": ""},
+                                                         {"type": "tool_result", "tool_use_id": "b2", "content": ""}]})])
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            c = CS.changes("r", self.root, sid)
+        a, notes = c["files"]
+        self.assertEqual((a["path"], a["status"], a["additions"], a["deletions"], a["edits"]), ("src/a.py", "modified", 1, 1, 1))
+        self.assertEqual([l["t"] for l in a["hunks"][0]["lines"]], [" ", "-", "+"])  # the denied edit isn't shown
+        self.assertEqual((a["hunks"][0]["lines"][2]["new"], notes["status"], notes["outside"]), (4, "added", True))
+        self.assertEqual([x["command"] for x in c["shell"]], ["sed -i '' s/a/b/ x.py"])
+
+    def test_subagents_and_background_work_are_tracked(self):
+        CS = self.CS
+        base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
+        p = os.path.join(self.proj, "s.jsonl")
+        lines = [
+            dict(base, type="assistant", message={"content": [
+                {"type": "tool_use", "id": "ag", "name": "Agent", "input": {"subagent_type": "Explore", "description": "Map the code"}},
+                {"type": "tool_use", "id": "bg", "name": "Bash", "input": {"command": "make iso", "description": "Build the ISO", "run_in_background": True}},
+                {"type": "tool_use", "id": "bg2", "name": "Bash", "input": {"command": "sleep 9", "run_in_background": True}}]}),
+            dict(base, type="user", message={"content": [
+                {"type": "tool_result", "tool_use_id": "bg", "content": "Command running in background with ID: b4r62env5."},
+                {"type": "tool_result", "tool_use_id": "bg2", "content": "Command running in background with ID: bzzz11."}]}),
+            dict(base, type="user", message={"content": "<task-notification>\n<task-id>b4r62env5</task-id>\n<tool-use-id>bg</tool-use-id>"
+                                                        "\n<status>completed</status>\n<summary>Build the ISO completed (exit code 0)</summary>\n</task-notification>"}),
+            dict(base, type="assistant", message={"content": [{"type": "tool_use", "id": "k", "name": "TaskStop", "input": {"task_id": "bzzz11"}}]})]
+        C.write_text(p, "".join(json.dumps(x) + "\n" for x in lines))
+        items, meta = CS.read(p)
+        got = {a["id"]: a["status"] for a in meta["activity"]}
+        self.assertEqual(got, {"ag": "running", "bg": "done", "bg2": "stopped"})
+        self.assertFalse(any(i["k"] == "me" for i in items))  # the notification isn't shown as something you typed
+        sub = C.ensure_dir(os.path.join(self.proj, "s", "subagents"))
+        C.write_json(os.path.join(sub, "agent-x.meta.json"), {"toolUseId": "ag", "agentType": "Explore"})
+        C.write_text(os.path.join(sub, "agent-x.jsonl"), json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/r/app.js"}}]}}) + "\n")
+        acts = {a["id"]: a for a in CS.activity(p, meta["activity"], live=True)}
+        self.assertEqual((acts["ag"]["steps"], acts["ag"]["now"]), (1, "Read app.js"))
+        self.assertNotIn("bg", acts)  # finished long ago: not worth showing
+        os.utime(p, (1000, 1000)); os.utime(os.path.join(sub, "agent-x.jsonl"), (1000, 1000))
+        self.assertEqual(CS.activity(p, meta["activity"], live=False)[0]["status"], "quiet")
+
+    def test_transcripts_read_as_cards_and_list_with_where_they_came_from(self):
+        CS, sid = self.CS, "11111111-2222-3333-4444-555555555555"
+        base = {"cwd": self.root, "gitBranch": "feat/x", "entrypoint": "cli", "timestamp": "2026-10-24T10:00:00Z"}
+        self._transcript(sid, [
+            dict(base, type="user", message={"role": "user", "content": "<command-name>/lfg:fix</command-name>"
+                                                                        "<command-args>the login test</command-args>"}),
+            dict(base, type="user", isMeta=True, message={"role": "user", "content": "skill text"}),
+            dict(base, type="assistant", message={"model": "claude-sonnet-5-5", "content": [
+                {"type": "text", "text": "Looking."}, {"type": "tool_use", "id": "a", "name": "Bash",
+                                                       "input": {"command": "npm test"}}]}),
+            dict(base, type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "a", "content": "1 failing", "is_error": True}]}),
+            dict(base, type="assistant", message={"model": "claude-sonnet-5-5", "content": [
+                {"type": "tool_use", "id": "w1", "name": "Write", "input": {"file_path": "/r/denied.ts"}},
+                {"type": "tool_use", "id": "w2", "name": "Edit", "input": {"file_path": "/r/done.ts"}}]}),
+            dict(base, type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "w1", "content": "The user said no", "is_error": True},
+                {"type": "tool_result", "tool_use_id": "w2", "content": "ok"}]}),
+            dict(base, type="user", message={"role": "user", "content": "<system-reminder>x</system-reminder>"}),
+            dict(base, type="user", isSidechain=True, message={"role": "user", "content": "subagent chatter"}),
+            {"type": "custom-title", "customTitle": "Flaky login test"}])
+        review = "PR mode review for the dashboard. Review pull request #42 now"
+        self._transcript("66666666-2222-3333-4444-555555555555",
+                         [dict(base, type="user", entrypoint="sdk-cli", message={"role": "user", "content": review})])
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            items, meta = CS.read(CS.transcript(sid, self.root))
+            self.assertEqual([i["k"] for i in items], ["skill", "ai", "tool", "tool", "tool"])
+            self.assertEqual(meta["files"], ["/r/done.ts"])  # a denied write changed nothing
+            self.assertEqual((items[0]["name"], items[0]["args"]), ("lfg:fix", "the login test"))
+            self.assertEqual((items[2]["result"], items[2]["error"]), ("1 failing", True))
+            self.assertEqual((meta["title"], meta["branch"], meta["skills"]),
+                             ("Flaky login test", "feat/x", ["lfg:fix"]))
+            got = {x["id"]: x for x in CS.listing("r1", self.root)["sessions"]}
+            self.assertEqual((got[sid]["title"], got[sid]["source"], got[sid]["state"]),
+                             ("Flaky login test", "terminal", "saved"))
+            self.assertEqual(got["66666666-2222-3333-4444-555555555555"]["title"], "AI review of PR #42")
+            self.assertEqual(got["66666666-2222-3333-4444-555555555555"]["source"], "background")
+
+    def test_tags_suggestions_and_file_mentions(self):
+        CS = self.CS
+        self.assertEqual(CS._issues("varun/ato-4251-x B8F13E1F-3579 SHA-256 then ATO-12"), ["ATO-4251", "ATO-12"])
+        subprocess.run(["git", "init", "-q", self.root], check=True)
+        for f in ("src/device-inventory.query.ts", "src/other.ts", "README.md"):
+            C.write_text(os.path.join(self.root, f), "x\n")
+        subprocess.run(["git", "-C", self.root, "add", "."], check=True)
+        got = CS.files(self.root, "inventory query")["files"]
+        self.assertEqual(got, ["src/device-inventory.query.ts"])
+        sug = CS.suggestions("nope-1", self.root)["suggestions"]
+        self.assertTrue(any(x["skill"] == "/lfg:check" and "3 uncommitted" in x["title"] for x in sug))
+        self.assertEqual(sug[-1]["skill"], "/lfg:explain")
+        self.assertTrue(all(x["prompt"].startswith("/lfg:") for x in sug))
+
+    def test_always_allow_saves_the_rule_and_messages_wait_for_an_answer(self):
+        CS, sent = self.CS, []
+        live = CS.Live.__new__(CS.Live)  # no process: just the answering logic
+        live.pending, live.allowed, live.queued, live.state, live.error = {}, set(), [], "needs-you", None
+        live._write = lambda obj: sent.append(obj) or True
+        rule = [{"type": "addRules", "rules": [{"toolName": "mcp__graph__overview"}], "behavior": "allow",
+                 "destination": "localSettings"}]
+        live.pending["r1"] = {"id": "r1", "tool": "mcp__graph__overview", "input": {}, "raw": {
+            "tool_name": "mcp__graph__overview", "input": {}, "permission_suggestions": rule}}
+        self.assertEqual(live.say("and then?"), "queued")  # never written while a prompt is open
+        self.assertEqual(sent, [])
+        live.decide("r1", "always")
+        resp = sent[-1]["response"]["response"]
+        self.assertEqual((resp["behavior"], resp["updatedPermissions"]), ("allow", rule))
+        self.assertIn("mcp__graph__overview", live.allowed)
+
+    def test_a_live_session_asks_before_writing_and_the_page_answers(self):
+        from lfgcore import notify as N
+        CS = self.CS
+        fake = os.path.join(self.root, "claude")
+        C.write_text(fake, FAKE_CLAUDE)
+        os.chmod(fake, 0o755)
+        log = os.path.join(self.root, "fake.log")
+        with mock.patch.object(C, "which", lambda n: fake if n == "claude" else None), \
+                mock.patch.dict(os.environ, {"FAKE_LOG": log}), mock.patch.object(CS, "PROJECTS", self.proj):
+            sid = CS.start("r1", self.root, "Write x.txt", mode="default")["id"]
+            live = CS._LIVE[sid]
+            for _ in range(100):
+                if live.pending:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(live.state, "needs-you")
+            (req,) = list(live.pending.values())
+            self.assertEqual((req["tool"], req["input"]["file_path"]), ("Write", "x.txt"))
+            self.assertEqual(N.recent()["events"][0]["href"], "#studio/" + sid)  # "Claude needs your OK"
+            live.decide(req["id"], "always")
+            for _ in range(100):
+                if live.state == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(live.state, "idle")
+            self.assertEqual(json.loads(open(log).read().splitlines()[-1]), {"said": "Write x.txt", "allowed": True})
+            live.say("again")  # "Allow Write for this session": not asked again
+            for _ in range(100):
+                if len(open(log).read().splitlines()) == 2 and live.state == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(json.loads(open(log).read().splitlines()[-1]), {"said": "again", "allowed": True})
+            self.assertEqual(live.pending, {})
+            with self.assertRaises(CS.Invalid):
+                live.decide("r1", "once")  # already answered
+            live.stop()
+            self.assertEqual(live.state, "ended")
+            with self.assertRaises(CS.Invalid):
+                CS.start("r1", self.root, "   ")
+
+
+    def test_rewound_turns_compaction_and_images_read_like_claude_code_shows_them(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-555555555555"
+        b = {"cwd": self.root, "entrypoint": "cli", "timestamp": "2026-10-24T10:00:00Z"}
+        png = "iVBORw0KGgo="
+        lines = [
+            dict(b, type="user", uuid="u1", parentUuid=None, message={"role": "user", "content": "first"}),
+            dict(b, type="assistant", uuid="a1", parentUuid="u1",
+                 message={"content": [{"type": "text", "text": "ok 1"}]}),
+            dict(b, type="user", uuid="u2", parentUuid="a1", message={"role": "user", "content": "edit it"}),
+            dict(b, type="assistant", uuid="a2", parentUuid="u2", message={"content": [
+                {"type": "tool_use", "id": "e", "name": "Edit", "input": {"file_path": "/r/x.ts"}}]}),
+            dict(b, type="user", uuid="r2", parentUuid="a2", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "e", "content": "ok"}]}),
+            {"type": "attachment", "uuid": "at1", "parentUuid": "r2"},
+            dict(b, type="user", uuid="u3", parentUuid="a1", message={"role": "user", "content": [  # rewound to a1
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": png}},
+                {"type": "text", "text": "[Image #1] this instead"}]}),
+            {"type": "system", "subtype": "compact_boundary", "uuid": "cb", "parentUuid": None,
+             "logicalParentUuid": "u3"},
+            dict(b, type="user", uuid="cs", parentUuid="cb", isCompactSummary=True,
+                 message={"role": "user", "content": "This session is being continued from a previous conversation"}),
+            dict(b, type="user", uuid="c1", parentUuid="cs", message={"role": "user", "content":
+                                                                      "<command-name>/compact</command-name>"})]
+        self._transcript(sid, lines)
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            items, meta = CS.read(CS.transcript(sid, self.root))
+            self.assertEqual([(i["k"], i.get("text") or i.get("name")) for i in items], [
+                ("me", "first"), ("ai", "ok 1"), ("me", "[Image #1] this instead"), ("note", "Conversation compacted"),
+                ("skill", "compact")])
+            self.assertEqual(meta["files"], [])  # the edit was rewound
+            self.assertEqual(meta["skills"], [])  # /compact is Claude Code's own, not a skill tag
+            self.assertEqual((items[2]["u"], items[2]["p"], items[2]["images"]), ("u3", "a1", [{"u": "u3", "i": 0}]))
+            self.assertEqual(CS.image(sid, self.root, "u3", "0"), {"src": "data:image/png;base64," + png})
+            with self.assertRaises(CS.Invalid):
+                CS.image(sid, self.root, "u3", "1")
+            # rewound without a new prompt yet: Claude Code's marker says where the conversation now ends
+            self._transcript(sid, lines[:5] + [{"type": "last-prompt", "leafUuid": "a1", "rewound": True}])
+            items, meta = CS.read(CS.transcript(sid, self.root))
+            self.assertEqual([i["k"] for i in items], ["me", "ai"])
+            self.assertEqual(meta["files"], [])
+
+    def test_attachments_go_in_as_image_blocks_and_file_mentions(self):
+        import base64
+        CS = self.CS
+        img = CS.upload("shot one.png", "image/png", base64.b64encode(b"\x89PNG fake").decode())
+        doc = CS.upload("../../notes.pdf", "application/pdf", base64.b64encode(b"%PDF").decode())
+        self.assertTrue(img["image"] and not doc["image"])
+        self.assertTrue(os.path.realpath(doc["path"]).startswith(os.path.realpath(C.lfg_path("uploads"))))
+        self.assertTrue(os.path.basename(doc["path"]).endswith("-notes.pdf"))  # no way out of the uploads folder
+        self.assertEqual(os.stat(doc["path"]).st_mode & 0o777, 0o600)
+        content = CS._content("what's wrong here?", [{"path": img["path"], "type": "image/png"},
+                                                     {"path": doc["path"], "type": ""}])
+        self.assertEqual(content[0], {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                                  "data": base64.b64encode(b"\x89PNG fake").decode()}})
+        self.assertEqual(content[1], {"type": "text", "text": "[Image #1] what's wrong here?\n@" + doc["path"]})
+        self.assertEqual(CS._content("plain", None), "plain")
+        for bad in ([{"path": "/etc/passwd", "type": ""}], [{"path": img["path"]}] * 11):
+            with self.assertRaises(CS.Invalid):
+                CS._content("x", bad)
+        with self.assertRaises(CS.Invalid):
+            CS.upload("x.png", "image/png", "not base64!")
+        self.assertEqual(CS._check("", [{"path": img["path"]}]), "")  # an image alone is a message
+
+    def test_rewind_fork_and_context_through_claude_codes_control_channel(self):
+        CS = self.CS
+        fake = os.path.join(self.root, "claude")
+        C.write_text(fake, FAKE_CLAUDE)
+        os.chmod(fake, 0o755)
+        args = os.path.join(self.root, "args.log")
+        env = {"FAKE_LOG": os.path.join(self.root, "fake.log"), "FAKE_ARGS": args}
+        with mock.patch.object(C, "which", lambda n: fake if n == "claude" else None), \
+                mock.patch.dict(os.environ, env), mock.patch.object(CS, "PROJECTS", self.proj):
+            sid = "88888888-2222-3333-4444-555555555555"
+            self._transcript(sid, [{"type": "user", "uuid": "u1", "cwd": self.root,
+                                    "message": {"role": "user", "content": "hello"}}])
+            CS.resume("r1", self.root, sid)
+            live = CS._LIVE[sid]
+            for _ in range(100):
+                if live.state == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(live.rewind_preview("u1"), {"can": True, "why": "", "files": ["/r/a.txt"],
+                                                         "insertions": 1, "deletions": 2})
+            self.assertEqual(live.rewind("u1", "both"), {"code": True, "chat": True, "prefill": "the old prompt"})
+            self.assertEqual(live.context()["percent"], 18)
+            self.assertEqual(live.context()["parts"], [{"name": "Messages", "tokens": 5000}])
+            with self.assertRaises(CS.Invalid):
+                live.rewind("u1", "everything")
+            sent = [json.loads(x) for x in C.read_text(args).splitlines()]
+            self.assertIn({"subtype": "rewind_files", "user_message_id": "u1"}, sent)
+            self.assertIn({"subtype": "rewind_conversation", "target_message_uuid": "u1"}, sent)
+            self.assertIn({"ckpt": "1"}, sent)  # file checkpoints on, so Rewind can put files back
+            at = "99999999-2222-3333-4444-555555555555"
+            new = CS.fork("r1", self.root, sid, at, "try it another way")["id"]
+            self.assertNotEqual(new, sid)
+            for _ in range(100):  # the fork's process starts in the background
+                if "--fork-session" in C.read_text(args):
+                    break
+                time.sleep(0.05)
+            argv = [json.loads(x) for x in C.read_text(args).splitlines() if "--fork-session" in x][-1]
+            self.assertEqual(argv[argv.index("--resume") + 1:argv.index("--resume") + 7],
+                             [sid, "--fork-session", "--session-id", new, "--resume-session-at", at])
+            self.assertEqual(CS._index()[new]["forked_from"], sid)
+            for l_ in (live, CS._LIVE[new]):
+                l_.stop()
+
+
+class WorktreeMergeTest(unittest.TestCase):
+    """Worktrees made for sessions, and merging them back into the branch they were forked from (committed work
+    only, fast-forward first, a merge commit only when asked, conflicts aborted)."""
+
+    def setUp(self):
+        from lfgcore import worktree as W
+        self.W = W
+        self.root = os.path.join(tempfile.mkdtemp(prefix="lfg-wt-"), "app")
+        self.git("init", "-q", "-b", "main", self.root, cwd=None)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            self.git("config", k, v)
+        C.write_text(os.path.join(self.root, "a.txt"), "one\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+
+    def git(self, *a, cwd=""):
+        return subprocess.run(["git", *a], cwd=self.root if cwd == "" else cwd, check=True, capture_output=True,
+                              text=True).stdout
+
+    def commit_in(self, path, name, text):
+        C.write_text(os.path.join(path, name), text)
+        self.git("add", ".", cwd=path)
+        self.git("commit", "-qm", "change " + name, cwd=path)
+
+    def test_merge_back_fast_forward_and_remove(self):
+        W = self.W
+        wt = W.new(self.root, "lfg/feature")["path"]
+        self.assertEqual(W.base_of(self.root, "lfg/feature"), "main")  # recorded when LFG made it
+        C.write_text(os.path.join(wt, "b.txt"), "draft\n")
+        with self.assertRaises(RuntimeError):  # uncommitted work is never merged (LFG never commits for you)
+            W.merge(self.root, "lfg-feature")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "b", cwd=wt)
+        row = next(x for x in W.status(self.root) if x["name"] == "lfg-feature")
+        self.assertEqual((row["kind"], row["base"], row["ahead"], row["dirty"]), ("lfg", "main", 1, 0))
+        out = W.merge(self.root, "lfg-feature", remove_after=True)
+        self.assertEqual((out["how"], out["commits"], out["removed"]), ("fast-forward", 1, True))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "b.txt")))  # main has it now
+        self.assertFalse(os.path.isdir(wt))
+        self.assertNotIn("lfg/feature", self.git("branch"))
+
+    def test_base_moved_on_needs_a_yes_and_conflicts_abort(self):
+        W = self.W
+        wt = W.new(self.root, "lfg/x")["path"]
+        self.commit_in(wt, "x.txt", "x\n")
+        self.commit_in(self.root, "m.txt", "m\n")  # main moved on
+        with self.assertRaises(W.NeedsMergeCommit):
+            W.merge(self.root, "lfg/x")
+        self.assertEqual(W.merge(self.root, "lfg/x", merge_commit=True)["how"], "merge commit")
+        wt2 = W.new(self.root, "lfg/y")["path"]
+        self.commit_in(wt2, "a.txt", "theirs\n")
+        self.commit_in(self.root, "a.txt", "ours\n")
+        with self.assertRaises(RuntimeError) as e:
+            W.merge(self.root, "lfg/y", merge_commit=True)
+        self.assertIn("a.txt", str(e.exception))
+        self.assertEqual(self.git("status", "--porcelain").strip(), "")  # aborted: nothing half merged
+        self.assertEqual(open(os.path.join(self.root, "a.txt")).read(), "ours\n")
+
+    def test_merge_all_forked_from_a_branch(self):
+        W = self.W
+        for b in ("lfg/one", "lfg/two"):
+            self.commit_in(W.new(self.root, b)["path"], b.split("/")[1] + ".txt", "x\n")
+        with self.assertRaises(W.NeedsMergeCommit):  # the first fast-forwards; main moved on, so the next needs a yes
+            W.merge_all(self.root, "main")
+        self.assertEqual([x["kind"] for x in W.status(self.root)], ["main", "lfg"])  # the first is merged and gone
+        done = W.merge_all(self.root, "main", merge_commit=True)  # yes: the rest, with a merge commit
+        self.assertEqual([(d["how"], d["removed"]) for d in done], [("merge commit", True)])
+        self.assertTrue(os.path.exists(os.path.join(self.root, "one.txt")) and
+                        os.path.exists(os.path.join(self.root, "two.txt")))
+        self.assertEqual([x["kind"] for x in W.status(self.root)], ["main"])
+
+    def test_sessions_start_where_asked(self):
+        from lfgcore import claudesess as CS
+        self.assertEqual(CS.workdir(self.root, {"kind": "here"}), self.root)
+        path = CS.workdir(self.root, {"kind": "new", "branch": "lfg/s", "base": "main"})
+        self.assertTrue(path.endswith("lfg-s") and os.path.isdir(path))
+        self.assertEqual(CS.workdir(self.root, {"kind": "branch", "branch": "lfg/s"}), path)  # reuses its worktree
+        self.assertEqual(CS.workdir(self.root, {"kind": "worktree", "path": path}), path)
+        with self.assertRaises(CS.Invalid):
+            CS.workdir(self.root, {"kind": "worktree", "path": "/etc"})
+        with self.assertRaises(CS.Invalid):
+            CS.workdir(self.root, {"kind": "new", "branch": "bad name.."})
+        self.assertEqual(CS._issues("AEGINV-000 and ATO-7"), ["ATO-7"])
+
+
 class SonarTest(unittest.TestCase):
     def setUp(self):
         from lfgcore import sonar as SQ
@@ -1762,7 +2540,8 @@ class SonarTest(unittest.TestCase):
             pass
         ok = subprocess.CompletedProcess([], 0, "", "")
         with mock.patch.object(SQ, "_docker", lambda *a, **k: ok), mock.patch.object(SQ, "_api", api), \
-                mock.patch.object(SQ, "server_state", lambda: "up"), mock.patch.object(C, "which", lambda n: "/x"):
+                mock.patch.object(SQ, "server_state", lambda: "up"), mock.patch.object(C, "which", lambda n: "/x"), \
+                mock.patch.object(SQ, "install_scanner", lambda *a, **k: None):  # no real npm install in a test
             SQ.setup(log=lambda m: None)
         c = SQ.creds()
         self.assertEqual(calls[0], ("/api/users/change_password", ("admin", "admin")))
@@ -5134,83 +5913,11 @@ class SessionWorkTest(SessionsTest):
                 ui.save("session_lines", {"session": self.SID, "path": "x", "lines": [], "said": "x"})
 
 
-class InsightsTest(unittest.TestCase):
-    """Hotspots (files that keep needing fixes) and why code is here (the commits behind it). Read-only git."""
-
-    def repo(self):
-        root, rid = git_repo()
-        os.makedirs(os.path.join(root, "src"))
-        os.makedirs(os.path.join(root, "tests"))
-        def commit(path, text, msg, date="2026-10-01T12:00:00"):
-            with open(os.path.join(root, path), "a") as fh:
-                fh.write(text)
-            env = dict(os.environ, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
-            subprocess.run(["git", "add", path], cwd=root, check=True)
-            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg], cwd=root,
-                           check=True, env=env)
-        recent = time.strftime("%Y-%m-%dT12:00:00", time.localtime(time.time() - 5 * 86400))
-        older = time.strftime("%Y-%m-%dT12:00:00", time.localtime(time.time() - 120 * 86400))
-        commit("src/pay.py", "def charge():\n    return 1\n", "Add payments", older)
-        for i in range(3):
-            commit("src/pay.py", "# %d\n" % i, "Fix double charge on retry ATO-12%d (#4%d)" % (i, i), recent)
-        commit("src/pay.py", "# more\n", "Tidy payments", recent)
-        commit("src/calm.py", "x = 1\n", "Add calm", recent)
-        commit("src/calm.py", "y = 2\n", "Add more calm", recent)
-        commit("tests/test_calm.py", "import calm\n", "Test calm", recent)
-        commit("README.md", "hi\n", "Fix typo in readme", recent)
-        commit("src/pay.py", "# v\n", "Release 1.2.0: fixes and more", recent)
-        return root, rid
-
-    def test_hotspots_rank_files_by_fixes_with_the_reasons(self):
-        from lfgcore import insights as IN
-        root, _ = self.repo()
-        got = IN.hotspots(root)
-        files = {f["path"]: f for f in got["files"]}
-        self.assertEqual(list(files)[0], "src/pay.py")  # most fixes first
-        pay = files["src/pay.py"]
-        self.assertEqual(pay["fixes"], 3)  # "Release 1.2.0: fixes" is a roll-up, not a fix
-        self.assertEqual(pay["level"], "high")  # 2+ fixes and no test covers it
-        self.assertIn("no test file covers it", pay["reasons"])
-        self.assertEqual(pay["trend"], "rising")
-        self.assertEqual(files["src/calm.py"]["tests"], ["tests/test_calm.py"])
-        self.assertNotIn("README.md", files)  # docs aren't code
-        self.assertNotIn("tests/test_calm.py", files)
-
-    def test_generated_files_and_squash_merge_prs_are_read_right(self):
-        from lfgcore import insights as IN
-        root, _ = self.repo()
-        for name, head in (("src/api.generated.ts", "x"), ("src/schema.ts", "// AUTO-GENERATED by a tool\n")):
-            for i in range(3):
-                with open(os.path.join(root, name), "a") as fh:
-                    fh.write(head if i == 0 else "# %d\n" % i)
-                subprocess.run(["git", "add", name], cwd=root, check=True)
-                subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm",
-                                "Fix regen %d" % i], cwd=root, check=True)
-        paths = [f["path"] for f in IN.hotspots(root)["files"]]
-        self.assertNotIn("src/api.generated.ts", paths)
-        self.assertNotIn("src/schema.ts", paths)
-        got = IN.refs("Add device stats (#1689)\nCloses #12", "https://github.com/a/b")
-        self.assertEqual([r["label"] for r in got], ["PR #1689", "#12"])
-
-    def test_why_lists_the_commits_behind_a_file_or_lines_with_links(self):
-        from lfgcore import insights as IN
-        root, _ = self.repo()
-        subprocess.run(["git", "remote", "add", "origin", "git@github.com:acme/shop.git"], cwd=root, check=True)
-        with mock.patch.dict(C.config()["linear"], {"workspace": "acme"}):
-            got = IN.why(root, "src/pay.py")
-        self.assertEqual(got["commits"][0]["subject"], "Release 1.2.0: fixes and more")
-        fix = next(c for c in got["commits"] if c["subject"].startswith("Fix double charge on retry ATO-122"))
-        self.assertTrue(fix["fix"])
-        self.assertEqual([r["label"] for r in fix["refs"]], ["PR #42", "ATO-122"])
-        self.assertEqual(fix["refs"][0]["url"], "https://github.com/acme/shop/pull/42")
-        self.assertEqual(fix["refs"][1]["url"], "https://linear.app/acme/issue/ATO-122")
-        lines = IN.why(root, "src/pay.py", 1, 2)
-        self.assertEqual([c["subject"] for c in lines["commits"]], ["Add payments"])  # only what shaped lines 1-2
-
-    def test_the_dashboard_reads_only_files_git_knows(self):
-        root, rid = self.repo()
-        self.assertEqual(ui.api("insight_why", {"repo": [rid], "file": ["src/pay.py"]})["path"], "src/pay.py")
-        for bad in ("../../etc/passwd", "/etc/hosts", "src/nope.py", ""):
-            self.assertIn("error", ui.api("insight_why", {"repo": [rid], "file": [bad]}), bad)
-        self.assertEqual(ui.api("insight_files", {"repo": [rid], "q": ["pay"]})["files"], ["src/pay.py"])
-        self.assertEqual(ui.api("insight_hotspots", {"repo": [rid]})["files"][0]["path"], "src/pay.py")
+class PentestSummaryTest(unittest.TestCase):
+    def test_structured_summary_reads_as_a_sentence(self):
+        from lfgcore import dash as D
+        s = D._pentest_summary({"critical": 1, "high": 2, "medium": 0, "low": 1, "info": 0, "total": 4,
+                                "blocking": ["P-2"], "recommendation": "Fix P-2 first."})
+        self.assertEqual(s, "Found 1 critical, 2 high, 1 low. Fix P-2 first.")
+        self.assertEqual(D._pentest_summary("All clear."), "All clear.")
+        self.assertIsNone(D._pentest_summary({"total": 0}))

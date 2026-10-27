@@ -28,7 +28,7 @@ adapted-from: mattpocock/skills/retro + writing-for-agents (MIT, © 2026 Matt Po
 2. **Find candidates** in each category; a category with nothing real stays empty.
    - **Navigation:** the agent searched long for something the graph should have pointed to → a graphify rationale gap, a missing `Component` link, or a playbook entry.
    - **Automated checks:** a mistake a check could have caught. Read the repo's own lint/test/CI wiring first; an existing check left unwired is the finding. A repo with no guardrail at all is a finding.
-   - **Reviewer rules:** from the feedback store. Rejected findings → loosen or drop the rule that produced them. Bugs `/expert` missed → a new rule. Classify first: **mechanical** (banned API, import shape, file location) → a linter rule or CI job; **judgement** → a `Principle` or a `CODING_STANDARDS.md` line.
+   - **Reviewer rules:** from the feedback store. Rejected findings → loosen or drop the rule that produced them. Bugs `/review-coach` missed → a new rule. Classify first: **mechanical** (banned API, import shape, file location) → a linter rule or CI job; **judgement** → a `Principle` or a `CODING_STANDARDS.md` line.
    - **Steering no-ops:** lines in rule modules, skills or CLAUDE.md that changed nothing this run.
    - **Tool economy:** stages that burned tokens or time out of line with their job (from `usage.db`).
    - **Information access:** something the agent needed but could not see (logs, read-only service access).
@@ -36,7 +36,7 @@ adapted-from: mattpocock/skills/retro + writing-for-agents (MIT, © 2026 Matt Po
 3. **Present candidates by severity**, each with the evidence (file, stage, finding id) and the proposed change. Wait for the user to pick.
 4. **Write what was agreed:**
    - dev-graph `Learning` per lesson, linked to the `Component` (and `Incident` for Hotfix). Write Learnings directly.
-   - dev-graph `Principle` for each agreed judgement rule; only after the user's yes, since `/expert` enforces Principles.
+   - dev-graph `Principle` for each agreed judgement rule; only after the user's yes, since `/review-coach` enforces Principles.
    - **Playbooks** in `~/.lfg/playbooks/<repo-id>/<slug>.md` ("how to add X here", landmines): only from a pattern with 3+ instances found via `graphify query`, citing the reference files.
    - **Second-brain notes** for personal insights and preferences the user chooses to keep.
    - **Skill candidates:** a repeated, error-prone procedure → propose it as a skill; create nothing unless the user confirms.

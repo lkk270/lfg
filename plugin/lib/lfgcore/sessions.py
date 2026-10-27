@@ -550,8 +550,8 @@ def _file_usage(path):
                    "cache_write_5m": max((u.get("cache_creation_input_tokens") or 0) - w1h, 0)}
             ts = ev.get("timestamp") or ""
             try:
-                day = time.strftime("%Y-%m-%d", time.localtime(
-                    calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))))  # ts is UTC
+                day = time.strftime("%Y-%m-%d", time.localtime(  # the timestamp is UTC; the day is the user's
+                    calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))))
             except ValueError:
                 continue
             d = out.setdefault(day, {}).setdefault(m["model"], dict(dict.fromkeys(FIELDS, 0), usd=0.0))

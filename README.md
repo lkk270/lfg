@@ -14,19 +14,50 @@ https://github.com/user-attachments/assets/bcc10777-99ec-4f32-9b55-19702dbade8f
 grill → plan → build → check ∥ secure ∥ pentest → expert review → ship packet → you commit
 ```
 
+<table>
+  <tr>
+    <td width="33%" align="center"><a href="docs/gallery/01-home.jpg"><img src="docs/gallery/01-home.jpg" alt="Home"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/02-insights-hotspots.jpg"><img src="docs/gallery/02-insights-hotspots.jpg" alt="Insights: hotspots"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/03-code-map.jpg"><img src="docs/gallery/03-code-map.jpg" alt="Code: where changes are riskiest"></a></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/gallery/04-checks-guard.jpg"><img src="docs/gallery/04-checks-guard.jpg" alt="Checks: actions the guard stopped"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/05-docs.jpg"><img src="docs/gallery/05-docs.jpg" alt="Docs and the code wiki"></a></td>
+    <td width="33%" align="center"><a href="docs/gallery/06-appearance.jpg"><img src="docs/gallery/06-appearance.jpg" alt="Appearance: six themes, five accents"></a></td>
+  </tr>
+</table>
+
 ## Install
 
+One command installs and sets up LFG (macOS, Python 3.9+, Claude Code installed):
+
 ```bash
-git clone https://github.com/varun-singhh/lfg.git && ./lfg/install.sh
+git clone https://github.com/varun-singhh/lfg.git ~/lfg && ~/lfg/install.sh
 ```
 
-The installer looks at your machine first, shows exactly what it would change, and asks before doing anything. Then turn LFG on in the repos where you want it:
+The installer looks at your machine first, shows exactly what it would change, and asks before doing anything. At the end it offers to open the dashboard, which starts with a short intro. Then turn LFG on in the repos where you want it:
 
 ```bash
 cd your-repo && lfg enable
 ```
 
-Start Claude Code there and type `/lfg:wizard <your idea>` for a guided run, or `/lfg:which` to see what to do next.
+Start (or restart) Claude Code there and say what you want: `/lfg:lfg add rate limiting to the public API`, or `/lfg:wizard` for a guided run.
+
+### Or let Claude set it up
+
+Paste this into Claude Code, in the repo where you want LFG:
+
+```text
+Set up LFG for me (https://github.com/varun-singhh/lfg).
+1. If ~/lfg doesn't exist, clone it there: git clone https://github.com/varun-singhh/lfg.git ~/lfg
+   If it does, update it: git -C ~/lfg pull --ff-only
+2. Run ~/lfg/install.sh --yes and show me what it changed.
+3. Run `lfg enable` in this repo, then `lfg doctor`, and tell me if anything needs fixing.
+4. Tell me to restart Claude Code here, and to open the dashboard with `lfg ui`.
+Don't change any other repo or my global Claude Code settings.
+```
+
+LFG never stars or writes to GitHub on its own. If you like it, `lfg setup` asks once whether to star it from your GitHub account (when the GitHub CLI is signed in), and the dashboard has a Star button.
 
 ## A guest on your machine
 
@@ -42,12 +73,24 @@ LFG is built so that installing it can't disturb how you already use Claude Code
 
 | | |
 |---|---|
-| **Skills** (`/lfg:<name>`) | `lfg`, `wizard` (whole pipeline) · `grill` · `plan` · `build`, `fix` · `check`, `secure`, `pentest`, `expert` · `ship` · `learn` · helpers: `which`, `explain`, `impact`, `spike`, `research`, `map`, `inbox`, `handoff`, `note`, `health` |
+| **Skills** (`/lfg:<name>`) | `lfg`, `wizard` (whole pipeline) · `grill` · `plan` · `build`, `fix` · `check`, `secure`, `pentest`, `review-coach` · `ship` · `learn` · helpers: `which`, `explain`, `why`, `impact`, `spike`, `research`, `map`, `inbox`, `handoff`, `note`, `health`, `explain5`, `suggest-tests` |
 | **Agents** | product manager, architecture designer, software engineer, AI engineer, QA, security analyst, expert reviewer, lane triage. They hand work to each other through run-folder files, never chat history |
 | **Graphs** | [code-review-graph](https://pypi.org/project/code-review-graph/) and [graphify](https://pypi.org/project/graphifyy/) for code; Omnigraph **dev-graph** (decisions, issues, learnings) and **second-brain** (your notes) |
 | **Guard** | A PreToolUse hook that parses whole shell commands and blocks commits, pushes, GitHub writes, secret reads, env dumps, deploys and more (18 rules, self-tested with `lfg doctor --selftest`) |
 | **Gates** | Lint, types, tests, build, CI replay, secret scan, security vetting, an offline pentest with a local model, expert review and a Docker ship check, all from exit codes, never an agent's claim |
-| **Dashboard** | `lfg ui`: runs, issues, checks, code maps, docs and playbooks, usage and cost, **every skill on your machine** (with name clashes and context cost), and **Settings → Claude Code**, where you choose where LFG is on, add packs, and undo any change |
+| **Dashboard** | `lfg ui`: runs, issues, checks, code maps, docs and playbooks, usage and cost, **every skill on your machine** (with name clashes and context cost), and **Settings → Claude Code**, where you choose where LFG is on, add packs, and undo any change. It opens on a product home with the whole flow and a snapshot of each feature; the first time, a short intro walks through the major features and asks which you use and shows only their pages; later it offers a hidden page once you start needing it ("you've used `/lfg:secure` 4 times: show Checks?"), and it tells you when a newer LFG is out |
+
+## Understand code you didn't write
+
+Most code is now written by an agent, so the hard part is no longer typing it: it's knowing what changed, whether it's safe, and why the code looks the way it does. **Insights** in the dashboard answers that without opening an editor, from your git history, on your computer:
+
+- **Your changes**: everything your branch changes (committed or not), what looks risky in it, the questions a senior engineer would ask before approving it ("this touches three files that keep needing fixes: how would you know if one broke?"), and the problems that keep coming back in your checks.
+- **Hotspots**: the files and folders that keep needing fixes, with the evidence (fixes, churn, size, no tests) and whether fixes are rising. That's where the next bug most likely is, and where debt is worth paying down.
+- **Files**: what a file does, what's in it, and for any function, *why it's there*: the commits that shaped it, with the issues, tickets and pull requests they mention as links. Plus test ideas, including one per bug the file already had, and a test file to start from in your project's own test style.
+
+The questions also check your team's recorded decisions (decision records from `/lfg:grill`, and dev-graph when the Knowledge pack is on): "your team decided *money is integer cents*, and this changes `pay.py`: does it still follow that?"
+
+The same answers in Claude Code: `/lfg:why`, `/lfg:review-coach`, `/lfg:explain5`, `/lfg:suggest-tests`, and in the terminal: `lfg why <file>[:lines]`, `lfg hotspots`. They are pattern checks that tell you what to read, not a substitute for a review (`/lfg:review-coach`) or a security check (`/lfg:secure`, which covers vulnerable and end-of-life dependencies).
 
 ## Feature packs
 
@@ -55,14 +98,14 @@ LFG is built so that installing it can't disturb how you already use Claude Code
 lfg packs                 # what's on, what's missing
 lfg add security          # gitleaks, semgrep, osv-scanner, trivy, hadolint, actionlint, zizmor
 lfg add shipcheck         # Docker, for the container ship check
-lfg add pentest           # experimental: Ollama + Strix + LuLu (~10 GB), offline pentests; asks before any curl | bash
+lfg add pentest           # experimental: Ollama + a local model + Strix + LuLu (~12-27 GB), offline pentests; asks before any curl | bash
 lfg add knowledge         # dev-graph and second-brain (local Omnigraph servers)
 lfg add linear            # Linear MCP (reuses yours if you have one)
 lfg add headroom          # experimental: third-party proxy that rewrites context to compress it; LFG repos only by default
 lfg add dictate           # LFG Dictate: hold Option+Space anywhere on your Mac to dictate (on-device)
 ```
 
-Or use the dashboard: **Settings → Claude Code → Feature packs**.
+Or use the dashboard: **Settings → Claude Code → Feature packs**. How much disk each one takes: [docs/disk-space.md](docs/disk-space.md).
 
 ## LFG Dictate
 
@@ -78,6 +121,8 @@ Hold **Option+Space** anywhere on your Mac, in any app, speak, and let go: the w
 
 macOS only (Apple silicon or Intel), Python 3.9+, [Claude Code](https://claude.com/claude-code), and Homebrew for any tools you don't have yet. Linux support is on the roadmap.
 
+About 0.7 GB of disk for a fresh install, plus each project's code map; see [docs/disk-space.md](docs/disk-space.md) for every pack.
+
 ## Everyday commands
 
 ```bash
@@ -90,7 +135,8 @@ lfg uninstall     # undo all of it
 
 ## Docs
 
-- [docs/guide.html](docs/guide.html): the user guide (also in `lfg ui` → Help)
+- [docs/guide.html](docs/guide.html): the user guide
+- [docs/disk-space.md](docs/disk-space.md): disk space at install, as you use it, and per feature pack
 - [docs/sharing.md](docs/sharing.md): rolling LFG out to a team
 - [docs/dashboard.md](docs/dashboard.md): every dashboard page
 - [CONTRACT.md](CONTRACT.md): CLI reference, file layout, and exactly what LFG may change

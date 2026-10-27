@@ -20,6 +20,11 @@ After install (`~/.lfg`, mode 700):
 ├── enabled.json            # where LFG is on: {"everywhere": bool, "repos": {<main checkout>: {...}}}
 ├── state/ledger.json       # every change LFG made outside ~/.lfg (claudecfg.py), what `lfg uninstall` replays
 ├── state/{packs.json,gh.json,usage-offsets.json}
+├── state/onboarding.json  # Welcome: chosen features, show-every-page (never in config.json)
+├── state/updates.json     # last update check: upstream version, notes, error
+├── state/github.json      # whether setup asked to star LFG, and the answer (stars only on yes or a click)
+├── repos/<repo-id>/knowledge/*.md  # knowledge the user added (Knowledge → Add knowledge)
+├── repos/<repo-id>/insights/reviews.json  # Insights: kinds and counts of findings per check (never code), for "keeps coming up"
 ├── config.json             # user config, mode 600 (models, lanes, shipcheck, pentest, ports, linear, graphs.docs,
 │                           # headroom.port/mode/scope, guard.hardened,
 │                           # guard.allow_commit: local commits allowed, not --amend; push/merge stay blocked,
@@ -115,6 +120,7 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg issue sync <ID\|title> [--title] [--type] [--status] [--priority 0-4] [--description] [--criteria] \| show <ID> \| sync-tasks \| sync-brief [--json]` | `sync-tasks`: one Issue per task in the current run's tasks.json (description + steps, verification as acceptance criteria, done once `passes`), called by /plan and /build. `sync-brief`: the brief's Problem and Acceptance criteria onto the run's Issue, called after /grill. `sync`: creates or updates the Issue in dev-graph as the writer role (`ACME-4225` → slug `acme-4225`, `legacyRef` kept; an idea → `iss-<kebab>-<4 hex>`, or the existing issue with that title). The Issues page lists these; skills call it at intake |
 | `lfg rule <name>` | Prints a hidden rule module (`tdd-rules`, `slice-rules`, `domain-docs`, `module-design`, `bug-loop`, `agent-writing`, `git-guard`, `graph-first`, `remember`, `worktrees`), or the user's own version from `~/.lfg/overrides/rules/<name>.md` (changed or added in the dashboard). SessionStart lists rules the user added |
 | `lfg repo docs [--branch [NAME]]` | Prints the repo's docs dir (glossary, ADRs, project-wide docs the user asked for): `<checkout>/.lfg/docs`. `--branch` prints `<checkout>/.lfg/docs/branches/<branch>/` for docs about one branch's work (checked-out branch by default; the real name is kept in `.branch`) |
+| `lfg repo knowledge` | Prints the per-repo folder of knowledge the user pasted in the dashboard (Markdown notes, decisions, lessons, rules), never inside the repo |
 | `lfg repo id` | Prints `<repo-id>` (the same in every worktree and clone of a repo) |
 | `lfg repo root` / `lfg repo graph` | Prints the main checkout / its `graphify-out/graph.json` (also from a linked worktree) |
 | `lfg worktree new <branch> [--from <ref>]` / `list` / `remove <name\|branch>` | Checks a branch out in `<parent>/<repo>.worktrees/<branch-slug>` (an existing branch, or a new one from `--from`, default HEAD) without touching the user's checkout, and records it in the current run's `run.json` `worktrees`. `remove` only takes worktrees it made, refuses any with uncommitted or untracked changes, never forces and keeps the branch. Agents run it on their own (rule module `lfg rule worktrees`); SessionStart removes LFG worktrees that are clean and unused for 24 h |
@@ -137,6 +143,13 @@ Revert restores a value only while it still equals what LFG wrote. Homebrew/uv i
 | `lfg update [check\|apply\|fix] [--json]` | Newer LFG from your fork (`origin`) or the original project (`upstream`). `apply` (**user-only**): merges upstream on an `lfg-update/...` branch in its own worktree, runs the tests, fast-forwards main, pushes to your fork, installs. A conflict or failing tests stop it there, on that branch, and main is untouched. `fix` (**user-only**, the dashboard's Fix with Claude): Claude Code in print mode fixes and commits on that branch (no merge, rebase, push or main), then `apply` runs again. State in `state/update-job.json`, `state/update-fix.json` (+ `.log`) |
 | `lfg vendor status\|sync\|update` | Pinned mattpocock/skills source |
 | `lfg hook <session-start\|prompt\|pre-tool\|post-tool\|stop\|pre-compact>` | Hook entry points (stdin = hook JSON) |
+| `lfg onboard [--all] [--features coding,reviews,...] [--json]` | Pick the features you use (Welcome); the dashboard sidebar then shows only their pages. Flags: non-interactive; a terminal with no flags: one question per feature; otherwise prints the current choice. Until chosen, and on installs from before 0.4, every page shows |
+| `lfg update [--check] [--json]` | Asks GitHub for the latest version (two GETs: plugin.json and, when newer, CHANGELOG.md; nothing about you or your code is sent) and prints the update command. Never updates anything itself. The dashboard does the same at most once a day (`updates.auto_check`, default on) |
+| `lfg explain5 <file> [--json]` | A file in plain terms: its top-level definitions, who changed it and when, related tests, recent fixes (read-only git) |
+| `lfg review-coach [--base BRANCH] [--json]` | Heuristic pre-review of everything the branch changes (committed since the base plus uncommitted): hardcoded secrets, eval/exec, swallowed errors, queries in loops, at `file:line`. A first pass: verify before acting |
+| `lfg suggest-tests <file> [--json]` | Heuristic test ideas per public function, each with the branch or edge case it targets, plus the existing test files to put them in |
+| `lfg hotspots [--days N] [--limit N] [--json]` | Files that keep needing fixes, ranked by fix commits and churn from git history, each with plain reasons (fixes, changes, authors, size, no tests) and recent fixes; plus folders. Read-only git |
+| `lfg why <file>[:LINE[-LINE]] [--limit N] [--json]` | The commits that shaped a file or lines of it (`git log -L`), newest first, with the issue numbers, tracker keys and PRs they mention as links built from the origin remote and `linear.workspace` (nothing fetched) |
 
 ## Skills
 

@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -175,6 +176,20 @@ def cmd_setup(a):
     print("\nDone. Next:\n  cd <your repo> && lfg enable     turn LFG on there\n  lfg ui                         "
           "dashboard (packs, settings, skills)\n  lfg doctor                     check everything")
     _print_whats_new(SU)
+    from . import onboard as OB
+    if not a.yes and OB.interactive():
+        from . import ghstar
+        ghstar.ask_once()  # once, only with a yes, only when the GitHub CLI is signed in
+    if not OB.is_complete():
+        print("\nPick the features you'll use: lfg ui (opens Welcome) or lfg onboard")
+        if not a.yes and OB.interactive():
+            try:
+                go = input("Open the dashboard now? [Y/n] ").strip().lower() in ("", "y", "yes")
+            except EOFError:
+                go = False
+            if go:
+                print("Starting the dashboard (Ctrl-C stops it; run `lfg ui` any time).")
+                return main(["ui"])
     return 0
 
 
@@ -606,13 +621,39 @@ def cmd_knowledge(a):
 
 
 def cmd_worktree(a):
-    """`lfg worktree new <branch> [--from <ref>] | list | remove <name>`: see worktree.py."""
+    """`lfg worktree new <branch> [--from <ref>] | list | remove <name> | merge <name>|--all --into <base> [--remove]
+    [--merge-commit]`: see worktree.py."""
     from . import worktree as W
     root, rid = C.need_repo()
     if a.action == "list":
-        for w in W.listing(root):
-            print("%s %-28s %s  %s" % ("*" if w["lfg"] else " ", w["branch"] or "(detached)", w["head"], w["path"]))
+        for w in W.status(root):
+            line = "%s %-30s %-10s %s" % ("*" if w["lfg"] else " ", w["branch"] or "(detached)", w["head"], w["path"])
+            if w["base"]:
+                line += "  -> %s (%d ahead, %d behind%s)" % (w["base"], w["ahead"], w["behind"],
+                                                           ", %d uncommitted" % w["dirty"] if w["dirty"] else "")
+            print(line)
         print("(* = made by lfg worktree, in %s)" % W.base_dir(root))
+        return 0
+    if a.action == "merge":
+        try:
+            if a.all:
+                if not a.into:
+                    C.die("usage: lfg worktree merge --all --into <branch> [--remove]", 2)
+                done = W.merge_all(root, a.into, a.remove, a.merge_commit)
+            elif a.name:
+                done = [W.merge(root, a.name, a.into, a.remove, a.merge_commit)]
+            else:
+                C.die("usage: lfg worktree merge <name> [--into <branch>] [--remove] | --all --into <branch>", 2)
+        except W.NeedsMergeCommit as e:
+            C.die("%s Run again with --merge-commit." % e)
+        except (ValueError, RuntimeError) as e:
+            C.die(str(e))
+        for r in done:
+            print("%s: %s into %s (%s, %d commit%s)%s" % (r["name"], r["branch"], r["into"], r["how"], r["commits"],
+                                                         "" if r["commits"] == 1 else "s",
+                                                         ", worktree removed" if r["removed"] else ""))
+        if not done:
+            print("no LFG worktree forked from %s" % a.into)
         return 0
     if not a.name:
         C.die("usage: lfg worktree %s <%s>" % (a.action, "branch" if a.action == "new" else "name|branch"), 2)
@@ -685,47 +726,14 @@ def cmd_rule(a):
     return 0
 
 
-def cmd_hotspots(a):
-    from . import insights as IN
-    root, _rid = C.need_repo()
-    d = IN.hotspots(root, days=a.days)
-    if a.json:
-        print(json.dumps(d, indent=2))
-        return 0
-    print("Files that keep needing fixes, last %d days (%d commits):" % (d["days"], d["commits"]))
-    for f in d["files"]:
-        print("  %-5s %s: %s" % (f["level"], f["path"], "; ".join(f["reasons"])))
-    if d["rising"]:
-        print("Fixes rising in: %s" % ", ".join(d["rising"]))
-    return 0
-
-
-def cmd_why(a):
-    from . import insights as IN
-    root, _rid = C.need_repo()
-    path, _, span = a.target.partition(":")
-    start, _, end = span.partition("-")
-    try:
-        d = IN.why(root, IN.tracked(root, path), int(start) if start.isdigit() else None,
-                   int(end) if end.isdigit() else None)
-    except ValueError as e:
-        C.die(str(e), 2)
-    if a.json:
-        print(json.dumps(d, indent=2))
-        return 0
-    for c in d["commits"]:
-        print("%s %s %s%s: %s" % (c["sha"][:8], c["date"], c["author"], " (fix)" if c["fix"] else "", c["subject"]))
-        for r in c["refs"]:
-            print("    %s %s" % (r["label"], r["url"]))
-    return 0
-
-
 def cmd_repo(a):
     root, rid = C.need_repo()
     if a.action == "root":
         print(C.main_root(root))
     elif a.action == "graph":
         print(os.path.join(C.main_root(root), "graphify-out", "graph.json"))
+    elif a.action == "knowledge":
+        print(C.ensure_dir(C.lfg_path("repos", rid, "knowledge")))
     elif a.action == "docs" and a.branch is not None:
         branch = a.branch or C.git_branch(root)
         if not branch or branch.startswith("detached@"):
@@ -1138,6 +1146,202 @@ def cmd_headroom(a):
     return 0 if out["live"] or out["scope"] == "off" else 1
 
 
+def cmd_onboard(a):
+    """Pick the features you use (the dashboard shows only their pages)."""
+    from . import onboard as OB
+    from . import settings as ST
+    try:
+        if a.all or a.features is not None:
+            v = OB.choose([f.strip() for f in (a.features or "").split(",") if f.strip()], everything=a.all)
+        elif OB.interactive() and not a.json:
+            v = OB.wizard()
+        else:
+            v = OB.view()
+    except ST.Invalid as e:
+        C.die(str(e), 2)
+    if a.json:
+        _print(v)
+        return 0
+    on = [f["name"] for f in v["features"] if f["enabled"]]
+    print("Features: %s" % (", ".join(on) if v["complete"] else "not chosen yet (every page shows)"))
+    print("Dashboard pages: %s" % ", ".join(v["pages"]))
+    print("Change: lfg onboard --features %s   (or --all; or Settings > General in lfg ui)" % ",".join(OB.FEATURES))
+    return 0
+
+
+def cmd_hotspots(a):
+    """Files that keep needing fixes, with the evidence."""
+    root, _ = C.need_repo()
+    from . import hotspots_engine as HE
+    r = HE.hotspots(root, days=a.days)
+    if a.json:
+        _print(r)
+        return 0
+    if not r["files"]:
+        print("No hotspots: nothing changed often enough in the last %d days." % r["days"])
+        return 0
+    print("Hotspots, from %d commits in the last %d days (fixes count most):\n" % (r["commits"], r["days"]))
+    for f in r["files"][:a.limit]:
+        print("  %s %s\n      %s" % ("!" if f["level"] == "high" else "·", f["path"], "; ".join(f["reasons"])))
+    return 0
+
+
+def cmd_why(a):
+    """Why is this code like this? The commits (and issues/PRs) that shaped a file or some lines of it."""
+    root, _ = C.need_repo()
+    from . import history_engine as HI
+    m = re.match(r"^(.*?)(?::(\d+)(?:-(\d+))?)?$", a.target)
+    path, start, end = m.group(1), m.group(2), m.group(3)
+    if not os.path.isfile(os.path.join(root, path)):
+        C.die("no such file in this repo: %s" % path, 2)
+    r = HI.why(root, path, int(start) if start else None, int(end) if end else None, limit=a.limit)
+    if a.json:
+        _print(r)
+        return 0
+    where = path + (":%s-%s" % (r["start"], r["end"]) if r["start"] else "")
+    if not r["commits"]:
+        print("%s has no history yet (not committed)." % where)
+        return 0
+    print("%s: %d commit%s by %d %s\n" % (where, len(r["commits"]), "" if len(r["commits"]) == 1 else "s", r["authors"],
+                                          "person" if r["authors"] == 1 else "people"))
+    for c in r["commits"]:
+        print("  %s %s %s%s\n      %s" % (c["sha"][:7], c["date"], c["author"], "  [fix]" if c["fix"] else "",
+                                          c["subject"]))
+        for ref in c["refs"]:
+            print("      -> %s %s" % (ref["label"], ref["url"]))
+    return 0
+
+
+def cmd_explain5(a):
+    """Explain a file in plain English."""
+    root, _ = C.need_repo()
+    from . import explain5_engine as EE
+
+    result = EE.explain_file(a.file, root)
+
+    if a.json:
+        _print(result)
+        return 0
+
+    if result.get("error"):
+        print("Error: %s" % result["error"])
+        return 1
+
+    print("File: %s" % result["file"])
+    print("\nWhat it does: %s" % result.get("summary", "No summary"))
+    print("\nHow it works:")
+    for item in result.get("how_it_works", [])[:10]:
+        print("  Line %d: %s %s" % (item["line"], item["type"], item["name"]))
+
+    blame = result.get("why_its_here", {})
+    if blame:
+        print("\nCreated by: %s on %s" % (blame.get("created_by", "?"), blame.get("created_date", "?")))
+        print("Last modified: %s on %s" % (blame.get("last_modified_by", "?"), blame.get("last_modified_date", "?")))
+        print("Total commits: %s" % blame.get("total_commits", "?"))
+        for f in blame.get("recent_fixes") or []:
+            print("  fix %s %s: %s" % (f["sha"][:7], f["date"], f["message"]))
+
+    tests = result.get("related_tests", [])
+    if tests:
+        print("\nRelated tests: %s" % ", ".join(tests[:5]))
+    else:
+        print("\nRelated tests: None found")
+
+    issues = result.get("potential_issues", [])
+    if issues:
+        print("\nPotential issues:")
+        for issue in issues[:5]:
+            print("  Line %s: %s (%s)" % (issue.get("line", "?"), issue.get("message", "?"), issue.get("type", "?")))
+    return 0
+
+
+def cmd_review_coach(a):
+    """Get code review feedback."""
+    root, _ = C.need_repo()
+    from . import review_coach_engine as RCE
+
+    result = RCE.review_changes(a.base or "main", root)
+
+    if a.json:
+        _print(result)
+        return 0
+
+    if result.get("error"):
+        print("Error: %s" % result["error"])
+        return 1
+
+    if result.get("message"):
+        print(result["message"])
+        return 0
+
+    print("Files reviewed: %d" % len(result.get("files_reviewed", [])))
+    print("Risk level: %s" % result.get("risk_level", "READY_TO_REVIEW"))
+
+    counts = result.get("counts", {})
+    print("\nCounts:")
+    print("  Critical: %d" % counts.get("critical", 0))
+    print("  High: %d" % counts.get("high", 0))
+    print("  Medium: %d" % counts.get("medium", 0))
+    print("  Low: %d" % counts.get("low", 0))
+
+    issues = result.get("issues", [])
+    if issues:
+        print("\nIssues:")
+        for issue in issues[:10]:
+            f = issue.get("file", "")
+            ln = issue.get("line", "?")
+            loc = "%s:%s" % (f, ln) if f else "Line %s" % ln
+            print("  [%s] %s: %s" % (issue.get("severity", "?"), loc, issue.get("message", "?")))
+            if issue.get("suggestion"):
+                print("    -> %s" % issue["suggestion"])
+    return 0
+
+
+def cmd_suggest_tests(a):
+    """Suggest tests for a file."""
+    root, _ = C.need_repo()
+    from . import test_suggester_engine as TSE
+
+    result = TSE.suggest_tests(a.file, root)
+
+    if a.json:
+        _print(result)
+        return 0
+
+    if result.get("error"):
+        print("Error: %s" % result["error"])
+        return 1
+
+    print("File: %s" % result["file"])
+    print("Language: %s" % result.get("language", "unknown"))
+
+    funcs = result.get("functions", [])
+    classes = result.get("classes", [])
+    print("\nDefinitions:")
+    print("  Functions: %d" % len(funcs))
+    print("  Classes: %d" % len(classes))
+
+    suggestions = result.get("suggested_tests", [])
+    print("\nSuggested tests (%d):" % len(suggestions))
+    for s in suggestions[:10]:
+        print("  Priority %d: %s" % (s.get("priority", "?"), s.get("test_name", "?")))
+        if s.get("reason"):
+            print("    (%s)" % s["reason"])
+
+    summary = result.get("priority_summary", {})
+    print("\nSummary:")
+    print("  Must have: %d" % summary.get("priority_1_must_have", 0))
+    print("  Should have: %d" % summary.get("priority_2_should_have", 0))
+    print("  Nice to have: %d" % summary.get("priority_3_nice_to_have", 0))
+
+    related = result.get("related_tests", [])
+    if related:
+        print("\nExisting test files to add to:")
+        for t in related[:5]:
+            print("  %s" % t)
+    return 0
+
+
 def _sonar_print(res, limit=40):
     gate = {"OK": "passed", "ERROR": "FAILED", "WARN": "warning"}.get(res.get("gate"), res.get("gate") or "unknown")
     m = res.get("measures") or {}
@@ -1356,9 +1560,14 @@ def main(argv=None):
     kn.add_argument("--json", action="store_true")
     kn.add_argument("--quiet", action="store_true")
     wt = sp.add_parser("worktree", help="work on another branch in its own folder (shares this repo's graphs)")
-    wt.add_argument("action", choices=["new", "list", "remove"])
-    wt.add_argument("name", nargs="?", help="new: branch; remove: folder name or branch")
+    wt.add_argument("action", choices=["new", "list", "remove", "merge"])
+    wt.add_argument("name", nargs="?", help="new: branch; remove/merge: folder name or branch")
     wt.add_argument("--from", dest="base", help="new: start a new branch from this ref (default HEAD)")
+    wt.add_argument("--into", help="merge: the branch to merge into (default: the one it was forked from)")
+    wt.add_argument("--all", action="store_true", help="merge: every LFG worktree forked from --into")
+    wt.add_argument("--remove", action="store_true", help="merge: then remove the worktree and its merged branch")
+    wt.add_argument("--merge-commit", action="store_true",
+                    help="merge: allow a merge commit when the base moved on (default: fast-forward only)")
     iss = sp.add_parser("issue", help="mirror the run's issue into dev-graph (the Issues page)")
     iss.add_argument("action", choices=["sync", "show", "sync-tasks", "sync-brief"],
                      help="sync-tasks: one Issue per task in the current run's tasks.json (text, checks, done); "
@@ -1374,14 +1583,8 @@ def main(argv=None):
     iss.add_argument("--json", action="store_true")
     ru = sp.add_parser("rule")
     ru.add_argument("name")
-    ho = sp.add_parser("hotspots", help="files that keep needing fixes, from git history")
-    ho.add_argument("--days", type=int, default=180)
-    ho.add_argument("--json", action="store_true")
-    wy = sp.add_parser("why", help="the commits that shaped a file or lines: why is this here")
-    wy.add_argument("target", metavar="FILE[:START-END]")
-    wy.add_argument("--json", action="store_true")
     rp = sp.add_parser("repo")
-    rp.add_argument("action", choices=["docs", "id", "root", "graph"],
+    rp.add_argument("action", choices=["docs", "knowledge", "id", "root", "graph"],
                     help="root: main checkout (also from a worktree); graph: graphify graph.json path")
     rp.add_argument("--branch", nargs="?", const="", default=None, metavar="NAME",
                     help="docs: the folder for docs about this branch's work (the checked-out branch by default)")
@@ -1496,6 +1699,31 @@ def main(argv=None):
     hr.add_argument("--scope", choices=["repos", "everywhere"],
                     help="setup: route only repos where LFG is on (default) or every session")
     hr.add_argument("--json", action="store_true")
+    # onboard: run wizard or set features non-interactively
+    ob = sp.add_parser("onboard", help="pick LFG features (run without flags for interactive wizard)")
+    ob.add_argument("--all", action="store_true", help="enable all features")
+    ob.add_argument("--features", help="comma list of features: coding,reviews,security,knowledge,planning")
+    ob.add_argument("--json", action="store_true")
+    hs = sp.add_parser("hotspots", help="files that keep needing fixes (from git history)")
+    hs.add_argument("--days", type=int, default=180)
+    hs.add_argument("--limit", type=int, default=15)
+    hs.add_argument("--json", action="store_true")
+    wy = sp.add_parser("why", help="why code looks like this: the commits, issues and PRs behind a file or lines")
+    wy.add_argument("target", help="file, file:LINE or file:START-END")
+    wy.add_argument("--limit", type=int, default=15)
+    wy.add_argument("--json", action="store_true")
+    # explain5: explain code in plain English
+    ex = sp.add_parser("explain5", help="explain code in plain English")
+    ex.add_argument("file", help="file to explain")
+    ex.add_argument("--json", action="store_true")
+    # review-coach: pre-review code feedback
+    rc = sp.add_parser("review-coach", help="get code review feedback before submitting")
+    rc.add_argument("--base", help="base branch for comparison (default: main)")
+    rc.add_argument("--json", action="store_true")
+    # suggest-tests: suggest tests for code changes
+    st = sp.add_parser("suggest-tests", help="suggest tests based on code changes")
+    st.add_argument("file", help="file to analyze")
+    st.add_argument("--json", action="store_true")
     h = sp.add_parser("hook")
     h.add_argument("event")
     a = p.parse_args(argv)
@@ -1570,6 +1798,7 @@ def main(argv=None):
             "vendor": cmd_vendor,
             "omnigraph": cmd_omnigraph, "sonar": cmd_sonar,
             "headroom": cmd_headroom,
-            "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue,
-            "worktree": cmd_worktree, "setup": cmd_setup, "enable": cmd_enable, "disable": cmd_disable,
-            "packs": cmd_packs, "changes": cmd_changes, "uninstall": cmd_uninstall}[a.cmd](a)
+            "playbooks": cmd_playbooks, "review": cmd_review, "issue": cmd_issue, "worktree": cmd_worktree,
+            "setup": cmd_setup, "enable": cmd_enable, "disable": cmd_disable, "packs": cmd_packs,
+            "changes": cmd_changes, "uninstall": cmd_uninstall, "onboard": cmd_onboard, "explain5": cmd_explain5,
+            "review-coach": cmd_review_coach, "suggest-tests": cmd_suggest_tests}[a.cmd](a)

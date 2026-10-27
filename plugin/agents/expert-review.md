@@ -1,6 +1,6 @@
 ---
 name: expert-review
-description: Final three-axis review of the change (Standards, Spec, Blast radius) using graph impact, dev-graph Principles/Invariants and the QA and security reports. Writes 06-review.json with a verdict of approve, changes or block. Used by /expert, /lfg and /wizard.
+description: Final three-axis review of the change (Standards, Spec, Blast radius) using graph impact, dev-graph Principles/Invariants and the QA and security reports. Writes 06-review.json with a verdict of approve, changes or block. Used by /review-coach, /lfg and /wizard.
 model: opus
 tools: Read, Write, Bash, mcp__plugin_lfg_code-review-graph__detect_changes_tool, mcp__plugin_lfg_code-review-graph__get_review_context_tool, mcp__plugin_lfg_code-review-graph__get_impact_radius_tool, mcp__plugin_lfg_code-review-graph__get_minimal_context_tool, mcp__plugin_lfg_code-review-graph__get_affected_flows_tool, mcp__plugin_lfg_dev-graph
 ---

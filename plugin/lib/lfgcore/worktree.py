@@ -57,10 +57,13 @@ def new(root, branch, base=None):
     os.makedirs(base_dir(root), exist_ok=True)
     args = ["worktree", "add", path, branch] if exists else \
         ["worktree", "add", "-b", branch, path] + ([base] if base else [])
+    fork = None if exists else (base or C.git_branch(root))  # the branch it was forked from, to merge back into
     cp = _git(root, *args, timeout=300)
     if cp.returncode:
         raise RuntimeError((cp.stderr or cp.stdout).strip())
-    return {"path": path, "branch": branch, "created_branch": not exists}
+    if fork and not fork.startswith("detached@"):
+        _git(root, "config", "branch.%s.lfgBase" % branch, fork.replace("origin/", "", 1))
+    return {"path": path, "branch": branch, "created_branch": not exists, "base": fork}
 
 
 def remove(root, name):
@@ -105,3 +108,121 @@ def prune(root, idle_s=86400):
         except (ValueError, RuntimeError):
             pass  # has changes (the user's work) or git refused: leave it
     return gone
+
+
+# ---------------------------------------------------------------- where each worktree stands, and merging it back
+
+def default_branch(root):
+    ref = _git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").stdout.strip()
+    if ref.startswith("origin/"):
+        return ref[7:]
+    return next((b for b in ("main", "master", "develop")
+                 if _git(root, "show-ref", "--verify", "--quiet", "refs/heads/" + b).returncode == 0), "main")
+
+
+def base_of(root, branch):
+    """The branch `branch` was forked from: recorded when LFG made it (git config branch.<b>.lfgBase), else the
+    repo's default branch."""
+    if not branch:
+        return None
+    got = _git(root, "config", "--get", "branch.%s.lfgBase" % branch).stdout.strip()
+    return got or default_branch(root)
+
+
+def _kind(root, w):
+    if os.path.realpath(w["path"]) == os.path.realpath(C.main_root(root)):
+        return "main"
+    if os.path.basename(w["path"]).startswith("review-pr-"):
+        return "review"
+    return "lfg" if w["lfg"] else "yours"
+
+
+def status(root):
+    """Every worktree of the repo: its branch, the branch it merges back into, uncommitted changes, commits ahead
+    and behind that base, and what kind it is (main checkout, an LFG worktree, one of yours, a PR review's)."""
+    out = []
+    for w in listing(root):
+        kind, br = _kind(root, w), w["branch"]
+        row = dict(w, kind=kind, name=os.path.basename(w["path"]), base=None, dirty=0, ahead=0, behind=0,
+                   exists=os.path.isdir(w["path"]))
+        if row["exists"]:
+            row["dirty"] = len([x for x in _git(w["path"], "status", "--porcelain").stdout.splitlines() if x])
+        if br and kind in ("lfg", "yours"):
+            row["base"] = base_of(root, br)
+            if row["base"] and row["base"] != br:
+                cp = _git(root, "rev-list", "--left-right", "--count", "%s...%s" % (row["base"], br))
+                if cp.returncode == 0 and cp.stdout.split():
+                    row["behind"], row["ahead"] = (int(x) for x in cp.stdout.split()[:2])
+        out.append(row)
+    return out
+
+
+class NeedsMergeCommit(RuntimeError):
+    pass
+
+
+def _find(root, name):
+    hit = [w for w in status(root) if w["kind"] in ("lfg", "yours") and name in (w["name"], w["branch"])]
+    if not hit:
+        raise ValueError("no worktree named %r to merge (see `lfg worktree list`)" % name)
+    return hit[0]
+
+
+def merge(root, name, into=None, remove_after=False, merge_commit=False):
+    """Merge a worktree's branch into the branch it was forked from (or `into`). Only committed work moves: a
+    worktree with uncommitted changes is refused (LFG never commits for you). A fast-forward when possible; when
+    the base has moved on, a merge commit only with `merge_commit` (the user said yes). Conflicts abort the merge
+    and are listed. `remove_after` then removes the worktree (LFG's own, clean) and deletes the branch if merged."""
+    w = _find(root, name)
+    br, base = w["branch"], into or w["base"]
+    if not br or not base or br == base:
+        raise ValueError("%s has no branch to merge into %s" % (w["name"], base or "its base"))
+    if w["dirty"]:
+        raise RuntimeError("%s has %d uncommitted change%s: commit them in that worktree first, then merge (LFG "
+                           "never commits for you)" % (w["name"], w["dirty"], "" if w["dirty"] == 1 else "s"))
+    ahead = int(_git(root, "rev-list", "--count", "%s..%s" % (base, br)).stdout.strip() or 0)
+    how = "nothing to merge"
+    if ahead:
+        there = next((x for x in listing(root) if x["branch"] == base), None)
+        if there:  # the base is checked out somewhere: merge there, never on top of someone's changes
+            if _git(there["path"], "status", "--porcelain").stdout.strip():
+                raise RuntimeError("%s, where %s is checked out, has uncommitted changes: commit or stash them first"
+                                   % (there["path"], base))
+            cp = _git(there["path"], "merge", "--ff-only", br, timeout=300)
+            how = "fast-forward"
+            if cp.returncode:
+                if not merge_commit:
+                    raise NeedsMergeCommit("%s has moved on since %s was forked, so it can't fast-forward. Merge with "
+                                           "a merge commit?" % (base, br))
+                cp = _git(there["path"], "merge", "--no-ff", "--no-edit", br, timeout=300)
+                how = "merge commit"
+                if cp.returncode:
+                    files = _git(there["path"], "diff", "--name-only", "--diff-filter=U").stdout.split()
+                    _git(there["path"], "merge", "--abort")
+                    raise RuntimeError("merging %s into %s conflicts in %s; nothing was changed. Resolve it by hand "
+                                       "(or rebase %s on %s) and try again" % (br, base, ", ".join(files[:8]) or
+                                                                              "some files", br, base))
+        else:  # not checked out anywhere: move the branch only when that's a fast-forward
+            cp = _git(root, "fetch", ".", "%s:%s" % (br, base))
+            how = "fast-forward"
+            if cp.returncode:
+                raise RuntimeError("%s has moved on and isn't checked out anywhere: check it out, then merge %s there "
+                                   "(or rebase %s on %s)" % (base, br, br, base))
+    out = {"name": w["name"], "branch": br, "into": base, "commits": ahead, "how": how, "removed": False}
+    if remove_after:
+        if w["kind"] != "lfg":
+            raise RuntimeError("merged; %s isn't a worktree LFG made, so LFG leaves removing it to you" % w["name"])
+        remove(root, w["name"])
+        _git(root, "branch", "-d", br)  # only deletes a fully merged branch
+        _git(root, "config", "--unset", "branch.%s.lfgBase" % br)
+        out["removed"] = True
+    return out
+
+
+def merge_all(root, into, remove_after=True, merge_commit=False):
+    """Merge every LFG worktree forked from `into` back into it (and remove them), one by one; stops at the first
+    that can't merge, so nothing is left half done."""
+    done = []
+    for w in [w for w in status(root) if w["kind"] == "lfg" and w["base"] == into]:
+        done.append(merge(root, w["name"], into, remove_after, merge_commit))
+    return done

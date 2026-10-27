@@ -1,259 +1,251 @@
-"""Insights: where the code keeps breaking, and why a piece of it is there. Read-only git, nothing fetched.
+"""Dashboard → Insights: understand code you didn't write, without opening an editor.
 
-Hotspots: files that change a lot and keep needing fixes, from git history (changes, fix commits, how many people
-touch it, size, whether a test covers it), each with the reasons in plain words and whether fixes are rising.
-Why: every commit that shaped a file or a few of its lines, newest first, with the PRs, issues and Linear tickets
-each mentions turned into links.
+Three views of the selected project, all from git and the files on disk (read-only, no network):
+- Your changes: what this branch changes, what in it looks risky, the questions a senior engineer would ask before
+  approving it, and the problems that keep coming back in your reviews.
+- Hotspots: the files and folders that keep needing fixes, with the evidence (architecture debt you can act on).
+- Files: what a file is, why each part of it exists (the commits, issues and PRs behind it), and tests worth adding.
 
-Ported from upstream LFG (Varun Singh's hotspots_engine, history_engine and the parts of explain5_engine they use);
-his "Your changes" review coach and test suggester stay upstream, since this fork's PR reviews cover them."""
+A file is read only when git lists it in the project (tracked, or new and not ignored), so the dashboard API can't
+be pointed at anything else. The checks are patterns, said plainly in the UI: they point at what to read, they don't
+replace reading it. Author: Varun Singh.
+"""
 import collections
-import datetime
 import os
 import re
+import threading
+import time
 
 from . import common as C
+from . import dash
+from . import settings as S
 
-SKIP = re.compile(r"(^|/)(node_modules|vendor|dist|build|\.venv|venv|__pycache__|\.git|docs?)/|"
-                  r"(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Cargo\.lock|go\.sum|uv\.lock)$|"
-                  r"\.(md|mdx|txt|rst|json|ya?ml|toml|lock|svg|png|jpe?g|gif|ico|css|map|min\.js|csv)$", re.I)
-TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]+$|_test\.\w+$|\.(test|spec)\.\w+$")
-ISSUE_RX = re.compile(r"(?<![\w/])#(\d{1,7})\b")
-TICKET_RX = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b")
-PR_MERGE_RX = re.compile(r"Merge pull request #(\d+)|\(#(\d+)\)\s*$", re.M)  # a squash merge's subject ends (#N)
-# Files a tool writes: their "fixes" are regenerations, not bugs. By name, or a marker in the first lines.
-GENERATED = re.compile(r"\.generated\.|(^|/)(generated|__generated__)/|\.gen\.\w+$|_pb2\.py$|\.pb\.go$|"
-                       r"(^|/)(supabase|database)\.types\.ts$", re.I)
-GENERATED_MARK = re.compile(rb"@generated|auto-?generated|code generated|do not edit", re.I)
-NOT_TICKETS = re.compile(r"^(CVE|GHSA|UTF|ISO|RFC|SHA|HTTP|TLS)-")
+_cache, _lock = {}, threading.Lock()
+CONFIG_RX = re.compile(r"(^|/)(migrations?|alembic)/|\.sql$|(^|/)Dockerfile|docker-compose|(^|/)\.github/workflows/|"
+                       r"\.(tf|tfvars)$|(^|/)(k8s|helm|deploy|infra)/|(^|/)\.env\.example$", re.I)
 
 
-class _FixDetector:
-    """A commit subject that says it fixed something, not a release or version roll-up that only lists fixes."""
-    START = re.compile(r"^\s*(\[?(fix|bug|hotfix|bugfix)\b|fix(es|ed)?\s*[:(])", re.I)
-    ANY = re.compile(r"\b(fix(es|ed|ing)?|bugfix|hotfix|regression|crash(es|ed|ing)?|broken)\b", re.I)
-    RELEASE = re.compile(r"^\s*(release|bump|merge|revert)\b|^\s*v?\d+\.\d+(\.\d+)?\b|^\s*[\w.-]+\s+v?\d+\.\d+(\.\d+)?"
-                         r"\s*[:-]", re.I)
-
-    def search(self, text):
-        text = text or ""
-        if self.RELEASE.search(text):
-            return None
-        return self.START.search(text) or self.ANY.search(text)
+def _root(rid):
+    root = dash.repo_root(rid)
+    if not root:
+        raise S.Invalid("this project's folder isn't known yet; open Claude Code in it once")
+    return root
 
 
-FIX_RX = _FixDetector()
-
-
-def _git(root, *args, timeout=60):
-    return C.run(["git"] + list(args), cwd=root, timeout=timeout)
-
-
-def files(root):
-    """Files git tracks, plus new ones it would track (not ignored)."""
-    cp = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", timeout=20)
+def files(rid):
+    """Files git tracks, plus new files it would track (not ignored) that aren't committed yet."""
+    cp = C.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=_root(rid), timeout=20)
     return sorted(set(cp.stdout.splitlines())) if cp.returncode == 0 else []
 
 
-def tracked(root, path):
-    """`path` when git knows it as a file of this project, else ValueError: nothing else is ever read."""
+def _tracked(rid, path):
     path = (path or "").strip()
     while path.startswith("./"):
         path = path[2:]
     if not path:
-        raise ValueError("pick a file")
-    if path not in set(files(root)):
-        raise ValueError("%s isn't a file in this project (or git ignores it)" % path)
+        raise S.Invalid("pick a file")
+    if path not in set(files(rid)):
+        raise S.Invalid("%s isn't a file in this project (or git ignores it)" % path)
     return path
 
 
-def related_tests(path, root, every=None):
-    """Test files for this module: named after it (test_<name>, <name>_test, <name>.test/.spec) or importing it."""
-    base = os.path.splitext(os.path.basename(path))[0]
-    if not base or base == "__init__":
-        base = os.path.basename(os.path.dirname(path))
-    if not base:
-        return []
-    tests = [f for f in (every if every is not None else files(root)) if TEST_FILE.search(f) and f != path]
-    if not tests:
-        return []
-    b = re.escape(base)
-    named = {f for f in tests if re.search(r"(^|/)(test_)?%s([_.-](test|spec))?\.\w+$" % b, f)}
-    imp = re.compile(r"^\s*(from\s+[\w.]*\b%s\b[\w.]*\s+import\b|import\s+[\w.]*\b%s\b"
-                     r"|from\s+[\w.]+\s+import\s+.*\b%s\b)"
-                     r"|from\s+['\"][^'\"]*\b%s['\"]|require\(\s*['\"][^'\"]*\b%s['\"]" % ((b,) * 5), re.M)
-    g = _git(root, "grep", "--untracked", "-l", "-w", "-F", base, "--", *tests, timeout=20)  # cheap prefilter
-    importing = set()
-    for f in (g.stdout.splitlines() if g.returncode == 0 else []):
-        try:
-            with open(os.path.join(root, f), errors="replace") as fh:
-                if imp.search(fh.read(400_000)):
-                    importing.add(f)
-        except OSError:
-            pass
-    return sorted(named | importing)[:10]
+def _cached(key, ttl, fn):
+    with _lock:
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+    val = fn()
+    with _lock:
+        _cache[key] = (time.time(), val)
+    return val
 
 
 # ---------------------------------------------------------------- hotspots
 
-def _log(root, days):
-    since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-    cp = _git(root, "log", "--no-merges", "--since=%s" % since, "--name-only", "--no-renames",
-              "--format=%x01%H%x02%an%x02%ad%x02%s", "--date=short")
-    commits = []
-    for block in cp.stdout.split("\x01") if cp.returncode == 0 else []:
-        head, _, rest = block.partition("\n")
-        parts = head.split("\x02")
-        if len(parts) == 4:
-            commits.append({"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3],
-                            "files": [f for f in rest.splitlines() if f.strip()]})
-    return commits
+def hotspots(rid):
+    from . import hotspots_engine as HE
+    root = _root(rid)
+    head = C.run(["git", "rev-parse", "HEAD"], cwd=root, timeout=10).stdout.strip()
+    return _cached(("hot", root, head), 600, lambda: HE.hotspots(root))
 
 
-def _lines(root, path):
+# ---------------------------------------------------------------- your changes
+
+def _kind(message):
+    return re.sub(r"\s*\(in a test file\)$", "", message or "")
+
+
+def _remember(rid, issues):
+    """What the review coach found, by kind (never code or file contents), to spot what keeps coming back."""
+    path = C.lfg_path("repos", rid, "insights", "reviews.json")
+    hist = C.read_json(path, []) or []
+    kinds = collections.Counter(_kind(i.get("message")) for i in issues if i.get("severity") != "low")
+    hist = (hist + [{"at": C.now_iso(), "kinds": dict(kinds)}])[-30:]
+    C.write_json(path, hist)
+    return hist
+
+
+def _patterns(hist):
+    recent = hist[-10:]
+    seen = collections.Counter(k for h in recent for k in (h.get("kinds") or {}))
+    return [{"kind": k, "times": n, "of": len(recent)} for k, n in seen.most_common() if n >= 3][:4]
+
+
+GENERIC = {"src", "lib", "app", "apps", "core", "utils", "util", "common", "tests", "test", "main", "index", "init",
+           "__init__", "plugin", "plugins", "pkg", "internal", "cmd", "api", "web", "server", "client", "assets"}
+
+
+def decisions(rid):
+    """What the team decided, in words: this project's decision records (lfg repo docs → adr/) and, when the
+    Knowledge pack is running, dev-graph decisions, principles and invariants. [{title, text, source}]."""
+    def load():
+        import glob
+        out = []
+        for p in sorted(glob.glob(C.lfg_path("repos", rid, "docs", "adr", "*.md"))):
+            text = C.read_text(p)[:20000]
+            m = re.search(r"^#\s+(.+)$", text, re.M)
+            out.append({"title": (m.group(1) if m else os.path.basename(p)).strip(), "text": text,
+                        "source": "decision record %s" % os.path.basename(p).split("-")[0]})
+        try:
+            k = dash.knowledge()
+        except Exception:  # noqa: BLE001 - dev-graph is optional
+            k = {}
+        if k.get("available"):
+            for d in k.get("decisions") or []:
+                if str(d.get("status") or "").lower() not in ("superseded", "rejected", "deprecated"):
+                    out.append({"title": d.get("title") or d.get("slug"), "source": "dev-graph decision",
+                                "text": " ".join(str(d.get(x) or "") for x in ("title", "context", "decision"))})
+            for p in (k.get("principles") or []) + (k.get("invariants") or []):
+                out.append({"title": p.get("statement") or p.get("slug"), "source": "dev-graph rule",
+                            "text": " ".join(str(p.get(x) or "") for x in ("statement", "rationale", "specRef",
+                                                                           "guardRef"))})
+        return out
+    return _cached(("decisions", rid), 600, load)
+
+
+def _touching(decs, changed):
+    """Decisions that name a changed file, its module or its folder (not generic names like src or utils)."""
+    hits = []
+    for d in decs:
+        low = d["text"].lower()
+        for p in changed:
+            stem = os.path.splitext(os.path.basename(p))[0].lower()
+            folder = os.path.basename(os.path.dirname(p)).lower()
+            keys = [p.lower()] + [k for k in (stem, folder) if len(k) >= 4 and k not in GENERIC]
+            if any(re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(k), low) for k in keys):
+                hits.append((d, p))
+                break
+    return hits
+
+
+def senior_questions(review, hot, root, decs=()):
+    """What an experienced reviewer would ask before approving this change, from what it touches. At most five."""
+    from .explain5_engine import TEST_FILE, related_tests
+    qs = []
+    changed = [f["path"] for f in review.get("files_reviewed") or []]
+    hot_by = {f["path"]: f for f in (hot or {}).get("files", [])}
+    fragile = sorted((hot_by[p] for p in changed if p in hot_by and hot_by[p]["fixes"] >= 2),
+                     key=lambda h: -h["fixes"])
+    if len(fragile) == 1:
+        qs.append({"q": "%s needed %d fixes recently. What makes this change safe, and how would you know if it "
+                         "broke?" % (fragile[0]["path"], fragile[0]["fixes"]), "why": "hotspot"})
+    elif fragile:
+        names = ", ".join(os.path.basename(h["path"]) for h in fragile[:3])
+        more = " and %d more" % (len(fragile) - 3) if len(fragile) > 3 else ""
+        qs.append({"q": "It changes %d files that keep needing fixes (%s%s). What makes it safe, and how would you "
+                         "know if one of them broke?" % (len(fragile), names, more), "why": "hotspot"})
+    code = [p for p in changed if not TEST_FILE.search(p) and not re.search(r"\.(md|txt|json|ya?ml|lock|toml)$", p)]
+    if code and not any(TEST_FILE.search(p) for p in changed):
+        untested = [p for p in code[:12] if not related_tests(p, root)]
+        if untested:
+            more = " (and %d more)" % (len(untested) - 3) if len(untested) > 3 else ""
+            qs.append({"q": "Nothing tests %s%s. Which check shows it still works?" % (", ".join(untested[:3]), more),
+                       "why": "tests"})
+        else:
+            qs.append({"q": "The code changed but no test did. Which existing test covers the new behaviour?",
+                       "why": "tests"})
+    added = sum(f.get("additions", 0) for f in review.get("files_reviewed") or [])
+    if added > 600 or len(changed) > 20:
+        qs.append({"q": "This is {:,} new lines across {} files. Can it ship in smaller pieces that are each easy "
+                         "to check and undo?".format(added, len(changed)), "why": "size"})
+    risky = [p for p in changed if CONFIG_RX.search(p)]
+    if risky:
+        qs.append({"q": "It touches %s. How does this roll back if it goes wrong in production?" % ", ".join(risky[:3]),
+                   "why": "rollout"})
+    for d, p in _touching(decs, changed)[:2]:
+        qs.append({"q": "Your team decided \u201c%s\u201d (%s), and this changes %s. Does it still follow that?" % (
+            d["title"][:140], d["source"], p), "why": "decision"})
+    crit = [i for i in review.get("issues") or [] if i.get("severity") in ("critical", "high")]
+    if crit:
+        qs.append({"q": "%s at %s:%s. Is that intended, and what's the safer way?" % (
+            _kind(crit[0]["message"]), crit[0]["file"], crit[0]["line"]), "why": "finding"})
+    order = {"decision": 0, "hotspot": 1, "finding": 2, "tests": 3, "rollout": 4, "size": 5}
+    return sorted(qs, key=lambda x: order.get(x["why"], 9))[:5]
+
+
+def changes(rid, base=""):
+    from . import review_coach_engine as RCE
+    base = (base or "").strip()
+    if base and not re.match(r"^[\w./-]{1,200}$", base):
+        raise S.Invalid("that doesn't look like a branch name")
+    root = _root(rid)
+    r = RCE.review_changes(base or "main", root)
+    if r.get("error") or r.get("message"):
+        return r
     try:
-        with open(os.path.join(root, path), "rb") as fh:
-            return fh.read(2_000_000).count(b"\n")
-    except OSError:
-        return 0
-
-
-def _generated(root, path):
-    if GENERATED.search(path):
-        return True
+        hot = hotspots(rid)
+    except Exception:  # noqa: BLE001 - the review still stands without history
+        hot = {"files": []}
+    hot_by = {f["path"]: f for f in hot.get("files", [])}
+    touched = [hot_by[f["path"]] for f in r.get("files_reviewed") or [] if f["path"] in hot_by]
+    r["touches_hotspots"] = sorted((h for h in touched if h["level"] == "high" or h["fixes"] >= 2),
+                                   key=lambda h: (h["level"] != "high", -h["fixes"]))
     try:
-        with open(os.path.join(root, path), "rb") as fh:
-            return bool(GENERATED_MARK.search(fh.read(600)))
-    except OSError:
-        return False
+        decs = decisions(rid)
+    except Exception:  # noqa: BLE001
+        decs = []
+    r["questions"] = senior_questions(r, hot, root, decs)
+    r["patterns"] = _patterns(_remember(rid, r.get("issues") or []))
+    r["files_reviewed"] = [{k: f.get(k) for k in ("path", "additions", "deletions", "new")}
+                           for f in r.get("files_reviewed") or []]
+    return r
 
 
-def _trend(recent, earlier):
-    if recent >= 2 and recent > earlier:
-        return "rising"
-    return "falling" if earlier >= 2 and recent < earlier else "steady"
+# ---------------------------------------------------------------- one file
+
+def explain(rid, path):
+    from . import explain5_engine as EE
+    return EE.explain_file(_tracked(rid, path), _root(rid))
 
 
-def hotspots(root, days=180, limit=25):
-    """Generated files (by name, or a "do not edit" mark) are left out of the ranking.
-    {files, areas, rising, commits, days}. Each file: path, changes, fixes, authors, lines, tests, last, level
-    (high | watch), reasons (plain sentences), recent_fixes, trend (fixes in the recent half vs the half before)."""
-    commits = _log(root, days)
-    half = (datetime.date.today() - datetime.timedelta(days=days // 2)).isoformat()
-    every = files(root)
-    known = set(every)
-    per = collections.defaultdict(lambda: {"changes": 0, "fixes": 0, "recent": 0, "authors": set(), "last": "",
-                                           "fix_list": []})
-    for c in commits:
-        is_fix = bool(FIX_RX.search(c["subject"]))
-        for f in c["files"]:
-            if f not in known or SKIP.search(f) or TEST_FILE.search(f):
-                continue
-            p = per[f]
-            p["changes"] += 1
-            p["authors"].add(c["author"])
-            p["last"] = max(p["last"], c["date"])
-            if is_fix:
-                p["fixes"] += 1
-                p["recent"] += c["date"] >= half
-                if len(p["fix_list"]) < 5:
-                    p["fix_list"].append({"sha": c["sha"][:12], "date": c["date"], "subject": c["subject"][:140]})
-    ranked = sorted(per.items(), key=lambda kv: (kv[1]["fixes"] * 3 + kv[1]["changes"], kv[1]["last"]), reverse=True)
-    ranked = [kv for kv in ranked[:limit * 3] if not _generated(root, kv[0])]
-    out = []
-    for path, p in ranked[:limit]:
-        if p["changes"] < 2:
-            continue
-        tests, lines = related_tests(path, root, every), _lines(root, path)
-        earlier = p["fixes"] - p["recent"]
-        trend = _trend(p["recent"], earlier)
-        reasons = (["needed %d fix%s in %d days" % (p["fixes"], "es" if p["fixes"] != 1 else "", days)]
-                   if p["fixes"] else []) + ["changed %d time%s" % (p["changes"], "s" if p["changes"] != 1 else "")]
-        if trend == "rising":
-            reasons.append("fixes rising: %d in the last %d days, %d before" % (p["recent"], days // 2, earlier))
-        if len(p["authors"]) >= 4:
-            reasons.append("%d people change it" % len(p["authors"]))
-        if lines >= 800:
-            reasons.append("%d lines long" % lines)
-        if not tests:
-            reasons.append("no test file covers it")
-        high = (p["fixes"] >= 3 and p["changes"] >= 6) or (p["fixes"] >= 2 and not tests) or \
-            (p["changes"] >= 12 and not tests)
-        out.append({"path": path, "area": os.path.dirname(path) or ".", "changes": p["changes"], "fixes": p["fixes"],
-                    "authors": len(p["authors"]), "lines": lines, "tests": tests, "last": p["last"],
-                    "level": "high" if high else "watch", "reasons": reasons, "recent_fixes": p["fix_list"],
-                    "trend": trend, "fixes_recent": p["recent"], "fixes_earlier": earlier})
-    areas = collections.defaultdict(lambda: {"changes": 0, "fixes": 0, "files": 0, "high": 0, "fixes_recent": 0})
-    for path, p in per.items():
-        a = areas[os.path.dirname(path) or "."]
-        a["changes"] += p["changes"]
-        a["fixes"] += p["fixes"]
-        a["fixes_recent"] += p["recent"]
-        a["files"] += 1
-    for a in areas.values():
-        a["fixes_earlier"] = a["fixes"] - a["fixes_recent"]
-        a["trend"] = _trend(a["fixes_recent"], a["fixes_earlier"])
-    for f in out:
-        areas[f["area"]]["high"] += f["level"] == "high"
-    area_list = sorted(({"area": k, **v} for k, v in areas.items() if v["changes"] >= 3),
-                       key=lambda a: a["fixes"] * 3 + a["changes"], reverse=True)[:8]
-    return {"days": days, "half": days // 2, "commits": len(commits), "files": out, "areas": area_list,
-            "rising": [a["area"] for a in area_list if a["trend"] == "rising"]}
+def tests(rid, path):
+    from . import test_suggester_engine as TSE
+    return TSE.suggest_tests(_tracked(rid, path), _root(rid))
 
 
-# ---------------------------------------------------------------- why is this here
-
-def _web_base(root):
-    """https://github.com/owner/repo (or GitLab/Bitbucket) from the origin URL, or ""."""
-    url = _git(root, "remote", "get-url", "origin", timeout=10).stdout.strip()
-    m = re.match(r"^(?:git@|ssh://git@|https?://)([\w.-]+)[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url)
-    return "https://%s/%s" % (m.group(1), m.group(2)) if m else ""
-
-
-def refs(text, web="", linear=""):
-    """PR and issue numbers and tracker keys a commit message mentions, as [{label, url}] (url may be "")."""
-    out, seen = [], set()
-    gh = "github.com" in web
-    for m in PR_MERGE_RX.finditer(text):
-        n = m.group(1) or m.group(2)
-        if n and "#" + n not in seen:
-            seen.add("#" + n)
-            out.append({"label": "PR #%s" % n, "url": "%s/pull/%s" % (web, n) if gh else ""})
-    for n in ISSUE_RX.findall(text):
-        if "#" + n not in seen:
-            seen.add("#" + n)
-            out.append({"label": "#%s" % n, "url": "%s/issues/%s" % (web, n) if gh else ""})
-    for k in TICKET_RX.findall(text):
-        if k not in seen and not NOT_TICKETS.match(k):
-            seen.add(k)
-            out.append({"label": k, "url": "https://linear.app/%s/issue/%s" % (linear, k) if linear else ""})
-    return out
+def why(rid, path, start="", end=""):
+    from . import history_engine as HI
+    path = _tracked(rid, path)
+    s = int(start) if str(start or "").isdigit() else None
+    e = int(end) if str(end or "").isdigit() else None
+    return HI.why(_root(rid), path, s, e)
 
 
-def why(root, path, start=None, end=None, limit=15):
-    """Commits that changed `path` (or only its lines start..end), newest first:
-    {path, start, end, commits: [{sha, author, date, subject, body, fix, refs, url}], authors, fixes}."""
-    fmt = "--format=%x01%H%x02%an%x02%ad%x02%s%x02%b"
-    if start:
-        n = max(1, _lines(root, path))
-        start = min(int(start), n)
-        end = min(max(int(end or n), start), n)  # no end: to the end of the file
-        cmd = ["log", "-L", "%d,%d:%s" % (start, end, path), "--no-patch", fmt, "--date=short", "-n", str(limit)]
-    else:
-        cmd = ["log", "--follow", fmt, "--date=short", "-n", str(limit), "--", path]
-    cp = _git(root, *cmd)
-    web = _web_base(root)
-    linear = ((C.config().get("linear") or {}).get("workspace") or "").strip()
-    commits = []
-    for block in cp.stdout.split("\x01") if cp.returncode == 0 else []:
-        parts = block.strip("\n").split("\x02")
-        if len(parts) < 4:
-            continue
-        subject, body = parts[3], (parts[4] if len(parts) > 4 else "").strip()
-        body = "\n".join(x for x in body.splitlines() if not re.match(r"^(Co-Authored-By|Signed-off-by):", x, re.I))
-        commits.append({"sha": parts[0][:12], "author": parts[1], "date": parts[2], "subject": subject,
-                        "body": body[:1200], "fix": bool(FIX_RX.search(subject)),
-                        "refs": refs(subject + "\n" + body, web, linear),
-                        "url": "%s/commit/%s" % (web, parts[0]) if "github.com" in web else ""})
-    return {"path": path, "start": start, "end": end, "commits": commits,
-            "authors": len({c["author"] for c in commits}), "fixes": sum(c["fix"] for c in commits)}
+def view(name, rid, q):
+    def a(k):
+        v = q.get(k) if isinstance(q, dict) else None
+        return (v[0] if isinstance(v, list) and v else v) or ""
+    try:
+        if name == "insight_files":
+            return {"files": files(rid)[:20000]}
+        if name == "insight_review":
+            return changes(rid, a("base"))
+        if name == "insight_hotspots":
+            return hotspots(rid)
+        if name == "insight_explain":
+            return explain(rid, a("file"))
+        if name == "insight_why":
+            return why(rid, a("file"), a("start"), a("end"))
+        return tests(rid, a("file"))
+    except S.Invalid as e:
+        return {"error": str(e)}

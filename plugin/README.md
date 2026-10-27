@@ -31,7 +31,7 @@ Talk → Plan → Build → Prove → Ship → Learn, plus helpers you can use a
 | Talk | `grill` |
 | Plan | `plan` |
 | Build | `build`, `fix` |
-| Prove | `check`, `secure`, `pentest`, `expert` |
+| Prove | `check`, `secure`, `pentest`, `review-coach` |
 | Ship | `ship` |
 | Learn | `learn` |
 | Review others' PRs | `review` |
@@ -66,5 +66,5 @@ Commit, push, merge, rebase, write to GitHub, read `.env` or key files, deploy, 
 ## Credits
 
 LFG is created by Varun Singh (MIT).
-Adapted skills (`grill`, `plan`, `build`, `fix`, `expert`, `learn`, `spike`, `research`, `map`, `inbox`, `handoff`, `health`) are adapted from [mattpocock/skills](https://github.com/mattpocock/skills), © 2026 Matt Pocock, MIT. Each one names its source in an `adapted-from:` line.
+Adapted skills (`grill`, `plan`, `build`, `fix`, `review-coach`, `learn`, `spike`, `research`, `map`, `inbox`, `handoff`, `health`) are adapted from [mattpocock/skills](https://github.com/mattpocock/skills), © 2026 Matt Pocock, MIT. Each one names its source in an `adapted-from:` line.
 `secure`'s code review uses [cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill), © 2025-2026 Cloudflare, Inc., MIT, vendored unchanged in `vendor/cloudflare-security-audit/` (see its `UPSTREAM.md` and `LICENSE`).

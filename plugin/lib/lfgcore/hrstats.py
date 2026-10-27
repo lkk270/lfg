@@ -6,6 +6,7 @@ hours only, it rotates) records each request's cache-read, cache-write and outpu
 numbers Claude Code writes into the session's transcript. A request whose three numbers belong to exactly one
 session is counted for that session; the rest are shown as not matched. Nothing here changes Headroom.
 """
+import calendar
 import glob
 import json
 import os
@@ -23,9 +24,7 @@ KV = re.compile(r"(\w+)=(\S+)")
 def _local_day_hour(ts):
     """ISO UTC timestamp -> local (day, hour)."""
     try:
-        t = time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
-        if time.localtime(t).tm_isdst:
-            t += 3600
+        t = calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))  # UTC; localtime() handles daylight saving
     except ValueError:
         return None, None
     lt = time.localtime(t)
