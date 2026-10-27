@@ -4489,7 +4489,8 @@ class ReviewTest(unittest.TestCase):
         def gh(args, timeout=60):
             calls.append(args)
             return {"files": [{"filename": "app.py", "patch": "@@ -1,2 +1,3 @@\n a\n+b\n c"}]}
-        with mock.patch.object(R, "gh_json", side_effect=gh):
+        with mock.patch.object(R, "gh_json", side_effect=gh), \
+                mock.patch.object(R, "gh_status", return_value={"head_sha": "a" * 40}):
             first = R.snippet("o/r", 7, "1.1")
             again = R.snippet("o/r", 7, "1.1")
         self.assertEqual(first, again)
@@ -4497,6 +4498,36 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual([r["text"] for r in first["rows"] if r["at"]], ["c"])
         self.saved(self.finding(file="", line=None))
         self.assertIsNone(R.snippet("o/r", 7, "2.1"))  # a finding about the PR as a whole has no code
+
+    def test_a_line_is_followed_to_the_prs_latest_commit_like_github_shows_it(self):
+        moved = "@@ -1,2 +1,3 @@\n+top\n a\n b\n@@ -9,2 +10,1 @@\n x\n-y"
+        self.assertEqual([R.map_line(moved, n) for n in (1, 2, 5, 9, 10, 30)], [2, 3, 6, 10, None, 30])
+        added_only = "@@ -5,0 +6,2 @@\n+p\n+q"  # two lines inserted after line 5
+        self.assertEqual([R.map_line(added_only, n) for n in (5, 6, 9)], [5, 8, 11])
+        removed_only = "@@ -3,2 +2,0 @@\n-r\n-s"
+        self.assertEqual([R.map_line(removed_only, n) for n in (2, 3, 4, 5)], [2, None, None, 3])
+        self.saved()  # finding 1.1 is on app.py line 3 at commit aaa…
+        asked = []
+
+        def gh(args, timeout=60):
+            asked.append(args[1])
+            if args[1].endswith("a" * 40 + "..." + "c" * 40):  # what changed since the review
+                return {"files": [{"filename": "app.py", "patch": "@@ -1,1 +1,2 @@\n+top\n a"}]}
+            return {"files": [{"filename": "app.py", "patch": "@@ -0,0 +1,4 @@\n+top\n+a\n+b\n+c"}]}
+        with mock.patch.object(R, "gh_json", side_effect=gh), \
+                mock.patch.object(R, "gh_status", return_value={"head_sha": "c" * 40}):
+            sn = R.snippet("o/r", 7, "1.1")
+        self.assertEqual((sn["line"], sn["reviewed_line"], sn["head"]), (4, 3, "c" * 40))
+        self.assertEqual([(r["new"], r["text"]) for r in sn["rows"] if r["at"]], [(4, "c")])  # where GitHub has it now
+
+        def gone(args, timeout=60):  # the line itself was changed since: show it as it was reviewed, and say so
+            if "a" * 40 + "..." in args[1]:
+                return {"files": [{"filename": "app.py", "patch": "@@ -3,1 +3,1 @@\n-c\n+C"}]}
+            return {"files": [{"filename": "app.py", "patch": "@@ -0,0 +1,3 @@\n+a\n+b\n+c"}]}
+        with mock.patch.object(R, "gh_json", side_effect=gone), \
+                mock.patch.object(R, "gh_status", return_value={"head_sha": "d" * 40}):
+            sn = R.snippet("o/r", 7, "1.1")
+        self.assertEqual((sn["line"], sn["changed_since"], sn["head"]), (3, True, "a" * 40))
 
     def test_discussing_a_finding_keeps_the_conversation_on_it(self):
         self.saved()

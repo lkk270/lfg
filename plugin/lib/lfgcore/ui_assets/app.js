@@ -4151,7 +4151,10 @@ function earlierForAgent(x, f, pr, said) {
 /* The code a finding points at, like GitHub shows it: file name on top, old and new line numbers, added and removed lines. */
 function snipHtml(sn) {
   const rows = sn.rows.map(r => `<tr class="${r.kind === "+" ? "add" : r.kind === "-" ? "del" : ""}${r.at ? " at" : ""}"><td class="ln">${r.kind === "+" ? "" : esc(r.old ?? "")}</td><td class="ln">${r.kind === "-" ? "" : esc(r.new ?? "")}</td><td class="sg">${r.kind === " " ? "" : esc(r.kind)}</td><td class="tx">${esc(r.text)}</td></tr>`).join("");
-  return `<div class="pr-snip-h mono">${esc(sn.file)}</div><div class="pr-snip-b"><table>${rows}</table></div>`;
+  const short = x => esc(String(x || "").slice(0, 7));
+  const note = sn.changed_since ? `This line changed after the review; shown as it was at the reviewed commit <span class="mono">${short(sn.head)}</span>.`
+    : sn.reviewed_head && sn.head !== sn.reviewed_head ? `At the PR's latest commit <span class="mono">${short(sn.head)}</span>${sn.reviewed_line !== sn.line ? `; the review saw it at line ${esc(sn.reviewed_line)} of <span class="mono">${short(sn.reviewed_head)}</span>` : ""}.` : "";
+  return `<div class="pr-snip-h mono">${esc(sn.file)}</div>${note ? `<div class="pr-snip-note">${note}</div>` : ""}<div class="pr-snip-b"><table>${rows}</table></div>`;
 }
 /* Every reviewed PR on one Linear ticket, on one page: each with its newest review, score and post box. */
 async function prTicket(t) {

@@ -1798,29 +1798,75 @@ def snippet(repo, number, fid):
     if not f.get("file") or not f.get("line"):
         return None
     p = next(x for x in rec["passes"] if f in x["findings"])
-    key = hashlib.sha1(("%s|%s|%s|%s|%s" % (repo, rec.get("base"), p["head_sha"], f["file"], f["line"])).encode()
-                       ).hexdigest()
+    now = (gh_status(repo, number) or {}).get("head_sha") or p["head_sha"]  # GitHub shows the PR's latest commit
+    key = hashlib.sha1(("%s|%s|%s|%s|%s|%s" % (repo, rec.get("base"), p["head_sha"], now, f["file"], f["line"])
+                        ).encode()).hexdigest()
     cache = os.path.join(reviews_dir(), "snippets", key + ".json")
     hit = C.read_json(cache)
     if hit:
         return hit
-    rows = None
+    head, line, changed = p["head_sha"], f["line"], False
     try:
-        files = gh_json(["api", "repos/%s/compare/%s...%s" % (repo, rec["base"], p["head_sha"])], timeout=120)
-        patch = next((x.get("patch") for x in files.get("files") or [] if x.get("filename") == f["file"]), None)
-        rows = hunk_rows(patch or "", f["line"])
+        if now != head:  # follow the line through the commits since the review, to where GitHub has it now
+            since = _file_patch(repo, head, now, f["file"])
+            moved = map_line(since, line) if since else line
+            if moved:
+                head, line = now, moved
+            else:
+                changed = True  # the line itself changed: show it as it was reviewed
+        rows = hunk_rows(_file_patch(repo, rec["base"], head, f["file"]) or "", line)
         if not rows:
             raw = _gh(["api", "-H", "Accept: application/vnd.github.raw",
-                       "repos/%s/contents/%s?ref=%s" % (repo, f["file"], p["head_sha"])], timeout=60)
+                       "repos/%s/contents/%s?ref=%s" % (repo, f["file"], head)], timeout=60)
             if raw.returncode == 0:
-                rows = file_rows(raw.stdout, f["line"])
+                rows = file_rows(raw.stdout, line)
     except ReviewError:
         rows = None
     if not rows:
         return None
-    out = {"file": f["file"], "line": f["line"], "rows": rows}
+    out = {"file": f["file"], "line": line, "rows": rows, "head": head, "reviewed_line": f["line"],
+           "reviewed_head": p["head_sha"], "changed_since": changed}
     C.write_json(cache, out)
     return out
+
+
+def _file_patch(repo, a, b, path):
+    files = gh_json(["api", "repos/%s/compare/%s...%s" % (repo, a, b)], timeout=120)
+    return next((x.get("patch") for x in files.get("files") or [] if x.get("filename") == path), None)
+
+
+def map_line(patch, line):
+    """Where line `line` of the old side of a diff is on the new side, or None when that line was changed or
+    removed. A file the diff doesn't touch keeps its numbers."""
+    shift = 0
+    old = new = 0
+    for ln in patch.splitlines():
+        m = re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", ln)
+        if m:
+            o, ol, n, nl = int(m.group(1)), int(m.group(2) or 1), int(m.group(3)), int(m.group(4) or 1)
+            o, n = o + (ol == 0), n + (nl == 0)  # a hunk that only adds (or only removes) names the line before it
+            if line < o:
+                break
+            if line >= o + ol:
+                shift = (n + nl) - (o + ol)
+                old = new = None
+                continue
+            old, new = o, n
+            continue
+        if old is None or not old and not new or ln.startswith("\\"):
+            continue
+        if ln[:1] == "+":
+            new += 1
+        elif ln[:1] == "-":
+            if old == line:
+                return None
+            old += 1
+        else:
+            if old == line:
+                return new
+            old += 1
+            new += 1
+    return line + shift
 
 
 def hunk_rows(patch, line, around=SNIP_AROUND):
