@@ -4135,9 +4135,9 @@ function findingForAgent(f, pr) {
   return [`# Review finding ${f.id} on ${pr}: ${f.title || f.issue}`,
     `Severity: ${f.severity}. Status: ${DECIDED[f.status] || f.status}${f.comment_url ? ", posted" : ""}${(f.fixed || {}).commit ? `, fixed in ${f.fixed.commit}` : ""}.`,
     `Where: ${whereOf(f)}`, f.issue ? `Issue: ${f.issue}` : "", f.fix ? `Suggested fix: ${f.fix}` : "",
-    f.detail ? `What the review checked: ${f.detail}` : "", f.raised_by ? `Raised by: ${f.raised_by.who}${f.raised_by.url ? " (" + f.raised_by.url + ")" : ""}` : "",
-    (f.echoes || []).length ? `Also raised by: ${f.echoes.map(e => `${e.who}${e.url ? " (" + e.url + ")" : ""}`).join(", ")}` : "",
+    f.detail ? `What the review checked: ${f.detail}` : "", ...findingState(f),
     f.body ? `Comment for the author:\n${f.body}` : "", f.comment_url ? `On GitHub: ${f.comment_url}` : "",
+    (f.chat || []).length ? `Discussion so far:\n\n${copyChat(f.chat)}` : "",
     "Verify it against the code before changing anything; if it's wrong, say why instead."].filter(Boolean).join("\n\n");
 }
 function earlierForPerson(x, f, pr, said) {
@@ -4266,16 +4266,36 @@ async function prDetail(arg) {
 }
 /* One review pass as Markdown for an agent: what the PR is, the summary, approach notes, and every finding with
    where it is, what's wrong, the fix and the comment, plus what you decided about it. */
+/* Copied text: a chat message's attachments by file name, and one discussion as You / Claude turns. */
+const copyMsg = q => String(q || "").replace(/\[(?:image|file): ([^\]\s]+)\]/g, (m, path) => `[attached: ${path.split("/").pop()}]`).trim();
+const copyChat = chat => (chat || []).map(t => [`**You:** ${copyMsg(t.q)}`, t.a ? `**Claude:** ${String(t.a).trim()}` : "_(no answer yet)_"].join("\n\n")).join("\n\n");
+/* Where a finding stands beyond kept/dropped: who raised it, your reply, the re-check, the fix. */
+function findingState(x) {
+  return [x.raised_by ? `Raised by: ${x.raised_by.who}${x.raised_by.url ? " (" + x.raised_by.url + ")" : ""}` : "",
+    (x.echoes || []).length ? `Also raised by: ${x.echoes.map(e => `${e.who}${e.url ? " (" + e.url + ")" : ""}`).join(", ")}` : "",
+    x.status === "drop" && x.dropped_by === "claude" ? "Dropped: you said it wasn't needed and Claude agreed after checking the code." : "",
+    x.reply ? `Your reply:\n${x.reply}` : "",
+    x.check && x.check.state ? `Re-check: ${x.check.state}${x.check.why ? ". " + x.check.why : ""}` : "",
+    (x.fixed || {}).commit ? `Fixed in ${x.fixed.commit}` : ""].filter(Boolean);
+}
 function prCopyText(rec, p) {
   const decided = { keep: "kept", drop: "dropped", pending: "not decided yet" };
-  const f = p.findings.map((x, i) => [`### ${i + 1}. ${x.title || x.issue || x.id} (${x.severity}, ${decided[x.status] || x.status}${x.comment_url ? ", posted" : ""})`,
+  const byId = Object.fromEntries((rec.passes || []).flatMap(x => x.findings).map(x => [x.id, x]));
+  const f = p.findings.map((x, i) => [`### ${i + 1}. ${x.title || x.issue || x.id} (${x.id}, ${x.severity}, ${decided[x.status] || x.status}${x.comment_url ? ", posted" : ""})`,
     x.file ? `Where: ${x.file}${x.line ? ":" + x.line : ""}` : "Where: the PR as a whole",
     x.issue && x.title ? `Issue: ${x.issue}` : "", x.fix ? `Fix: ${x.fix}` : "", x.detail ? `What the review checked: ${x.detail}` : "",
-    (x.echoes || []).length ? `Also raised by: ${x.echoes.map(e => `${e.who}${e.url ? " (" + e.url + ")" : ""}`).join(", ")}` : "",
-    x.body ? `Comment:\n${x.body}` : ""].filter(Boolean).join("\n"));
+    ...findingState(x), x.body ? `Comment:\n${x.body}` : "", x.comment_url ? `On GitHub: ${x.comment_url}` : "",
+    (x.chat || []).length ? `#### Discussion of ${x.id}\n\n${copyChat(x.chat)}` : ""].filter(Boolean).join("\n"));
+  const qs = (p.questions || []).map(q => [`- **${q.ask}**`, q.why ? `  Why it matters: ${q.why}` : "",
+    `  Answer: ${q.answer ? String(q.answer).trim() : "not answered yet"}`].filter(Boolean).join("\n"));
+  const prior = (p.prior || []).map(x => `- ${x.id}${byId[x.id] ? ` (${byId[x.id].title || byId[x.id].issue || ""})` : ""}: ${(PRIOR[x.state] || [x.state])[0]}${x.note ? ". " + x.note : ""}`);
   return [`# Review of ${rec.repo}#${rec.number}: ${rec.title || ""}`, `${rec.url || ""}\nReview ${p.n}, at commit ${p.head_sha}${p.score != null ? `, score ${p.score}` : ""}`,
     p.summary ? `## Summary\n${p.summary}` : "", (p.approach_notes || []).length ? `## Approach notes\n${p.approach_notes.map(x => "- " + x).join("\n")}` : "",
-    `## Findings (${p.findings.length})`, f.join("\n\n") || "None."].filter(Boolean).join("\n\n");
+    (p.run || {}).notes ? `## Your notes for this review\n${p.run.notes}` : "",
+    qs.length ? `## Questions (${qs.length})\n${qs.join("\n")}` : "",
+    prior.length ? `## Earlier review comments (${prior.length})\n${prior.join("\n")}` : "",
+    `## Findings (${p.findings.length})`, f.join("\n\n") || "None.",
+    (p.chat || []).length ? `## Discussion of the whole review\n\n${copyChat(p.chat)}` : ""].filter(Boolean).join("\n\n");
 }
 async function prImport(pr, path, btn) {
   btn.disabled = true; btn.textContent = path === "log" ? "Saving…" : "Importing…";
