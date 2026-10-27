@@ -3018,7 +3018,7 @@ function talkPane(pr, p, unlocked, byId) {
   const about = (state.chatAbout || {})[pr], f = about && byId[about];
   const key = f ? `f:${pr}:${f.id}` : `r:${pr}:${p.n}`;
   const turns = [...(f ? f.chat || [] : p.chat || [])], waiting = (state.chatPending || {})[key];
-  const toSess = !f && ((state.prSessions || {})[pr] || []).find(x => x.id === (state.chatTo || {})[pr]);
+  const toSess = ((state.prSessions || {})[pr] || []).find(x => x.id === (state.chatTo || {})[pr]);
   if (waiting) turns.push({ q: waiting, a: null, session: toSess ? toSess.title : "" });
   turns.push(...((state.chatQueue || {})[key] || []).map(q => ({ q, a: null, queued: true })));
   const mode = chatMode(), count = (p.chat || []).length;
@@ -3027,7 +3027,7 @@ function talkPane(pr, p, unlocked, byId) {
   const icon = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
   return `<button class="chat-fab" data-chat-mode="side" ${mode === "hidden" ? "" : "hidden"}>${icon("M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z")}Chat${count ? `<span class="n">${count}</span>` : ""}</button>
   <aside class="pr-talk ${mode}" ${mode === "hidden" ? "hidden" : ""} data-chat="${esc(JSON.stringify([pr, p.n, f ? f.id : ""]))}">
-    <div class="pr-talk-h"><b>Chat</b>${!f && ((state.prSessions || {})[pr] || []).length ? `<select class="chat-to" data-chat-to="${esc(pr)}" title="Who your messages go to: this review's session, which can change the review, or one of your sessions about this PR, which only answers"><option value="">with the review</option>${state.prSessions[pr].map(x => `<option value="${esc(x.id)}" ${(state.chatTo || {})[pr] === x.id ? "selected" : ""}>with ${esc(x.title.slice(0, 40))}</option>`).join("")}</select>` : ""}<span class="grow"></span>
+    <div class="pr-talk-h"><b>Chat</b>${((state.prSessions || {})[pr] || []).length ? `<select class="chat-to" data-chat-to="${esc(pr)}" title="Who your messages go to, about the whole review or the finding you're discussing: this review's session, which can change the review, or one of your sessions about this PR, which only answers"><option value="">with the review</option>${state.prSessions[pr].map(x => `<option value="${esc(x.id)}" ${(state.chatTo || {})[pr] === x.id ? "selected" : ""}>with ${esc(x.title.slice(0, 40))}</option>`).join("")}</select>` : ""}<span class="grow"></span>
       <button class="icon-btn" data-chat-mode="${mode === "wide" ? "side" : "wide"}" title="${mode === "wide" ? "Back to the side" : "Make it bigger"}">${icon(mode === "wide" ? "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" : "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")}</button>
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
@@ -3349,9 +3349,9 @@ function wireChatPane(root) {
 /* Send one chat message, then the next one queued behind it, in order. A failed one goes back in the box. */
 async function chatSend(key, pr, n, fid, text) {
   (state.chatPending || (state.chatPending = {}))[key] = text;
-  const to = !fid && (state.chatTo || {})[pr];
-  const d = fid ? await save("review_discuss", { pr, id: fid, question: text })
-    : to ? await save("review_ask_session", { pr, pass: n, session: to, question: text })
+  const to = (state.chatTo || {})[pr];
+  const d = to ? await save("review_ask_session", { pr, pass: n, session: to, question: text, ...(fid ? { id: fid } : {}) })
+    : fid ? await save("review_discuss", { pr, id: fid, question: text })
     : await save("review_ask", { pr, pass: n, question: text });
   delete state.chatPending[key];
   const queue = (state.chatQueue || {})[key] || [];

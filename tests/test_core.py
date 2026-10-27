@@ -3897,6 +3897,22 @@ class ReviewTest(unittest.TestCase):
         chat = R.load("o/r", 7)["passes"][0]["chat"]
         self.assertEqual([(x["q"], x["session"]) for x in chat], [("and the timeout?", "build ATO-1")])
 
+    def test_ask_a_session_about_one_finding_keeps_it_on_the_finding(self):
+        with mock.patch.object(R, "pr_meta", return_value=self.META):
+            R.save("o/r", 7, {"summary": "s", "findings": [self.finding(title="No retry on fetch")]})
+        built = {"id": "b" * 36, "title": "build ATO-1", "cwd": self.tmp_dir()}
+        sent = []
+
+        def fake(cmd, **kw):
+            sent.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "on purpose", "session_id": "f" * 36}), "")
+        with mock.patch.object(R, "sessions_for", return_value=[built]), \
+                mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
+            R.ask_session("o/r", 7, built["id"], "why no retry?", n=1, fid="1.1")
+        self.assertIn("1.1: No retry on fetch", sent[0][sent[0].index("-p") + 1])
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual(([x["q"] for x in p["findings"][0]["chat"]], p.get("chat")), (["why no retry?"], None))
+
     def test_the_review_chat_takes_images_and_slash_commands(self):
         import base64
         png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()

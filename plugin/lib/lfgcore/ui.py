@@ -567,7 +567,7 @@ def review_action(what, body):
             return R.fix_start(repo, number)
         if what == "review_ask_session":
             return R.ask_session(repo, number, str(body.get("session") or ""), body.get("question"),
-                                 n=body.get("pass") or None)
+                                 n=body.get("pass") or None, fid=str(body.get("id") or "") or None)
         if what == "review_discuss":
             return R.discuss(repo, number, str(body.get("id") or ""), body.get("question"))
         if what == "review_rewrite":

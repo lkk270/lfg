@@ -2145,6 +2145,8 @@ def sessions_for(repo, number, days=30):
 ASK_SESSION = ("Lee is reviewing pull request %s from the LFG dashboard and asks you about it. You worked on this, so "
                "answer from what you know and from the code: a few plain sentences he could hand to the reviewer as "
                "they are. Don't change any files, commit or push.\n\n%s")
+ASK_FINDING = ("It's about one finding of the review, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\n\n"
+               "Lee asks: %s")
 SESSION_TOOLS = ["Read", "Grep", "Glob", "Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git blame *)",
                  "Bash(git grep *)", "Bash(gh pr view *)", "Bash(gh pr diff *)"]
 
@@ -2163,10 +2165,11 @@ def _session_about(repo, number, sid):
     return {"id": sid, "title": s["title"], "cwd": s["cwd"]}
 
 
-def ask_session(repo, number, sid, question, n=None):
+def ask_session(repo, number, sid, question, n=None, fid=None):
     """Ask one of your sessions about this PR (say the one where you built it), from the review page. The first
     question forks it, so the session itself is never changed; later ones continue the fork. With `n`, the turn is
-    kept in that review's chat; the review itself doesn't change (only its own session's answers do that)."""
+    kept in that review's chat; with `fid`, it is about that one finding and kept in the finding's chat. The review
+    itself doesn't change (only its own session's answers do that)."""
     import subprocess
     if not str(question or "").strip():
         raise ReviewError("ask something")
@@ -2178,7 +2181,12 @@ def ask_session(repo, number, sid, question, n=None):
     q = _text(question, "question", 4000)
     rec = need(repo, number)
     fork = (rec.get("session_forks") or {}).get(s["id"])
-    prompt, images = _chat_prompt(ASK_SESSION % (ref(repo, number), q), q)
+    about = q
+    if fid:
+        f = find(rec, fid)
+        about = ASK_FINDING % (fid, f.get("title") or f.get("issue") or "", f.get("file") or "the PR as a whole",
+                               f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", q)
+    prompt, images = _chat_prompt(ASK_SESSION % (ref(repo, number), about), q)
     cmd = ["claude", "-p", prompt, "--resume", fork or s["id"]] + ([] if fork else ["--fork-session"]) + [
         "--output-format", "json", "--permission-mode", "dontAsk", "--allowedTools", ",".join(SESSION_TOOLS),
         "--disallowedTools", ",".join(RUN_DENY)] + _model() + _direct()
@@ -2194,8 +2202,10 @@ def ask_session(repo, number, sid, question, n=None):
     if out.get("session_id"):
         rec.setdefault("session_forks", {})[s["id"]] = out["session_id"]
     turn = {"q": q, "a": text, "at": C.now_iso(), "session": s["title"], "session_id": s["id"]}
-    p = next((x for x in rec["passes"] if x["n"] == int(n)), None) if n else None
-    if p:
+    p = next((x for x in rec["passes"] if x["n"] == int(n)), None) if n and not fid else None
+    if fid:
+        find(rec, fid).setdefault("chat", []).append(turn)
+    elif p:
         p.setdefault("chat", []).append(turn)
     store(rec)
     return turn
