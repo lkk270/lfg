@@ -3197,14 +3197,31 @@ let tlPoll = null;
 async function todoToLinear(t, lin) {
   const desc = [t.notes || "", t.repo ? `Repo: ${repoName(t.repo)}` : ""].filter(Boolean).join("\n\n");
   openDrawer("Create Linear ticket", `<div class="readable td-sheet">
-    <label>Title<input type="text" id="tl-t" maxlength="300" value="${esc(t.text)}"></label>
-    <label>Description<textarea id="tl-d" rows="6" placeholder="Optional">${esc(desc)}</textarea></label>
+    <p class="row small" id="tl-draft"><span class="spin"></span><span class="grow">Writing the ticket with your <code>/linear-ticket</code> skill… Nothing is sent to Linear.</span></p>
+    <label>Title<input type="text" id="tl-t" maxlength="300" value="${esc(t.text)}" disabled></label>
+    <label>Description<textarea id="tl-d" rows="12" placeholder="Optional" disabled>${esc(desc)}</textarea></label>
     <div id="tl-opts"><p class="muted small"><span class="spin"></span> Getting your Linear teams, projects and people…</p></div>
     ${t.linear_error ? `<p class="td-err small">Last try: ${fmtWhy(t.linear_error)}</p>` : ""}
     <p class="muted small">Creates this one issue in Linear, exactly as written and picked here. Nothing else in Linear changes.</p>
     <p class="row"><button class="btn primary" id="tl-go" disabled>Create Linear ticket</button><span class="muted small" id="tl-msg"></span></p></div>`);
   const box = $("#tl-opts"), go = $("#tl-go");
   const pick = { team: lin.team || "", project: "", assignee: "" };
+  // the preview: your /linear-ticket skill writes the title and description, you change anything, then Create
+  const ready = { draft: false, opts: false }, canGo = () => { go.disabled = !(ready.draft && ready.opts); };
+  const draft = async () => {
+    const note = $("#tl-draft"), ti = $("#tl-t"), de = $("#tl-d");
+    ready.draft = false; canGo(); ti.disabled = de.disabled = true;
+    note.innerHTML = '<span class="spin"></span><span class="grow">Writing the ticket with your <code>/linear-ticket</code> skill… Nothing is sent to Linear.</span>';
+    const r = await save("todo_draft", { id: t.id }).catch(e => ({ ok: false, why: e.message }));
+    if (!document.body.contains(note)) return;
+    if (r.ok) { ti.value = r.title; de.value = r.description; grow(de); }
+    note.innerHTML = r.ok
+      ? `<span class="grow muted">Written by <code>/${esc(r.skill)}</code>. Check it and change anything before you create it.</span><button class="btn small" data-tl-redraft>Write it again</button>`
+      : `<span class="grow td-err">Couldn't write it with the skill: ${fmtWhy(r.why || "no answer")}. Write it here instead.</span><button class="btn small" data-tl-redraft>Try again</button>`;
+    $("[data-tl-redraft]", note).onclick = draft;
+    ti.disabled = de.disabled = false; ready.draft = true; canGo();
+  };
+  draft();
   const paint = o => {
     if (!document.body.contains(box)) return;
     if (!o.teams.length) {
@@ -3223,7 +3240,7 @@ async function todoToLinear(t, lin) {
       $("#tl-project").onchange = e => { pick.project = e.target.value; };
       $("#tl-who").onchange = e => { pick.assignee = e.target.value; };
     }
-    go.disabled = !o.teams.length;
+    ready.opts = !!o.teams.length; canGo();
     const r = $("[data-tl-refresh]", box); if (r) r.onclick = e => { e.preventDefault(); load(true); };
     clearTimeout(tlPoll);
     if (o.loading) tlPoll = setTimeout(() => load(false), 3000);

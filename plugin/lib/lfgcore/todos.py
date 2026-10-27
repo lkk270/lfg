@@ -270,6 +270,56 @@ def linear_options(fresh=False):
                 at=(hit or {}).get("at"))
 
 
+DRAFT_SKILL = "linear-ticket"
+DRAFT_PROMPT = (
+    "Use the /%s skill to write the title and description of a new Linear ticket for this todo: a fresh ticket from "
+    "a rough idea, before any code exists. Linear isn't connected in this run and nothing here may change anything: "
+    "don't create, fetch or update any ticket, only write the text, which the user checks before it's filed.\n\n"
+    "Todo: %s\nNotes: %s\nRepo: %s\n\n"
+    "End your reply with exactly one fenced json block: {\"title\": \"...\", \"description\": \"markdown\"}.")
+
+
+def draft_linear(tid):
+    """The Create Linear ticket sheet's title and description, written by the user's ticket skill (/linear-ticket, or
+    todos.ticket_skill in config). The run can only read (the skill and its files, the todo's repo) and has no MCP
+    server, so it can't reach Linear: the user edits the draft and only Create files it."""
+    d = _load()
+    t = _find(d, tid)
+    skill = str((C.config().get("todos") or {}).get("ticket_skill") or DRAFT_SKILL).strip().lstrip("/")
+    if not os.path.isfile(os.path.join(os.path.expanduser("~/.claude/skills"), skill, "SKILL.md")):
+        raise Invalid("the /%s skill isn't in ~/.claude/skills, so there's nothing to draft the ticket with" % skill)
+    claude = C.which("claude")
+    if not claude:
+        raise Invalid("Claude Code (claude) isn't on PATH")
+    from . import dash
+    root = dash.repo_root(t["repo"]) if t.get("repo") else None
+    model = (C.config().get("models") or {}).get("ticket") or "sonnet"
+    argv = [claude, "-p", "--output-format", "json", "--model", model, "--max-turns", "12",
+            "--permission-mode", "default", "--allowedTools", "Skill,Read,Glob,Grep",
+            "--disallowedTools", ",".join(NO_TOOLS), "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {}})]
+    prompt = DRAFT_PROMPT % (skill, t.get("text", ""), t.get("notes") or "(none)",
+                             os.path.basename(root) if root else "(none)")
+    try:
+        cp = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=300, env=_env(),
+                            cwd=root if root and os.path.isdir(root) else C.LFG_HOME)
+    except subprocess.TimeoutExpired:
+        raise Invalid("/%s took more than 5 minutes; write the ticket here instead" % skill) from None
+    try:
+        text = str(json.loads(cp.stdout).get("result") or "")
+    except ValueError:
+        text = ""
+    blocks = JSON_BLOCK.findall(text)
+    try:
+        got = json.loads(blocks[-1]) if blocks else {}
+    except ValueError:
+        got = {}
+    title, desc = str(got.get("title") or "").strip(), str(got.get("description") or "").strip()
+    if not title:
+        raise Invalid("/%s didn't return a ticket (%s)" % (skill, (text or cp.stderr or "no answer").strip()[-200:]))
+    C.audit("todo-linear-draft", {"todo": t["id"], "skill": skill})
+    return {"title": _text(title), "description": desc[:MAX_NOTES], "skill": skill}
+
+
 def create_linear(tid, title, description="", team="", project="", assignee=""):
     """The user pressed Create Linear ticket and confirmed this exact title, description, team, project and assignee
     (picked from Linear's own lists): start the one background run that files it. The todo is tagged with the

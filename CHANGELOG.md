@@ -28,6 +28,7 @@ Install this version first, then run `lfg knowledge migrate --dry-run` in each r
 
 ### Changed
 
+- Todos: **Create Linear ticket** now writes the title and description with your `/linear-ticket` skill first (a read-only Claude run with no Linear connection; `todos.ticket_skill` in config names another skill). You check and change the preview, and only **Create** plus the confirm files it. **Write it again** asks the skill for a new draft.
 - PR reviews show the notes you started a review with: on the running review, and on the finished review, with **Edit for the next review** to change or reuse them. The start buttons say "with your notes" when the notes box has text.
 - PR review chat takes any file, not only images: drop, paste or attach (paperclip) CSVs, documents, text and code files, up to 10 at a time. Files show as chips with their names, and several that can't be added say why in one message.
 

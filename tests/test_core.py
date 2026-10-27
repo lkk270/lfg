@@ -1793,6 +1793,38 @@ class TodosTest(unittest.TestCase):
         with self.assertRaises(T.Invalid):
             T.update(b, status="done")
 
+    def test_the_ticket_text_is_drafted_by_your_skill_with_no_linear_in_reach(self):
+        T = self.T
+        tid = T.add("Export times out on big orgs", notes="Seen at Acme, 40k rows")["id"]
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, ".claude", "skills", "linear-ticket"))
+        C.write_text(os.path.join(home, ".claude", "skills", "linear-ticket", "SKILL.md"), "---\nname: linear-ticket\n---\n")
+        sent = []
+
+        def fake(argv, **kw):
+            sent.append((argv, kw["input"]))
+            reply = 'Done.\n```json\n{"title": "Fix the export timeout", "description": "## For humans\\nIt times out."}\n```'
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"result": reply}), "")
+        with mock.patch.object(os.path, "expanduser", lambda p: p.replace("~", home, 1)), \
+                mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
+            got = T.draft_linear(tid)
+        self.assertEqual(got, {"title": "Fix the export timeout", "description": "## For humans\nIt times out.",
+                               "skill": "linear-ticket"})
+        argv, prompt = sent[0]
+        self.assertIn("/linear-ticket", prompt)
+        self.assertIn("Export times out on big orgs", prompt)
+        self.assertIn("Seen at Acme, 40k rows", prompt)
+        allowed = argv[argv.index("--allowedTools") + 1].split(",")
+        self.assertIn("Skill", allowed)
+        self.assertFalse([x for x in allowed if "linear" in x.lower() or x in ("Bash", "Edit", "Write")])
+        self.assertEqual(json.loads(argv[argv.index("--mcp-config") + 1]), {"mcpServers": {}})  # no Linear at all
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertNotIn("linear_job", T._find(T._load(), tid))  # a draft creates nothing
+        with mock.patch.object(os.path, "expanduser", lambda p: p.replace("~", tempfile.mkdtemp(), 1)), \
+                mock.patch.object(C, "which", return_value="/bin/claude"):
+            with self.assertRaises(T.Invalid):  # no such skill: say so, don't guess
+                T.draft_linear(tid)
+
     def test_linear_ticket_only_on_create_then_the_todo_is_tagged(self):
         T = self.T
         a = T.add("Fix the flaky login test", notes="fails on CI")["id"]

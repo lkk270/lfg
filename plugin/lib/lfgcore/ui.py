@@ -738,6 +738,8 @@ def todo_action(what, body):
             return T.update(tid, text=body.get("text"), notes=body.get("notes"), status=body.get("status"))
         if what == "todo_delete":
             return T.delete(tid)
+        if what == "todo_draft":  # the sheet's title and description, from the user's /linear-ticket skill
+            return T.draft_linear(tid)
         if what == "todo_linear":  # the Create Linear ticket button, after the user confirmed the exact text
             return T.create_linear(tid, body.get("title"), body.get("description") or "", body.get("team") or "",
                                    body.get("project") or "", body.get("assignee") or "")
