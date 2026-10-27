@@ -5654,7 +5654,16 @@ console.log(JSON.stringify({before, strip, after: openTabs().map(t => t.pr), has
         C.write_json(R.job_path("o/r", 11), {"status": "running", "pid": proc.pid, "with": ["o/r#12"]})
         C.write_json(R.job_path("o/r", 12), {"status": "running", "pid": proc.pid, "with": ["o/r#11"]})
         self.assertEqual(R.cancel("o/r", 11), {"cancelled": ["o/r#11", "o/r#12"]})
-        self.assertEqual(proc.wait(timeout=10), -signal.SIGTERM)
+        # the shell may see its sleep die first and exit 0 rather than by the signal: what counts is that the run
+        # and everything it started are gone
+        self.assertIn(proc.wait(timeout=10), (0, -signal.SIGTERM))
+        for _ in range(100):
+            try:
+                os.killpg(proc.pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        self.assertRaises(ProcessLookupError, os.killpg, proc.pid, 0)
         for n in (11, 12):
             self.assertEqual(R.job("o/r", n)["status"], "cancelled")
         with self.assertRaises(R.ReviewError):
