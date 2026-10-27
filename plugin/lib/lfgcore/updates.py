@@ -75,6 +75,22 @@ def _lines(cp):
     return [ln for ln in (cp.stdout or "").splitlines() if ln]
 
 
+def _test_report(t, most=10):
+    """Which tests failed and why, from a failed unittest run. unittest writes them to stderr; a plain tail of
+    stderr+stdout was only the tests' own prints, so the failing test's name was lost."""
+    err = (t.stderr or "").splitlines()
+    sep = [i for i, ln in enumerate(err) if ln == "=" * 70] + [len(err)]
+    if len(sep) == 1:
+        return "\n".join(((t.stderr or "") + (t.stdout or "")).strip().splitlines()[-12:])
+    out = []
+    for a, b in list(zip(sep, sep[1:]))[:most]:
+        block = err[a + 1:b]
+        body = [ln for ln in block[2:] if ln.strip() and ln != "-" * 70 and not ln.startswith(("Ran ", "FAILED", "OK"))]
+        out += block[:1] + body[-3:]
+    ran = next((i for i in range(len(err) - 1, -1, -1) if err[i].startswith("Ran ")), None)
+    return "\n".join(out + ([ln for ln in err[ran:] if ln.strip()] if ran is not None else []))
+
+
 def _unreachable(r, cp):
     """Why fetching from or pushing to a remote failed, in words you can act on."""
     if cp.returncode == 124:
@@ -473,7 +489,7 @@ def apply(log=print):
             except (ValueError, RuntimeError):
                 branch = ""
         _git(root, "reset", "--keep", before)
-        tail = "\n".join(((t.stderr or "") + (t.stdout or "")).strip().splitlines()[-12:])
+        tail = _test_report(t)
         if not branch:
             return fail("tests failed, so the update was undone and nothing was installed:\n" + tail)
         j.update(status="failed", tested={"branch": branch, "head": tested}, output=tail)
