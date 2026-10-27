@@ -1836,12 +1836,14 @@ class TodosTest(unittest.TestCase):
         tid = T.add("Export times out on big orgs", notes="Seen at Acme, 40k rows")["id"]
         home = tempfile.mkdtemp()
         os.makedirs(os.path.join(home, ".claude", "skills", "linear-ticket"))
-        C.write_text(os.path.join(home, ".claude", "skills", "linear-ticket", "SKILL.md"), "---\nname: linear-ticket\n---\n")
+        C.write_text(os.path.join(home, ".claude", "skills", "linear-ticket", "SKILL.md"),
+                     "---\nname: linear-ticket\n---\n")
         sent = []
 
         def fake(argv, **kw):
             sent.append((argv, kw["input"]))
-            reply = 'Done.\n```json\n{"title": "Fix the export timeout", "description": "## For humans\\nIt times out."}\n```'
+            reply = ('Done.\n```json\n{"title": "Fix the export timeout", '
+                     '"description": "## For humans\\nIt times out."}\n```')
             return subprocess.CompletedProcess(argv, 0, json.dumps({"result": reply}), "")
         with mock.patch.object(os.path, "expanduser", lambda p: p.replace("~", home, 1)), \
                 mock.patch.object(C, "which", return_value="/bin/claude"), mock.patch("subprocess.run", fake):
@@ -2207,13 +2209,16 @@ class ClaudeSessionsTest(unittest.TestCase):
         sent = []
         lv._write = lambda obj: sent.append(obj) or True
         lv.pending, lv.allowed, lv.state, lv.sid, lv.rid, lv.title = {}, {"AskUserQuestion"}, "working", "s", "r", "T"
-        qs = [{"question": "Where?", "header": "Location", "options": [{"label": "Required"}, {"label": "Optional"}], "multiSelect": False},
-              {"question": "Which?", "header": "Kinds", "options": [{"label": "Printers"}, {"label": "Gateways"}], "multiSelect": True}]
+        qs = [{"question": "Where?", "header": "Location", "options": [{"label": "Required"}, {"label": "Optional"}],
+               "multiSelect": False},
+              {"question": "Which?", "header": "Kinds", "options": [{"label": "Printers"}, {"label": "Gateways"}],
+               "multiSelect": True}]
         with mock.patch.object(CS.N, "add"):
             lv._ask({"request_id": "q1", "request": {"tool_name": "AskUserQuestion", "input": {"questions": qs}}})
             lv._ask({"request_id": "p1", "request": {"tool_name": "ExitPlanMode", "input": {"plan": "1. do it"}}})
         self.assertEqual(sent, [])  # never auto-allowed, even after "Allow for this session"
-        self.assertEqual((lv.pending["q1"]["kind"], lv.pending["p1"]["kind"], lv.state), ("question", "plan", "needs-you"))
+        self.assertEqual((lv.pending["q1"]["kind"], lv.pending["p1"]["kind"], lv.state),
+                         ("question", "plan", "needs-you"))
         with self.assertRaises(CS.Invalid):
             lv.decide("q1", "answer", answers={"Where?": "Required"})  # every question needs an answer
         lv.decide("q1", "answer", answers={"Where?": "Required", "Which?": ["Printers", "Gateways"]})
@@ -2244,14 +2249,17 @@ class ClaudeSessionsTest(unittest.TestCase):
                  message={"content": [{"type": "tool_result", "tool_use_id": "e2", "content": "ok"}]}),
             dict(base, type="user", toolUseResult={"filePath": fp, "structuredPatch": [
                 {"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-x", "+y"]}]},
-                 message={"content": [{"type": "tool_result", "tool_use_id": "e3", "content": "denied", "is_error": True}]}),
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e3", "content": "denied",
+                                       "is_error": True}]}),
             dict(base, type="user", message={"content": [{"type": "tool_result", "tool_use_id": "b1", "content": ""},
-                                                         {"type": "tool_result", "tool_use_id": "b2", "content": ""}]})])
+                                                         {"type": "tool_result", "tool_use_id": "b2",
+                                                          "content": ""}]})])
         with mock.patch.object(CS, "PROJECTS", self.proj):
             c = CS.changes("r", self.root, sid)
         a, notes = c["files"]
-        self.assertEqual((a["path"], a["status"], a["additions"], a["deletions"], a["edits"]), ("src/a.py", "modified", 1, 1, 1))
-        self.assertEqual([l["t"] for l in a["hunks"][0]["lines"]], [" ", "-", "+"])  # the denied edit isn't shown
+        self.assertEqual((a["path"], a["status"], a["additions"], a["deletions"], a["edits"]),
+                         ("src/a.py", "modified", 1, 1, 1))
+        self.assertEqual([ln["t"] for ln in a["hunks"][0]["lines"]], [" ", "-", "+"])  # the denied edit isn't shown
         self.assertEqual((a["hunks"][0]["lines"][2]["new"], notes["status"], notes["outside"]), (4, "added", True))
         self.assertEqual([x["command"] for x in c["shell"]], ["sed -i '' s/a/b/ x.py"])
 
@@ -2280,15 +2288,23 @@ class ClaudeSessionsTest(unittest.TestCase):
         p = os.path.join(self.proj, "s.jsonl")
         lines = [
             dict(base, type="assistant", message={"content": [
-                {"type": "tool_use", "id": "ag", "name": "Agent", "input": {"subagent_type": "Explore", "description": "Map the code"}},
-                {"type": "tool_use", "id": "bg", "name": "Bash", "input": {"command": "make iso", "description": "Build the ISO", "run_in_background": True}},
-                {"type": "tool_use", "id": "bg2", "name": "Bash", "input": {"command": "sleep 9", "run_in_background": True}}]}),
+                {"type": "tool_use", "id": "ag", "name": "Agent",
+                 "input": {"subagent_type": "Explore", "description": "Map the code"}},
+                {"type": "tool_use", "id": "bg", "name": "Bash",
+                 "input": {"command": "make iso", "description": "Build the ISO", "run_in_background": True}},
+                {"type": "tool_use", "id": "bg2", "name": "Bash",
+                 "input": {"command": "sleep 9", "run_in_background": True}}]}),
             dict(base, type="user", message={"content": [
-                {"type": "tool_result", "tool_use_id": "bg", "content": "Command running in background with ID: b4r62env5."},
-                {"type": "tool_result", "tool_use_id": "bg2", "content": "Command running in background with ID: bzzz11."}]}),
-            dict(base, type="user", message={"content": "<task-notification>\n<task-id>b4r62env5</task-id>\n<tool-use-id>bg</tool-use-id>"
-                                                        "\n<status>completed</status>\n<summary>Build the ISO completed (exit code 0)</summary>\n</task-notification>"}),
-            dict(base, type="assistant", message={"content": [{"type": "tool_use", "id": "k", "name": "TaskStop", "input": {"task_id": "bzzz11"}}]})]
+                {"type": "tool_result", "tool_use_id": "bg",
+                 "content": "Command running in background with ID: b4r62env5."},
+                {"type": "tool_result", "tool_use_id": "bg2",
+                 "content": "Command running in background with ID: bzzz11."}]}),
+            dict(base, type="user", message={"content": "<task-notification>\n<task-id>b4r62env5</task-id>\n"
+                                                        "<tool-use-id>bg</tool-use-id>\n<status>completed</status>\n"
+                                                        "<summary>Build the ISO completed (exit code 0)</summary>\n"
+                                                        "</task-notification>"}),
+            dict(base, type="assistant", message={"content": [{"type": "tool_use", "id": "k", "name": "TaskStop",
+                                                               "input": {"task_id": "bzzz11"}}]})]
         C.write_text(p, "".join(json.dumps(x) + "\n" for x in lines))
         items, meta = CS.read(p)
         got = {a["id"]: a["status"] for a in meta["activity"]}
@@ -2301,7 +2317,8 @@ class ClaudeSessionsTest(unittest.TestCase):
         acts = {a["id"]: a for a in CS.activity(p, meta["activity"], live=True)}
         self.assertEqual((acts["ag"]["steps"], acts["ag"]["now"]), (1, "Read app.js"))
         self.assertNotIn("bg", acts)  # finished long ago: not worth showing
-        os.utime(p, (1000, 1000)); os.utime(os.path.join(sub, "agent-x.jsonl"), (1000, 1000))
+        os.utime(p, (1000, 1000))
+        os.utime(os.path.join(sub, "agent-x.jsonl"), (1000, 1000))
         self.assertEqual(CS.activity(p, meta["activity"], live=False)[0]["status"], "quiet")
 
     def test_transcripts_read_as_cards_and_list_with_where_they_came_from(self):
@@ -3893,7 +3910,8 @@ class GuardPrefsTest(unittest.TestCase):
     def test_the_preferences_page_and_list_show_them(self):
         page = ui.api("prefs", {})
         ids = [p["id"] for p in page["catalog"]]
-        for pid in ("act_ff_sync", "gh_default_branch", "act_edit_pr", "act_push_main", "rule_1", "rule_4", "rule_13", "style_answer_first",
+        for pid in ("act_ff_sync", "gh_default_branch", "act_edit_pr", "act_push_main", "rule_1", "rule_4", "rule_13",
+                    "style_answer_first",
                     "style_point_words"):
             self.assertIn(pid, ids)
         self.assertTrue(all(p["enforce"] for p in page["catalog"] if p["id"].startswith("rule_")))
@@ -4963,7 +4981,8 @@ class ReviewTest(unittest.TestCase):
 
     def test_github_is_asked_once_and_a_page_never_waits_on_a_known_status(self):
         import threading
-        R._STATUS.clear(); R._ME.clear()
+        R._STATUS.clear()
+        R._ME.clear()
         asked = []
         gate = threading.Event()
 
@@ -4996,7 +5015,9 @@ class ReviewTest(unittest.TestCase):
     def test_a_pr_page_never_opened_shows_at_once_and_fills_in(self):
         import threading
         from lfgcore import ui
-        R._STATUS.clear(); R._ME.clear(); R._SESS_LAST.clear()
+        R._STATUS.clear()
+        R._ME.clear()
+        R._SESS_LAST.clear()
         gate = threading.Event()
 
         def slow_gh(args, stdin=None, timeout=60):
@@ -5029,7 +5050,8 @@ class ReviewTest(unittest.TestCase):
         proj = os.path.join(d, "p")
         os.makedirs(proj)
         a, b = os.path.join(proj, "a.jsonl"), os.path.join(proj, "b.jsonl")
-        C.write_text(a, json.dumps({"type": "user", "cwd": "/x", "message": {"content": '<pasted_content id="9">look at o/r#7</pasted_content id="9">'}}) + "\n")
+        C.write_text(a, json.dumps({"type": "user", "cwd": "/x", "message": {
+            "content": '<pasted_content id="9">look at o/r#7</pasted_content id="9">'}}) + "\n")
         C.write_text(b, json.dumps({"type": "user", "cwd": "/x", "message": {"content": "nothing here"}}) + "\n")
         opened = []
         real = open
@@ -5125,8 +5147,10 @@ class ReviewTest(unittest.TestCase):
         R.store(rec)
         files = {"files": [{"path": "app.py"}]}
         for fresh in (False, True):
-            with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="x"), \
-                    mock.patch.object(R, "gh_json", return_value=files), mock.patch.object(R, "fresh_eyes", return_value=fresh), \
+            with mock.patch.object(R, "pr_meta", return_value=self.META), \
+                    mock.patch.object(R, "me", return_value="x"), \
+                    mock.patch.object(R, "gh_json", return_value=files), \
+                    mock.patch.object(R, "fresh_eyes", return_value=fresh), \
                     mock.patch.object(R, "agents_md", return_value=[]):
                 got = R.context("o/r", 7)
             self.assertEqual(got["answered"], [{"ask": "Is the old endpoint still called?",

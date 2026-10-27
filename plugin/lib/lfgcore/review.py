@@ -253,7 +253,7 @@ def rescore(rec):
     it. Nitpicks cost once per kind. `credits` names what came back since it ran (passed, fixed or answered) and
     `score_at_review` the score before that."""
     by_id = {f["id"]: f for p in rec.get("passes") or [] for f in p.get("findings") or []}
-    settled = lambda f: f["status"] == "drop" or checked_fixed(f)
+    settled = lambda f: f["status"] == "drop" or checked_fixed(f)  # noqa: E731
     for p in rec.get("passes") or []:
         for k in ("cleared", "score_said"):  # from when the review's own number counted
             p.pop(k, None)
@@ -1544,7 +1544,8 @@ def session_history(sid, limit=20):
     turns = []
     for it in items:
         if it.get("k") == "me" and not str(it.get("text") or "").lstrip().startswith("<"):
-            turns.append({"q": it.get("text") or "", "a": "", "at": it.get("ts"), "images": len(it.get("images") or [])})
+            turns.append({"q": it.get("text") or "", "a": "", "at": it.get("ts"),
+                          "images": len(it.get("images") or [])})
         elif it.get("k") == "ai" and turns and it.get("text"):
             turns[-1]["a"] = (turns[-1]["a"] + "\n\n" + it["text"]).strip()
     return {"turns": turns[-limit:], "more": max(0, len(turns) - limit)}

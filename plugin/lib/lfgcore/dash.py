@@ -1253,7 +1253,8 @@ def _pentest_summary(v):
     {"critical": 1, "high": 2, ..., "recommendation": "..."} reads as "1 critical, 2 high. <recommendation>"."""
     if not isinstance(v, dict):
         return v
-    sev = ", ".join("%d %s" % (v[k], k) for k in ("critical", "high", "medium", "low") if isinstance(v.get(k), int) and v[k])
+    sev = ", ".join("%d %s" % (v[k], k) for k in ("critical", "high", "medium", "low")
+                    if isinstance(v.get(k), int) and v[k])
     rest = v.get("recommendation") or v.get("verdict") or v.get("text") or ""
     out = ". ".join(x for x in (("Found " + sev) if sev else "", str(rest).strip()) if x)
     return out or None

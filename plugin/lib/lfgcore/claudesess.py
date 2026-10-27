@@ -575,7 +575,8 @@ class Live:
         self.pending[ev["request_id"]] = {"id": ev["request_id"], "tool": tool, "kind": kind,
                                           "input": req.get("input") or {},
                                           "description": req.get("description") or "", "at": C.now_iso(),
-                                          "can_remember": kind == "permission" and bool(req.get("permission_suggestions")),
+                                          "can_remember": kind == "permission"
+                                          and bool(req.get("permission_suggestions")),
                                           "raw": req}
         self.state = "needs-you"
         qs = (req.get("input") or {}).get("questions") or []
@@ -583,7 +584,8 @@ class Live:
             "question": ("Claude has %s for you in “%s”" % ("a question" if len(qs) < 2 else "%d questions" % len(qs),
                                                            _one_line(self.title)[:60]),
                          _one_line(str((qs[0] if qs else {}).get("question") or ""))[:140]),
-            "plan": ("Claude's plan is ready in “%s”" % _one_line(self.title)[:60], "Approve it, or say what to change"),
+            "plan": ("Claude's plan is ready in “%s”" % _one_line(self.title)[:60],
+                     "Approve it, or say what to change"),
         }.get(kind, ("Claude needs your OK in “%s”" % _one_line(self.title)[:60], "%s: %s" % (
             tool, _one_line(req.get("description") or json.dumps(req.get("input") or {}))[:120])))
         N.add("session", head, body, "#studio/" + self.sid, self.rid)
@@ -611,7 +613,8 @@ class Live:
                                                                   answers=_check_answers(raw.get("input"), answers))}
             elif decision == "skip":
                 resp = {"behavior": "deny", "message": "The user skipped these questions without answering. Carry on "
-                        "with your best judgement and say which assumptions you made, or ask again later if it matters."}
+                        "with your best judgement and say which assumptions you made, or ask again later if it "
+                        "matters."}
             else:
                 raise Invalid("answer the questions, or skip them")
             self._respond(request_id, resp)
@@ -1025,7 +1028,8 @@ def changes(rid, root, sid):
 
 
 QUIET = re.compile(r"\d?>>?\s*/dev/null|\d?>&\d")  # output thrown away, not a file written
-SHELL_WRITES = re.compile(r"(\bsed\s+-i|>\s*[^&|\s]|\btee\b|\bmv\b|\bcp\b|\brm\b|\bpatch\b|\bgit\s+(apply|checkout|restore|"
+SHELL_WRITES = re.compile(r"(\bsed\s+-i|>\s*[^&|\s]|\btee\b|\bmv\b|\bcp\b|\brm\b|\bpatch\b|"
+                          r"\bgit\s+(apply|checkout|restore|"
                           r"stash|reset|mv|rm)\b|python3?\s+-\s*<<|\bprettier\b.*--write|\bruff\b.*(format|--fix)|"
                           r"\bblack\b|\bgofmt\b.*-w|\bnpm\s+(install|i)\b|\bpip\s+install\b)")
 

@@ -296,7 +296,8 @@ def draft_linear(tid):
     model = (C.config().get("models") or {}).get("ticket") or "sonnet"
     argv = [claude, "-p", "--output-format", "json", "--model", model, "--max-turns", "12",
             "--permission-mode", "default", "--allowedTools", "Skill,Read,Glob,Grep",
-            "--disallowedTools", ",".join(NO_TOOLS), "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {}})]
+            "--disallowedTools", ",".join(NO_TOOLS), "--strict-mcp-config", "--mcp-config",
+            json.dumps({"mcpServers": {}})]
     prompt = DRAFT_PROMPT % (skill, t.get("text", ""), t.get("notes") or "(none)",
                              os.path.basename(root) if root else "(none)")
     try:
