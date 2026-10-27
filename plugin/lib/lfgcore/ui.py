@@ -326,7 +326,8 @@ def api(view, q):
                     sess = pool.submit(R.sessions_for, repo, number)
                     gh, sess = gh.result(), sess.result()
             return {"record": rec, "pending": [k for k, v in (("gh", fresh or (gh or {}).get("pending")),
-                                                               ("sessions", sess is None)) if v], "job": R.progress(repo, number), "repo": repo, "number": number,
+                                                               ("sessions", sess is None)) if v],
+                    "job": R.progress(repo, number), "repo": repo, "number": number,
                     "fix_job": R.progress(repo, number, j=fj) if fj else None,
                     "gh": gh, "sessions": pr_sessions(sess or [], R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],

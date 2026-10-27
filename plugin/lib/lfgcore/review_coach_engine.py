@@ -121,7 +121,8 @@ def _get_diff(base_branch, root):
         if cp.returncode == 0 and cp.stdout.strip():
             mb = cp.stdout.strip()
             break
-    cp = C.run(["git", "diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", mb or "HEAD"], cwd=root)
+    cp = C.run(["git", "diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", mb or "HEAD"],
+               cwd=root)
     return cp.stdout if cp.returncode == 0 and cp.stdout.strip() else None
 
 

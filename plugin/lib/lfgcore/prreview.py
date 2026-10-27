@@ -599,7 +599,8 @@ def update(rid, root, n):
 
 def _diff_lines(meta):
     """{path: set(new-side line numbers)} GitHub accepts comments on: the lines of each diff hunk."""
-    cp = _git(meta["worktree"], "diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "-U3", "%s..%s" % (meta["merge_base"], meta["head"]),
+    cp = _git(meta["worktree"], "diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "-U3",
+              "%s..%s" % (meta["merge_base"], meta["head"]),
               timeout=300)
     out, path = {}, None
     for line in (cp.stdout or "").splitlines():

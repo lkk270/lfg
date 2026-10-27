@@ -313,7 +313,8 @@ def tours_view():
                         "banner_closed": bool(done.get("dictate-banner"))},
             "news_welcome_closed": bool(done.get("news-welcome")),
             "setup_guide_done": bool(done.get("setup-guide")),  # the first-run setup guide, finished once
-            "launch_video_seen": bool(done.get("launch-video"))}  # the launch film popup on the home page, watched or closed
+            # the launch film popup on the home page, watched or closed
+            "launch_video_seen": bool(done.get("launch-video"))}
 
 
 def tour_done(name, how="finished"):

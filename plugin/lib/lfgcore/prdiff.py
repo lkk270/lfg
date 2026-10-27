@@ -96,7 +96,8 @@ def _files(rid, root, n, head, mb):
     cache = os.path.join(C.ensure_dir(PR.folder(rid, n)), "diff-%s.json" % head[:12])
     files = C.read_json(cache, None)
     if not isinstance(files, list):
-        cp = PR._git(root, "diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U3", "%s..%s" % (mb, head), timeout=300)
+        cp = PR._git(root, "diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U3",
+                     "%s..%s" % (mb, head), timeout=300)
         if cp.returncode:
             raise Invalid("git diff failed: %s" % (cp.stderr or cp.stdout).strip()[-300:])
         files = _parse(cp.stdout)
