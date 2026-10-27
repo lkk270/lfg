@@ -2228,6 +2228,25 @@ class ClaudeSessionsTest(unittest.TestCase):
         self.assertEqual((a["hunks"][0]["lines"][2]["new"], notes["status"], notes["outside"]), (4, "added", True))
         self.assertEqual([x["command"] for x in c["shell"]], ["sed -i '' s/a/b/ x.py"])
 
+    def test_edits_in_one_of_the_projects_worktrees_belong_to_the_project(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-666666666666"
+        who = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        C.run(["git", "init", "-q", "-b", "main"], cwd=self.root)
+        C.run(who + ["commit", "-q", "--allow-empty", "-m", "start"], cwd=self.root)
+        wt = os.path.join(tempfile.mkdtemp(), "lfg-ATO-1")
+        C.run(["git", "worktree", "add", "-q", "-b", "lfg-ATO-1", wt], cwd=self.root)
+        fp = os.path.join(wt, "src", "server.ts")
+        base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
+        self._transcript(sid, [
+            dict(base, type="assistant", message={"content": [
+                {"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": fp}}]}),
+            dict(base, type="user", toolUseResult={"filePath": fp, "structuredPatch": [
+                {"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-a", "+b"]}]},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e1", "content": "ok"}]})])
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            (f,) = CS.changes("r", self.root, sid)["files"]
+        self.assertEqual((f["path"], f["outside"], f["worktree"]), ("src/server.ts", False, "lfg-ATO-1"))
+
     def test_subagents_and_background_work_are_tracked(self):
         CS = self.CS
         base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
@@ -4792,6 +4811,8 @@ class ReviewTest(unittest.TestCase):
             R.save_attachment(base64.b64encode(b"0" * (R.IMAGE_MAX + 1)).decode(), "image/png", "big.png")
         with self.assertRaises(R.ReviewError):
             R.save_attachment("not base64!", "text/plain", "x.txt")
+        got = ui.save("chat_file", {"data": base64.b64encode(b"a,b").decode(), "type": "text/csv", "name": "x.csv"})
+        self.assertTrue(got["path"].startswith(R.chat_files_dir()))  # the dashboard's own route reaches it
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "findings": [self.finding()]})
         rec = R.load("o/r", 7)

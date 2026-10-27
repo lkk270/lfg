@@ -564,7 +564,7 @@ def save(what, body):
                             fork=body.get("fork", True) is not False)
         except (SR.RunError, ValueError, TypeError) as e:
             raise S.Invalid(str(e)) from None
-    if what.startswith("review_"):
+    if what.startswith("review_") or what == "chat_file":
         return review_action(what, body)
     from . import control as K
     actions = {

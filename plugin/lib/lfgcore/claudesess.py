@@ -962,6 +962,10 @@ def changes(rid, root, sid):
               for it in items if it.get("k") == "tool" and it.get("name") == "Bash" and "result" in it
               and SHELL_WRITES.search(QUIET.sub(" ", str((it.get("input") or {}).get("command") or "")))]
     base = meta.get("cwd") or root or ""
+    # a file in one of the project's worktrees is the project's own, under its path in that worktree
+    from . import worktree as W
+    trees = sorted(((os.path.realpath(t["path"]), os.path.basename(t["path"]))
+                    for t in (W.listing(root) if root and os.path.isdir(root) else [])), key=lambda x: -len(x[0]))
     files, order = {}, []
     with open(path, "rb") as fh:
         for raw in fh:
@@ -977,13 +981,18 @@ def changes(rid, root, sid):
             if not any(i in kept for i in ids):
                 continue
             fp = r["filePath"]
-            rel = os.path.relpath(fp, base) if base and fp.startswith(base.rstrip("/") + "/") else fp
+            rel, tree = os.path.relpath(fp, base) if base and fp.startswith(base.rstrip("/") + "/") else fp, ""
+            if rel == fp:
+                real = os.path.realpath(fp)
+                hit = next(((p, n) for p, n in trees if real.startswith(p + "/")), None)
+                if hit:
+                    rel, tree = os.path.relpath(real, hit[0]), hit[1]
             f = files.get(rel)
             if f is None:
                 f = files[rel] = {"path": rel, "old_path": "", "status": "added" if r.get("type") == "create" else
                                   "modified", "additions": 0, "deletions": 0, "binary": False, "too_big": False,
                                   "hunks": [], "edits": 0, "first": ev.get("timestamp"), "last": None,
-                                  "outside": rel == fp}  # a scratch file or another repo, not this project
+                                  "outside": rel == fp, "worktree": tree}  # outside: a scratch file or another repo
                 order.append(rel)
             f["edits"] += 1
             f["last"] = ev.get("timestamp")

@@ -5601,8 +5601,10 @@ async function ssChanges(id) {
   crumbs("studio", d && d.title ? d.title : "Session", `#studio/${id}`);
   const back = `<a class="btn small" href="#studio/${esc(id)}">${icon("back")}Back to the session</a>`;
   if (!c || c.available === false) return `<div class="ssc">${back}${unavailable(c || {})}</div>`;
-  // files outside the project (scratch notes, another repo) go under their own folder in the tree
-  const files = c.files.map(f => f.outside ? Object.assign({}, f, { path: "Outside this project/" + f.path.split("/").pop(), full: f.path }) : f);
+  // files outside the project (scratch notes, another repo) go under their own folder in the tree; files in one of
+  // the project's worktrees go under that worktree's name
+  const files = c.files.map(f => f.outside ? Object.assign({}, f, { path: "Outside this project/" + f.path.split("/").pop(), full: f.path })
+    : f.worktree ? Object.assign({}, f, { path: `${f.worktree} (worktree)/${f.path}`, full: f.path }) : f);
   state.sscFiles = Object.fromEntries(files.map(f => [f.path, f.full || f.path]));  // shown path -> the real one
   state.dfOpen = { n: "ss-" + id, paths: [], shut: [], filter: "" };
   const total = files.reduce((a, f) => a + f.hunks.reduce((b, h) => b + h.lines.length, 0), 0);
