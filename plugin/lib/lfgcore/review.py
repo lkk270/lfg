@@ -1384,7 +1384,8 @@ def apply_changes(repo, number, n, out):
             p["score"] = p["score_at_review"] = score
             p["score_said"] = True
             rescore(rec)
-            p["score_at_review"] = max(0, score - sum(c["points"] for c in p.get("credits") or []) - p.get("cleared", 0))
+            back = sum(c["points"] for c in p.get("credits") or []) + p.get("cleared", 0)
+            p["score_at_review"] = max(0, score - back)
             p["score"] = score
             recs[(repo, number)] = rec
             done.append("score %d" % score)

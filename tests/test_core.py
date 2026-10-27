@@ -2023,10 +2023,11 @@ class RunSummaryTest(unittest.TestCase):
         p = os.path.join(d, "run", "05-secure.json")
         C.write_json(p, {"verdict": "safe_with_caveats", "blocking": [], "scanners": "not run",
                          "inventory": ["migration: enum value", "terraform routers"], "findings": [{"id": "S1"}]})
-        with mock.patch.object(dash, "stage_files", lambda rid, name, branch=None: [p] if name == "05-secure.json" else []), \
-                mock.patch.object(dash, "sonar_view", lambda rid: None):
+        only = lambda rid, name, branch=None: [p] if name == "05-secure.json" else []  # noqa: E731
+        with mock.patch.object(dash, "stage_files", only), mock.patch.object(dash, "sonar_view", lambda rid: None):
             s = dash.security("r")["secure"][0]
-        self.assertEqual((s["blocking"], s["inventory"], s["scanners"]), (0, {"items": 2}, [{"tool": None, "exit": None, "note": "not run"}]))
+        self.assertEqual((s["blocking"], s["inventory"]), (0, {"items": 2}))
+        self.assertEqual(s["scanners"], [{"tool": None, "exit": None, "note": "not run"}])
 
 
 class UpdatesTest(unittest.TestCase):
