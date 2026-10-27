@@ -886,6 +886,9 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 .pr-compose.big textarea { min-height: 72px; border-radius: 10px; padding: 10px 12px; }
 .pr-compose-bar { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
 .pr-talk.wide .pr-compose.big textarea { min-height: 110px; }
+.pr-talk.drop { outline: 2px dashed var(--blue); outline-offset: -4px; }
+.pr-talk.drop::after { content: "Drop to attach"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--page) 80%, transparent); color: var(--text); font-weight: 500; border-radius: 12px; pointer-events: none; }
 .chat-fab { position: fixed; right: 20px; bottom: 20px; z-index: 30; display: inline-flex; align-items: center; gap: 8px;
   padding: 10px 16px; border-radius: 999px; border: 0; background: var(--blue); color: #fff; font: inherit; font-weight: 500;
   font-size: 14px; cursor: pointer; box-shadow: var(--shadow); }

@@ -3033,7 +3033,7 @@ function talkPane(pr, p, unlocked, byId) {
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
     <div class="pr-thread">${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
     <div class="pr-compose big"><div class="chat-atts" data-chat-atts></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
-      <div class="pr-compose-bar"><label class="btn small" title="Attach an image, or paste one into the box">Image<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden data-chat-file ${unlocked ? "" : "disabled"}></label><span class="muted small grow">Enter to send · Shift+Enter for a new line${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
+      <div class="pr-compose-bar"><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop or paste an image${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
 }
 /* Copy one finding or earlier comment: short for a person, everything an agent needs to act on it. */
 const copyBtns = (person, agent) => `<button class="btn small" data-copy="${esc(person)}" title="What's wrong, where, and the comment: to paste to a person">Copy</button><button class="btn small" data-copy="${esc(agent)}" title="Everything needed to act on it: file and line, issue, fix, the evidence, the comment and its status">Copy for an agent</button>`;
@@ -3313,7 +3313,14 @@ function wireChatPane(root) {
     if (!d.ok) return prefToast(d.why || "Couldn't attach the image", true);
     atts.push({ path: d.path, url: URL.createObjectURL(file) }); drawAtts();
   };
-  $("[data-chat-file]", pane).onchange = e => { [...e.target.files].forEach(attach); e.target.value = ""; };
+  const files = e => [...(e.dataTransfer || {}).types || []].includes("Files");
+  pane.ondragover = e => { if (!files(e) || input.disabled) return; e.preventDefault(); pane.classList.add("drop"); };
+  pane.ondragleave = e => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("drop"); };
+  pane.ondrop = e => {
+    if (!files(e)) return;
+    e.preventDefault(); pane.classList.remove("drop");
+    if (!input.disabled) [...e.dataTransfer.files].forEach(attach);
+  };
   input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []].filter(x => x.type.startsWith("image/")); if (fs.length) { e.preventDefault(); fs.forEach(attach); } };
   const go = async () => {
     const said = input.value.trim();
@@ -3337,6 +3344,8 @@ function wireChatPane(root) {
   input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } };
   if (pane.classList.contains("wide")) document.onkeydown = e => { if (e.key === "Escape" && $(".pr-talk.wide")) { localStorage.setItem("lfg.chat", "side"); softRoute(); } };
 }
+/* A file dropped anywhere but the chat would open in place of the dashboard: ignore it. */
+["dragover", "drop"].forEach(t => document.addEventListener(t, e => { if ([...(e.dataTransfer || {}).types || []].includes("Files") && !e.defaultPrevented) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; } }));
 /* Send one chat message, then the next one queued behind it, in order. A failed one goes back in the box. */
 async function chatSend(key, pr, n, fid, text) {
   (state.chatPending || (state.chatPending = {}))[key] = text;
