@@ -545,8 +545,8 @@ const openKnow = e => {
 document.addEventListener("click", openKnow);
 document.addEventListener("click", async e => {  // [data-copy="<id>"]: copy that element's text
   const b = e.target.closest("[data-copy]");
-  if (!b) return;
-  const el = document.getElementById(b.dataset.copy);
+  const el = b && document.getElementById(b.dataset.copy);
+  if (!el) return;  // most buttons carry the text itself and copy it in their own handler: leave the clipboard alone
   try { await navigator.clipboard.writeText(el ? el.textContent : ""); b.textContent = "Copied"; } catch (err) { b.textContent = "Select and copy"; }
   setTimeout(() => (b.textContent = "Copy"), 1600);
 });
