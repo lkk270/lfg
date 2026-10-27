@@ -55,9 +55,13 @@ def _prefs(data):
     """This session's Preferences, which can lift a guard rule. If they can't be read, every rule blocks."""
     try:
         from . import prefs as P
-        return P.effective(data.get("session_id"))
+        values = P.effective(data.get("session_id"))
     except Exception:  # noqa: BLE001
         return {}
+    if os.environ.get("LFG_REVIEWER") == "1":  # a dashboard review or its chat: reads anything, writes nothing
+        from . import guard
+        values.update({a[0]: "block" for a in guard.ACTIONS}, rule_1="block", rule_2="block")
+    return values
 
 
 def pre_tool(data):

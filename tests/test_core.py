@@ -5074,6 +5074,20 @@ class ReviewTest(unittest.TestCase):
         self.assertIn("mcp__plugin_lfg_headroom__headroom_retrieve", R.RUN_ALLOW)
         self.assertFalse([x for x in R.RUN_ALLOW if "headroom" in x and "retrieve" not in x])
 
+    def test_a_review_runs_any_command_but_changes_nothing(self):
+        # reviews ended asking to be let run shell commands: they could run only a short list
+        self.assertIn("Bash", R.RUN_ALLOW)
+        for w in ("Bash(git push*)", "Bash(git commit*)", "Bash(gh pr merge*)", "Bash(gh pr comment*)",
+                  "Bash(lfg review post *)", "Edit", "Write"):
+            self.assertIn(w, R.RUN_DENY)
+        from lfgcore import hooks as H
+        data = {"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "git push origin feat"}}
+        with mock.patch.object(guard, "_prefs_on", return_value=True), \
+                mock.patch.dict(os.environ, {"LFG_REVIEWER": "1"}), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(H.pre_tool(data), 2)
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "gh pr comment 3 -b x"})), 2)
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "psql -c 'select 1' && npm test"})), 0)
+
     def test_a_chat_file_opens_in_the_page_and_nothing_else_does(self):
         import base64
         csv = R.save_attachment(base64.b64encode(b"a,b\n1,2\n").decode(), "text/csv", "q.csv")["path"]
