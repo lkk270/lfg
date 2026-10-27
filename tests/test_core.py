@@ -1114,6 +1114,33 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(post({"X-LFG-Key": ST.edit_key(), "Origin": "http://evil.test"}), 403)
         self.assertEqual(post({"X-LFG-Key": ST.edit_key()}), 200)
 
+    def test_the_dashboards_own_page_carries_its_edit_key_so_it_never_locks(self):
+        # the key used to live only in the browser, per address: another port, localhost or another browser
+        # started locked until `lfg ui --unlock`. The page the dashboard serves now brings it.
+        import http.client
+        import threading
+        srv = ui.http.server.ThreadingHTTPServer(("127.0.0.1", 0), ui.Handler)
+        ui.Handler.port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+
+        def get(host):
+            c = http.client.HTTPConnection("127.0.0.1", ui.Handler.port, timeout=5)
+            c.request("GET", "/", headers={"Host": host})
+            try:
+                r = c.getresponse()
+                return r.status, r.read().decode(), r.getheader("Cache-Control")
+            finally:
+                c.close()
+        for host in ("127.0.0.1:%d" % ui.Handler.port, "localhost:%d" % ui.Handler.port):
+            code, page, cache = get(host)
+            self.assertEqual((code, cache), (200, "no-store"))
+            self.assertIn('<meta name="lfg-key" content="%s">' % ST.edit_key(), page)
+        code, page, _ = get("evil.test:%d" % ui.Handler.port)  # DNS rebinding: no page, so no key
+        self.assertEqual(code, 403)
+        self.assertNotIn(ST.edit_key(), page)
+
     def test_ollama_pull_is_local_only_and_validated(self):
         for bad in ("qwen3:cloud", "deepseek-v4-pro:cloud", "rm -rf /", "", "../x"):
             with self.assertRaises(ST.Invalid, msg=bad):

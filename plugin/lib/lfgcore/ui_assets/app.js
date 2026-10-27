@@ -690,7 +690,8 @@ function mountRuleTips() {
 }
 
 // ------------------------------------------------------------------ settings (the only writes)
-const editKey = () => localStorage.getItem("lfg.editKey") || "";
+// the page the dashboard serves carries its edit key; an old one in this browser is only a fallback
+const editKey = () => (document.querySelector('meta[name="lfg-key"]') || {}).content || localStorage.getItem("lfg.editKey") || "";
 async function isUnlocked() {
   if (!editKey()) return false;
   try {

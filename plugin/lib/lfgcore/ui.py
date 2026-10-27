@@ -849,7 +849,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send(403, "forbidden", "text/plain")
         u = urllib.parse.urlsplit(self.path)
         if u.path in ("/", "/index.html"):
-            return self._asset("index.html")
+            # the page brings this dashboard's edit key, so any tab of it (any port, localhost, any browser) can
+            # make changes without `lfg ui --unlock`. Only this dashboard's own address gets the page (the Host check
+            # above), and another site can't read it: browsers keep a page's content from other origins.
+            page = C.read_text(os.path.join(ASSETS, "index.html")).replace(
+                "<head>", '<head>\n<meta name="lfg-key" content="%s">' % html.escape(S.edit_key()), 1)
+            return self._send(200, page, "text/html; charset=utf-8")
         if u.path.startswith("/assets/"):
             return self._asset(u.path[len("/assets/"):])
         if u.path.startswith("/api/"):
