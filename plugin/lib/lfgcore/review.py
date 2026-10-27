@@ -75,10 +75,11 @@ def pr_meta(repo, number):
 _STATUS, _REFRESHING = {}, set()
 
 
-def gh_status(repo, number, max_age=300):
+def gh_status(repo, number, max_age=300, wait=True):
     """Where the PR stands on GitHub: open/merged, approved or changes asked for, each reviewer's latest verdict,
     who still has to review, and checks. An answer older than max_age is still returned at once and asked again in
-    the background, so a page waits on GitHub only for a PR it has never asked about, or on Refresh (max_age=0)."""
+    the background, so a page waits on GitHub only for a PR it has never asked about, or on Refresh (max_age=0).
+    wait=False never waits: a PR never asked about is asked in the background and {"pending": True} comes back."""
     import threading
     key = (repo, number)
     if not _STATUS:  # a restarted dashboard starts from what the last one knew
@@ -87,11 +88,11 @@ def gh_status(repo, number, max_age=300):
     hit = _STATUS.get(key)
     if hit and time.time() - hit[0] < max_age:
         return hit[1]
-    if hit and max_age > 0:
+    if (hit and max_age > 0) or not wait:
         if key not in _REFRESHING:
             _REFRESHING.add(key)
             threading.Thread(target=_refresh_status, args=key, daemon=True).start()
-        return hit[1]
+        return hit[1] if hit else {"available": False, "pending": True}
     return _ask_status(repo, number)
 
 
@@ -2309,6 +2310,26 @@ def session_index(days=30):
     return _SESS_INDEX
 
 
+_SESS_LAST, _SESS_LOOKING = {}, set()  # (repo, number) -> the last sessions_for answer; being looked for now
+
+
+def sessions_soon(repo, number):
+    """sessions_for without waiting: the last answer for this PR (None if there is none yet), looked for again in
+    the background, so a PR page opens at once and picks up new sessions on its next refresh."""
+    import threading
+    key = (repo, int(number))
+
+    def look():
+        try:
+            _SESS_LAST[key] = sessions_for(repo, number)
+        finally:
+            _SESS_LOOKING.discard(key)
+    if key not in _SESS_LOOKING:
+        _SESS_LOOKING.add(key)
+        threading.Thread(target=look, daemon=True).start()
+    return _SESS_LAST.get(key)
+
+
 def sessions_for(repo, number, days=30):
     """Your Claude Code sessions from the last `days` that mention this PR, newest first. Only transcripts the index
     says name this PR's number are read, and each only again once it changes."""
@@ -2321,7 +2342,9 @@ def sessions_for(repo, number, days=30):
             _SESS_SEEN[key] = _session_row(p, repo, number)
         if _SESS_SEEN[key]:
             out.append(_SESS_SEEN[key])
-    return sorted(out, key=lambda s: s["modified"], reverse=True)
+    out = sorted(out, key=lambda s: s["modified"], reverse=True)
+    _SESS_LAST[(repo, int(number))] = out
+    return out
 
 
 def _session_row(p, repo, number):

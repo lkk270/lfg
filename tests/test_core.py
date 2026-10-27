@@ -4993,6 +4993,37 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.object(R, "_gh", side_effect=AssertionError("asked GitHub")):
             self.assertEqual(R.gh_status("o/r", 2, max_age=10 ** 9)["state"], "OPEN")  # a restart remembers
 
+    def test_a_pr_page_never_opened_shows_at_once_and_fills_in(self):
+        import threading
+        from lfgcore import ui
+        R._STATUS.clear(); R._ME.clear(); R._SESS_LAST.clear()
+        gate = threading.Event()
+
+        def slow_gh(args, stdin=None, timeout=60):
+            gate.wait(5)
+            if args[:2] == ["api", "user"]:
+                return subprocess.CompletedProcess(args, 0, "lee\n", "")
+            return subprocess.CompletedProcess(args, 0, json.dumps({"state": "OPEN", "headRefName": "b"}), "")
+
+        def slow_sessions(repo, number, days=30):
+            gate.wait(5)
+            return []
+        with mock.patch.object(R, "_gh", side_effect=slow_gh), \
+                mock.patch.object(R, "sessions_for", side_effect=slow_sessions):
+            t = time.time()
+            d = ui.api("prreview", {"pr": ["o/r#41"], "wait": ["0"]})
+            self.assertLess(time.time() - t, 1)  # GitHub and the session search are still busy
+            self.assertEqual(sorted(d["pending"]), ["gh", "sessions"])
+            self.assertTrue(d["gh"]["pending"])
+            self.assertEqual(d["sessions"], [])
+            gate.set()
+            d = ui.api("prreview", {"pr": ["o/r#41"]})  # the page's second ask waits for them
+            self.assertEqual((d["gh"]["state"], d["pending"]), ("OPEN", []))
+            d = ui.api("prreview", {"pr": ["o/r#41"], "wait": ["0"]})  # known now: shown at once, nothing pending
+            self.assertEqual((d["gh"]["state"], d["pending"]), ("OPEN", []))
+            d = ui.api("prreview", {"pr": ["o/r#41"], "wait": ["0"], "fresh": ["1"]})  # Refresh: old answer, new soon
+            self.assertEqual((d["gh"]["state"], d["pending"]), ("OPEN", ["gh"]))
+
     def test_sessions_for_a_pr_reread_only_transcripts_that_changed(self):
         d = tempfile.mkdtemp()
         proj = os.path.join(d, "p")

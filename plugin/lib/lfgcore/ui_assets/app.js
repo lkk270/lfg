@@ -3571,7 +3571,19 @@ function diffStat(g) {
   const boxes = [...Array(5)].map((_, i) => `<i class="${i < green ? "add" : i < green + red ? "del" : ""}"></i>`).join("");
   return `<span class="diffstat" title="${esc(`${a} added and ${r} removed lines in ${g.files} files`)}">${plural(g.files, "file")} <b class="add">+${a}</b> <b class="del">−${r}</b><span class="bar">${boxes}</span></span>`;
 }
+/* A PR page opens with what is known; GitHub and the session search are asked behind it, and the page fills in
+   (a soft refresh, which keeps what you typed and where you scrolled) once they answer. */
+const prFilling = new Set();
+function prFillIn(pr, arg, pending) {
+  if (!(pending || []).length || prFilling.has(pr)) return;
+  prFilling.add(pr);
+  api("prreview", { pr }).catch(() => null).then(() => {
+    prFilling.delete(pr);
+    if (location.hash === `#prs/${arg}`) softRoute();
+  });
+}
 function ghPanel(g, ours) {
+  if (g && g.pending) return '<div class="pr-status small muted"><span class="loading-inline">Asking GitHub where this PR stands…</span></div>';
   if (!g || g.available === false) return g && g.why ? `<p class="muted small">Couldn't ask GitHub: ${esc(g.why)}</p>` : "";
   const word = { APPROVED: "approved", CHANGES_REQUESTED: "asked for changes", COMMENTED: "commented", DISMISSED: "dismissed" };
   const checks = Object.entries(g.checks || {}).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", ");
@@ -4189,8 +4201,9 @@ async function prDetail(arg) {
   if (!m) return unavailable({ why: "Not a PR address." });
   const pr = `${m[1]}#${m[2]}`;
   followRepo(m[1]);
-  const [d, unlocked] = await Promise.all([api("prreview", { pr }), isUnlocked()]);
+  const [d, unlocked] = await Promise.all([api("prreview", { pr, wait: "0" }), isUnlocked()]);
   if (d.available === false) return unavailable(d);
+  prFillIn(pr, arg, d.pending);
   const rec = d.record, j = d.job;
   crumbs("prs", pr);
   prTabOpen(pr, (rec && rec.title) || (d.gh && d.gh.title) || "");
@@ -4211,7 +4224,7 @@ async function prDetail(arg) {
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
   (state.prSessions || (state.prSessions = {}))[pr] = (d.sessions || []).filter(x => !x.dashboard && x.cwd);
   const sessRows = (d.sessions || []).map(x => `<li class="sess"><div class="grow"><div class="title">${esc(x.title)}${x.linked ? ' <span class="tag">linked by you</span>' : ""}</div><div class="meta">${ago(x.modified)} · ${esc(x.cwd || "")}${x.has_json && !x.dashboard ? " · review ready to import" : ""}</div></div><button class="btn small" data-copy="${esc(x.resume)}" title="${esc(x.resume)}">Copy resume command</button>${x.linked ? `<button class="btn small" data-pr-unlinksess='${esc(JSON.stringify([pr, x.id]))}' ${unlocked ? "" : "disabled"}>Unlink</button>` : x.dashboard || !x.path ? "" : `<button class="btn small" data-pr-importpath='${esc(JSON.stringify([pr, x.path]))}' ${unlocked ? "" : "disabled"}>Import as a review</button>`}</li>`).join("");
-  const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
+  const sess = section("Sessions about this PR", `${sessRows ? `<ul class="items box">${sessRows}</ul>` : (d.pending || []).includes("sessions") ? '<p class="muted small"><span class="loading-inline">Looking through your recent sessions…</span></p>' : '<p class="muted small">None found yet: no session in the last 30 days mentions this PR.</p>'}<div class="row mt"><button class="btn small" data-pr-linksess="${esc(pr)}" ${unlocked ? "" : "disabled"} title="For example the session where you built this PR">Link a session…</button></div>`, "sessions that mention it, and ones you linked; resume one to ask it about the PR");
   const linkedBox = section("Linked PRs", `${(d.linked || []).length ? `<ul class="items box">${d.linked.map(x => `<li><div class="grow"><a class="mono" href="#prs/${esc(x.pr.replace("#", "/"))}">${esc(x.pr)}</a> ${x.title ? esc(x.title) : ""} ${x.reviewed ? "" : '<span class="tag">not reviewed yet</span>'}</div><button class="btn small" data-pr-unlink='${esc(JSON.stringify([pr, x.pr]))}' ${unlocked ? "" : "disabled"}>Unlink</button></li>`).join("")}</ul>` : '<p class="muted small">None. Link the other half of this change, for example the frontend for a backend PR, from any repo.</p>'}
     <div class="row mt"><button class="btn small" data-pr-linkpr="${esc(pr)}" ${unlocked ? "" : "disabled"}>Link a PR…</button>${(d.linked || []).length ? `<button class="btn small primary" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' ${can ? "" : "disabled"} title="One Claude session reviews this PR and its linked ones as one change, and checks they agree with each other">${rec || d.linked.some(x => x.reviewed) ? "Re-review" : "Review"} together with linked PRs</button>${rec || d.linked.some(x => x.reviewed) ? `<button class="btn small" data-pr-together='${esc(JSON.stringify([pr, d.linked.map(x => x.pr)]))}' data-fresh="1" ${can ? "" : "disabled"} title="${FULL_TITLE}">Review together from scratch</button>` : ""}` : ""}</div>${(d.linked || []).length && (rec || d.linked.some(x => x.reviewed)) ? AGAIN_HELP : ""}`, "reviewed together, or linked by you; they can be in any repo");
   const stack = stackBox({ gh: m[1], pr: m[2] }, "strip");
