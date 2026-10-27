@@ -1491,6 +1491,55 @@ def save_attachment(data, kind, name):
     return {"path": path, "name": base, "image": image}
 
 
+PREVIEW_MAX = 400_000  # characters of text, rows of a table: enough to read, never the whole of a big file
+
+
+def attachment_preview(path):
+    """A file attached in a review chat, to look at in the page without downloading it: an image as a data: URL, a
+    CSV or TSV as rows, a PDF as a data: URL, anything readable as text as text. Only files the chat saved."""
+    import base64
+    import csv
+    import mimetypes
+    base = os.path.realpath(chat_files_dir()) + os.sep
+    real = os.path.realpath(str(path or ""))
+    if not path or not real.startswith(base) or not os.path.isfile(real):
+        raise ReviewError("that file isn't one this chat saved")
+    name = os.path.basename(real)
+    kind = mimetypes.guess_type(name)[0] or ""
+    with open(real, "rb") as fh:
+        raw = fh.read(FILE_MAX + 1)
+    if kind in IMAGE_TYPES or kind == "application/pdf":
+        return {"kind": "image" if kind in IMAGE_TYPES else "pdf", "name": name,
+                "src": "data:%s;base64,%s" % (kind, base64.b64encode(raw).decode())}
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"kind": "binary", "name": name, "size": len(raw)}
+    if name.lower().endswith((".csv", ".tsv")):
+        rows = list(csv.reader(text.splitlines()[:2000], delimiter="\t" if name.lower().endswith(".tsv") else ","))
+        return {"kind": "table", "name": name, "rows": rows, "more": max(0, text.count("\n") - 2000)}
+    return {"kind": "text", "name": name, "text": text[:PREVIEW_MAX], "cut": len(text) > PREVIEW_MAX}
+
+
+def session_history(sid, limit=20):
+    """The last `limit` exchanges of one of your Claude Code sessions (what you said, what Claude said back), for the
+    review chat when it's pointed at that session. Tool steps and system notes are left out."""
+    from . import claudesess as CS
+    if not re.match(r"^[0-9a-f-]{36}$", str(sid or "")):
+        raise ReviewError("not a session id")
+    path = CS.transcript(sid)
+    if not path:
+        raise ReviewError("that session's transcript is gone")
+    items, _ = CS.read(path)
+    turns = []
+    for it in items:
+        if it.get("k") == "me" and not str(it.get("text") or "").lstrip().startswith("<"):
+            turns.append({"q": it.get("text") or "", "a": "", "at": it.get("ts"), "images": len(it.get("images") or [])})
+        elif it.get("k") == "ai" and turns and it.get("text"):
+            turns[-1]["a"] = (turns[-1]["a"] + "\n\n" + it["text"]).strip()
+    return {"turns": turns[-limit:], "more": max(0, len(turns) - limit)}
+
+
 def _chat_prompt(context_prompt, q):
     """What a chat message sends: a message starting with / runs that command or skill in the session as typed (the
     review is added after it); files the message carries are named for the Read tool. Returns (prompt, files)."""
@@ -2295,7 +2344,8 @@ def _session_row(p, repo, number):
                 title = ev.get("customTitle") or title
             cwd = cwd or ev.get("cwd") or ""
             c = (ev.get("message") or {}).get("content") if ev.get("type") == "user" else None
-            if not first and isinstance(c, str) and not c.startswith("<"):
+            c = re.sub(r"\s+", " ", re.sub(r"</?pasted_content[^>]*>", " ", c)).strip() if isinstance(c, str) else c
+            if not first and isinstance(c, str) and not c.startswith("<"):  # a paste's wrapper isn't a name
                 first = c
     return {"path": p, "id": os.path.basename(p)[:-6], "title": title or first[:80] or "(untitled)",
             "cwd": cwd, "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(p))),

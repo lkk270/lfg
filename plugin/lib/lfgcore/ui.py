@@ -282,6 +282,14 @@ def api(view, q):
             return R.notices(int(_arg(q, "since") or 0))
         except ValueError:
             return {"last": 0, "items": []}
+    if view in ("chatfile", "chatsession"):  # a review chat's attachment to look at; a session's recent talk
+        from . import review as R
+        try:
+            if view == "chatfile":
+                return R.attachment_preview(_arg(q, "path"))
+            return R.session_history(_arg(q, "id"), limit=int(_arg(q, "limit") or 20))
+        except (R.ReviewError, ValueError) as e:
+            return {"available": False, "why": str(e)}
     if view in ("prreviews", "prreview", "prreviewlog", "prsnippet", "prscores"):
         from . import review as R
         from . import sessions as SS

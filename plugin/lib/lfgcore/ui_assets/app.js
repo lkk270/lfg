@@ -3981,7 +3981,9 @@ const chatTurn = (x, pr) => {
 };
 const CHAT_ATT = /\s*\[(?:image|file): ([^\]\s]+)\]/g;
 const chatFiles = q => [...String(q || "").matchAll(CHAT_ATT)].map(m => m[1].split("/").pop());
-const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(CHAT_ATT, "").trim())}${chatFiles(x.q).length ? `<div class="msg-imgs">Attached: ${chatFiles(x.q).map(esc).join(", ")}</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
+const chatFileChips = q => [...String(q || "").matchAll(/\[(image|file): ([^\]\s]+)\]/g)].map(([, k, path]) =>
+  `<button type="button" class="ss-chip chat-file" data-chat-file="${esc(path)}" title="Open ${esc(path.split("/").pop())}">${icon(k === "image" ? "image" : "docs")}<span>${esc(path.split("/").pop())}</span></button>`).join("");
+const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(CHAT_ATT, "").trim())}${chatFiles(x.q).length ? `<div class="ss-att msg-files">${chatFileChips(x.q)}</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
 const typing = who => '<div class="msg claude"><div class="who">' + (who ? "Session: " + esc(who) : "Claude") + '</div><div class="bubble typing" aria-label="Claude is thinking"><i></i><i></i><i></i></div></div>';
 /* What a reply changed in the review, as chips that jump to the finding. */
 function changedChips(changed, pr) {
@@ -4120,7 +4122,7 @@ function talkPane(pr, p, unlocked, byId) {
       <button class="icon-btn" data-chat-mode="${mode === "wide" ? "side" : "wide"}" title="${mode === "wide" ? "Back to the side" : "Make it bigger"}">${icon(mode === "wide" ? "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" : "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")}</button>
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
-    <div class="pr-thread">${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
+    <div class="pr-thread">${toSess ? `<details class="chat-hist" open data-chat-hist="${esc(toSess.id)}"><summary>Earlier in <b>${esc(toSess.title.slice(0, 60))}</b></summary><div class="loading-inline">Loading the session…</div></details>` : ""}${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
     <div class="pr-compose big"><div class="ss-att" data-chat-atts hidden></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
       <div class="pr-compose-bar"><button type="button" class="icon-btn ss-clip" data-chat-attach title="Attach files or images. You can also drop them here or paste them." ${unlocked ? "" : "disabled"}>${icon("clip")}</button><input type="file" data-chat-file multiple hidden><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop, paste or attach any file${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
 }
@@ -4405,7 +4407,17 @@ function chatRedraw(pr) {
   softRoute();
 }
 function wireChatPane(root) {
-  $$("[data-chat-to]", root).forEach(sel => sel.onchange = () => { (state.chatTo || (state.chatTo = {}))[sel.dataset.chatTo] = sel.value; });
+  $$("[data-chat-to]", root).forEach(sel => sel.onchange = () => { (state.chatTo || (state.chatTo = {}))[sel.dataset.chatTo] = sel.value; chatRedraw(sel.dataset.chatTo); });
+  $$("[data-chat-file]", root).forEach(b => b.onclick = () => openChatFile(b.dataset.chatFile));
+  $$("[data-chat-hist]", root).forEach(async box => {
+    const d = await api("chatsession", { id: box.dataset.chatHist, limit: 20 }).catch(e => ({ available: false, why: e.message }));
+    const body = box.querySelector(".loading-inline");
+    if (!body) return;
+    const who = box.querySelector("b").textContent;
+    body.outerHTML = d.available === false ? `<p class="muted small">${fmtWhy(d.why)}</p>`
+      : `${d.more ? `<p class="muted small">${plural(d.more, "earlier exchange")} not shown.</p>` : ""}${d.turns.map(t => `<div class="msg you"><div class="bubble">${txt(t.q.slice(0, 4000))}${t.images ? `<div class="muted small">${plural(t.images, "image")}</div>` : ""}</div>${t.at ? `<div class="msg-at">${ago(t.at)}</div>` : ""}</div>${t.a ? `<div class="msg claude"><div class="who">Session: ${esc(who)}</div><div class="bubble md">${md(t.a.slice(0, 12000))}</div></div>` : ""}`).join("") || '<p class="muted small">Nothing said in it yet.</p>'}`;
+    const thread = box.closest(".pr-thread"); if (thread) thread.scrollTop = thread.scrollHeight;
+  });
   $$("[data-chat-about]", root).forEach(b => b.onclick = e => {
     e.preventDefault();
     const [pr, id] = JSON.parse(b.dataset.chatAbout);
@@ -4476,6 +4488,19 @@ function wireChatPane(root) {
   b.onclick = go;
   input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } };
   if (pane.classList.contains("wide")) document.onkeydown = e => { if (e.key === "Escape" && $(".pr-talk.wide")) { localStorage.setItem("lfg.chat", "side"); softRoute(); } };
+}
+/* An attachment from a review chat, opened in the page: an image or PDF as itself, a CSV as a table, text as text. */
+async function openChatFile(path) {
+  const name = path.split("/").pop();
+  openDrawer(name, '<div class="loading-inline">Opening…</div>');
+  const d = await api("chatfile", { path }).catch(e => ({ available: false, why: e.message }));
+  const body = d.available === false ? `<p class="muted">${fmtWhy(d.why)}</p>`
+    : d.kind === "image" ? `<img class="chat-file-img" src="${d.src}" alt="${esc(d.name)}">`
+    : d.kind === "pdf" ? `<iframe class="chat-file-pdf" src="${d.src}" title="${esc(d.name)}"></iframe>`
+    : d.kind === "table" ? `<div class="chat-file-tbl"><table>${d.rows.map((r, i) => `<tr>${r.map(c => i ? `<td>${esc(c)}</td>` : `<th>${esc(c)}</th>`).join("")}</tr>`).join("")}</table></div>${d.more ? `<p class="muted small">${plural(d.more, "more row")} not shown.</p>` : ""}`
+    : d.kind === "text" ? `${/\.(md|markdown)$/i.test(d.name) ? `<div class="md readable">${md(d.text)}</div>` : `<pre class="chat-file-txt">${esc(d.text)}</pre>`}${d.cut ? '<p class="muted small">Only the start of the file is shown.</p>' : ""}`
+    : `<p class="muted">${esc(d.name)} isn't text or an image (${n(d.size)} bytes), so it can't be shown here. Claude reads it as it is.</p>`;
+  if ($("#drawer-title").textContent === name) $("#drawer-body").innerHTML = body;
 }
 /* A file dropped anywhere but the chat would open in place of the dashboard: ignore it. */
 ["dragover", "drop"].forEach(t => document.addEventListener(t, e => { if ([...(e.dataTransfer || {}).types || []].includes("Files") && !e.defaultPrevented) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; } }));
@@ -4814,6 +4839,7 @@ const ICON = {
   insights: "M3 17l6-6 4 4 8-8M15 7h6v6",
   back: "M15 6l-6 6 6 6",
   diff: "M6 4v10M12 4v4M9 8h6M17 10v10M14 16h6M6 18h.01",
+  image: "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9.5h.01",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
   plus: "M12 5v14M5 12h14",
   insights: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1.1 2h5c.1-.8.5-1.5 1.1-2A6 6 0 0 0 12 3z",

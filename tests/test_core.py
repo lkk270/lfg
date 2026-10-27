@@ -4860,7 +4860,7 @@ class ReviewTest(unittest.TestCase):
         proj = os.path.join(d, "p")
         os.makedirs(proj)
         a, b = os.path.join(proj, "a.jsonl"), os.path.join(proj, "b.jsonl")
-        C.write_text(a, json.dumps({"type": "user", "cwd": "/x", "message": {"content": "look at o/r#7"}}) + "\n")
+        C.write_text(a, json.dumps({"type": "user", "cwd": "/x", "message": {"content": '<pasted_content id="9">look at o/r#7</pasted_content id="9">'}}) + "\n")
         C.write_text(b, json.dumps({"type": "user", "cwd": "/x", "message": {"content": "nothing here"}}) + "\n")
         opened = []
         real = open
@@ -4870,7 +4870,7 @@ class ReviewTest(unittest.TestCase):
                 opened.append(os.path.basename(p))
             return real(p, *a2, **kw)
         with mock.patch.object(R, "SESSION_DIR", d), mock.patch("builtins.open", counting):
-            self.assertEqual([s["id"] for s in R.sessions_for("o/r", 7)], ["a"])
+            self.assertEqual([(s["id"], s["title"]) for s in R.sessions_for("o/r", 7)], [("a", "look at o/r#7")])
             opened.clear()
             self.assertEqual([s["id"] for s in R.sessions_for("o/r", 7)], ["a"])
             self.assertEqual(opened, [])  # nothing changed: nothing read again
@@ -4904,6 +4904,32 @@ class ReviewTest(unittest.TestCase):
         # a review stopped at 0 when it couldn't get the review skill's full text back from Headroom
         self.assertIn("mcp__plugin_lfg_headroom__headroom_retrieve", R.RUN_ALLOW)
         self.assertFalse([x for x in R.RUN_ALLOW if "headroom" in x and "retrieve" not in x])
+
+    def test_a_chat_file_opens_in_the_page_and_nothing_else_does(self):
+        import base64
+        csv = R.save_attachment(base64.b64encode(b"a,b\n1,2\n").decode(), "text/csv", "q.csv")["path"]
+        png = R.save_attachment(base64.b64encode(b"\x89PNG\r\n\x1a\nxx").decode(), "image/png", "s.png")["path"]
+        got = R.attachment_preview(csv)
+        self.assertEqual((got["kind"], got["name"], got["rows"]), ("table", "q.csv", [["a", "b"], ["1", "2"]]))
+        got = R.attachment_preview(png)
+        self.assertEqual(got["kind"], "image")
+        self.assertTrue(got["src"].startswith("data:image/png;base64,"))
+        for bad in ("/etc/passwd", os.path.join(R.chat_files_dir(), "..", "..", "config.json"), ""):
+            with self.assertRaises(R.ReviewError):  # only files the chat saved
+                R.attachment_preview(bad)
+
+    def test_a_session_picked_in_the_chat_shows_its_recent_conversation(self):
+        from lfgcore import claudesess as CS
+        items = [{"k": "me", "text": "first", "ts": "1"}, {"k": "tool", "name": "Bash"},
+                 {"k": "ai", "text": "answer one", "ts": "2"}, {"k": "me", "text": "<command-name>x</command-name>"},
+                 {"k": "me", "text": "second", "ts": "3"}, {"k": "ai", "text": "answer two", "ts": "4"}]
+        with mock.patch.object(CS, "transcript", return_value="/x.jsonl"), \
+                mock.patch.object(CS, "read", return_value=(items, {"title": "t"})):
+            got = R.session_history("7" * 8 + "-1111-2222-3333-444444444444", limit=1)
+        self.assertEqual([(t["q"], t["a"]) for t in got["turns"]], [("second", "answer two")])
+        self.assertEqual(got["more"], 1)
+        with self.assertRaises(R.ReviewError):
+            R.session_history("not-an-id")
 
     def test_the_review_chat_takes_any_file_and_slash_commands(self):
         import base64
