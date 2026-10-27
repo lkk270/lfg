@@ -4200,7 +4200,7 @@ class ReviewTest(unittest.TestCase):
             f.write("\n".join(json.dumps(e) for e in events))
         with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"):
             self.assertEqual(R._save_from_log("o/r", 7, log, None), "")
-        self.assertEqual(R.load("o/r", 7)["passes"][0]["score"], 90)
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["score"], 88)  # 100 minus its one major
 
     def fake_claude(self, events):
         """A stand-in for `claude -p`: writes these stream-json events to the run's log."""
@@ -4449,13 +4449,36 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.object(R, "job", return_value={"log": log}):
             self.assertEqual(R.progress("o/r", 7)["steps"], ["Read /x/out.txt ×3"])
 
-    def test_a_pr_that_isnt_ready_never_scores_like_one_that_is(self):
-        with mock.patch.object(R, "pr_meta", return_value=self.META):
-            R.save("o/r", 7, {"summary": "s", "score": 100, "verdict": "almost", "findings": []})
-            R.save("o/r", 7, {"summary": "s", "score": 90, "verdict": "not", "findings": []})
-            R.save("o/r", 7, {"summary": "s", "score": 100, "verdict": "mergeable", "findings": []})
-        self.assertEqual([p["score"] for p in R.load("o/r", 7)["passes"]], [94, 79, 100])
-        self.assertEqual(R.apply_changes("o/r", 7, 3, {"verdict": "almost"}), ["score 94", "verdict almost"])
+    def test_the_score_is_100_minus_whats_open_whatever_number_the_review_picked(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):  # 6 off with nothing behind them
+            R.save("o/r", 7, {"summary": "s", "score": 89, "verdict": "almost",
+                              "findings": [f(severity="minor", title="a"), f(severity="nitpick", title="b", line=9)],
+                              "questions": [{"ask": "still called?", "costs": 12}, {"ask": "free one"}]})
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["score"], p["score_given"], p.get("credits")), (83, 89, None))  # 100 - 4 - 1 - 12
+        R.mark("o/r", 7, ["1.1", "1.2"], status="drop")
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["questions"][0]["answer"] = "no"
+        R.store(rec)
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["score"], p["score_at_review"]), (100, 83))
+        self.assertEqual([(c["id"], c["points"], c["why"]) for c in p["credits"]],
+                         [("1.1", 4, "passed"), ("1.2", 1, "passed"), ("q1", 12, "answered")])
+        with mock.patch.object(R, "pr_meta", return_value=self.META):  # a review with nothing open is 100
+            R.save("o/r", 7, {"summary": "s", "score": 79, "verdict": "not", "findings": []})
+        self.assertEqual(R.load("o/r", 7)["passes"][1]["score"], 100)
+
+    def test_old_records_are_recalculated_and_their_points_with_no_finding_behind_them_go(self):
+        # external-api#1808 review 10: Claude said 94 in the chat, with every finding passed and its question answered
+        rec = {"repo": "o/r", "number": 7, "passes": [{
+            "n": 1, "score": 94, "score_at_review": 89, "score_said": True, "verdict": "almost",
+            "verdict_now": "mergeable", "credits": [{"id": "1.1", "points": 4, "why": "passed"}],
+            "findings": [dict(self.finding(severity="minor"), id="1.1", status="drop"),
+                         dict(self.finding(severity="nitpick"), id="1.2", status="drop", check={"state": "fixed"})],
+            "questions": [{"id": "q1", "ask": "?", "costs": 12, "answer": "yes"}], "prior": []}]}
+        p = R.rescore(rec)["passes"][0]
+        self.assertEqual((p["score"], p["score_at_review"], p["score_given"], "score_said" in p), (100, 83, 89, False))
 
     def test_a_review_says_whether_it_can_merge_and_talking_can_change_that(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
@@ -4467,9 +4490,15 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((p["verdict"], p["verdict_why"]), ("almost", "one minor left"))
         changed = R.apply_changes("o/r", 7, 1, {"changes": [{"id": "1.1", "status": "drop"}], "score": 92,
                                                 "verdict": "mergeable", "verdict_why": "nothing left"})
-        self.assertEqual(changed, ["1.1: dropped", "verdict mergeable", "score 92"])
+        self.assertEqual(changed, ["1.1: dropped", "verdict mergeable"])  # a score Claude names is ignored
         p = R.load("o/r", 7)["passes"][0]
-        self.assertEqual((p["verdict"], p["score"], p["findings"][0]["dropped_by"]), ("mergeable", 92, "claude"))
+        self.assertEqual((p["verdict"], p["score"], p["findings"][0]["dropped_by"]), ("mergeable", 100, "claude"))
+        changed = R.apply_changes("o/r", 7, 1, {"new": [self.finding(severity="minor", title="Retries never stop"),
+                                                        {"title": "no body", "severity": "minor"}]})
+        self.assertEqual(changed, ["1.2: new minor finding"])  # a problem found in the chat becomes a finding
+        f = R.load("o/r", 7)["passes"][0]["findings"][1]
+        self.assertEqual((f["title"], f["status"], f["since"], R.load("o/r", 7)["passes"][0]["score"]),
+                         ("Retries never stop", "pending", "missed", 96))
         R.mark("o/r", 7, ["1.1"], status="keep")  # your own call replaces Claude's
         self.assertNotIn("dropped_by", R.load("o/r", 7)["passes"][0]["findings"][0])
 
@@ -4705,19 +4734,19 @@ class ReviewTest(unittest.TestCase):
 
     def test_the_score_is_100_once_nothing_is_open(self):
         f = self.finding
-        with mock.patch.object(R, "pr_meta", return_value=self.META):  # 26 off, 16 of it tied to findings
+        with mock.patch.object(R, "pr_meta", return_value=self.META):  # it said 74: 10 off with nothing behind them
             R.save("o/r", 7, {"summary": "s", "score": 74, "verdict": "not",
                               "findings": [f(severity="major", title="a"), f(severity="minor", title="b", line=9)]})
         rec = R.load("o/r", 7)
         rec["passes"][0]["findings"][0]["check"] = {"state": "fixed", "head": "b" * 40}
         R.store(rec)
         p = R.load("o/r", 7)["passes"][0]
-        self.assertEqual((p["score"], p.get("cleared")), (86, None))  # 1.2 still open: 74 + 12
+        self.assertEqual(p["score"], 96)  # 1.2 still open: 100 - 4
         rec = R.load("o/r", 7)
         rec["passes"][0]["findings"][1]["fixed"] = {"commit": "c" * 40}  # LFG's fix pass fixed it
         R.store(rec)
         p = R.load("o/r", 7)["passes"][0]
-        self.assertEqual((p["score"], p["cleared"], p["verdict_now"]), (100, 10, "mergeable"))
+        self.assertEqual((p["score"], p["score_at_review"], p["verdict_now"]), (100, 84, "mergeable"))
 
     def test_fresh_eyes_hides_earlier_reviews_and_others_then_notes_repeats_before_posting(self):
         f = self.finding
@@ -4783,7 +4812,8 @@ class ReviewTest(unittest.TestCase):
         R.store(rec)
         p2 = R.load("o/r", 7)["passes"][1]
         # the minor that made it "almost" is fixed: the score moves now, though the nitpick 1.2 is still open
-        self.assertEqual((p2["score"], p2.get("verdict_now"), p2["earlier_points"]), (99, "mergeable", 5))
+        self.assertEqual((p2["score"], p2.get("verdict_now"), p2["open_points"]),
+                         (99, "mergeable", {"findings": 0, "earlier": 1, "questions": 0}))
         rec = R.load("o/r", 7)
         rec["passes"][0]["findings"][1]["check"] = {"state": "fixed"}
         R.store(rec)
@@ -4795,7 +4825,7 @@ class ReviewTest(unittest.TestCase):
         rec["passes"][0]["findings"][0]["check"] = {"state": "partly"}  # the minor turns out only partly fixed
         R.store(rec)
         p2 = R.load("o/r", 7)["passes"][1]
-        self.assertEqual((p2["score"], p2.get("verdict_now"), R.verdict_of(p2)), (94, None, "almost"))
+        self.assertEqual((p2["score"], p2.get("verdict_now"), R.verdict_of(p2)), (96, None, "almost"))
 
     def test_with_its_majors_fixed_a_not_mergeable_review_reads_almost(self):
         f = self.finding
@@ -4808,7 +4838,7 @@ class ReviewTest(unittest.TestCase):
             g["check"] = {"state": "fixed"}
         R.store(rec)
         p = R.load("o/r", 7)["passes"][0]
-        self.assertEqual((p["verdict_now"], p["score"], R.verdict_of(p)), ("almost", 94, "almost"))
+        self.assertEqual((p["verdict_now"], p["score"], R.verdict_of(p)), ("almost", 96, "almost"))
 
     def test_ask_a_session_forks_it_once_then_continues_the_fork(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):

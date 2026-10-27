@@ -88,7 +88,7 @@ The file passed to `lfg review save`:
 
 ```json
 {"summary": "two or three sentences: what the PR does and whether it is mergeable",
- "score": 84, "verdict": "mergeable|almost|not", "verdict_why": "one line: what stands between it and merging",
+ "verdict": "mergeable|almost|not", "verdict_why": "one line: what stands between it and merging",
  "approach_notes": ["..."],
  "findings": [{"title": "short name", "severity": "blocker|major|minor|nitpick|note",
    "file": "path/in/repo.ts", "line": 42, "issue": "one line", "fix": "one line",
@@ -108,9 +108,8 @@ The file passed to `lfg review save`:
 `line` is a line in the PR's version of the file, or null for a finding about the PR as a whole.
 
 A question that holds the verdict back costs points (the method's Score rule): put that cost in its `costs` (4, 12 or
-25; leave it out when the question costs nothing), so the score adds up from what the page shows. `verdict` and
-`score` must agree (the method's Score rule): an open question or unchecked risk that holds the
-verdict back costs points too, so a PR that is only `almost` never scores 100. `verdict`: `mergeable` when nothing
+25; leave it out when the question costs nothing). LFG works out the score as 100 minus what is still open, so don't
+give one: anything that holds the PR back must be a finding or a question that costs points. `verdict`: `mergeable` when nothing
 should hold it up, `almost` when only small fixes stand in the way (minors, a
 failing check with an obvious cause, a question to answer), `not` with any blocker or major, or a design problem.
 

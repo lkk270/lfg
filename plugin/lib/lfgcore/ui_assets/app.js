@@ -4044,26 +4044,18 @@ const RUBRIC = `<details class="rubric"><summary class="small">How the score wor
   <span>${st("minor")}</span><b>−4</b><span>No bug today, but a real cost: duplication, a broken convention</span>
   <span>${st("nit")}</span><b>−1</b><span>Cosmetic or taste; counted once per kind</span>
   <span>${st("note")}</span><b>0</b><span>Context for the author, never counted</span></div>
-  <p>An open question or unchecked risk that holds the merge back costs what the finding it could become would. The score and the verdict agree: <b>Almost mergeable</b> scores at most 94, <b>Not mergeable</b> at most 79, and 100 means nothing stands in the way. Green is 85 and up, yellow 70 to 84, red below 70.</p></div></details>`;
+  <p>An open question that holds the merge back costs what the finding it could become would. The score is always 100 minus what is still open: passing on a finding, a fix, or an answer gives its points back, and nothing comes off without a finding or question behind it. Green is 85 and up, yellow 70 to 84, red below 70.</p></div></details>`;
 const scoreTone = sc => (sc >= 85 ? "ok" : sc >= 70 ? "warn" : "bad");
 /* The verdict and the score, big, at the top of a review. */
 function verdictHero(p, together, gh) {
   const { v, why, guessed } = mergeVerdict(p), [label, tone] = VERDICT[v], clash = approvedAnyway(gh, v);
-  const raw = p.score != null && !together ? Number(p.score) : null;
-  /* reviews saved before the score had to agree with the verdict: show it as high as the verdict allows */
-  const sc = raw == null ? null : Math.min(raw, { almost: 94, not: 79 }[v] ?? 100);
-  const ring = sc == null ? "" : `<div class="score-ring ${scoreTone(sc)}" style="--pct:${Math.max(0, Math.min(100, sc))}" title="${sc < raw ? `Saved as ${raw}, shown as ${sc}: a PR that is ${label.toLowerCase()} can't score higher` : "The review's score out of 100"}"><span>${esc(sc)}</span><small>score</small></div>`;
+  const sc = p.score != null && !together ? Number(p.score) : null;
+  const ring = sc == null ? "" : `<div class="score-ring ${scoreTone(sc)}" style="--pct:${Math.max(0, Math.min(100, sc))}" title="100 minus what is still open"><span>${esc(sc)}</span><small>score</small></div>`;
   const upTo = (p.history || []).filter(x => x.n <= p.n);
-  /* where the points went: findings, open questions, and anything the review took off without saying */
-  // as the review counted them when it ran; what you fixed or passed since comes back in the line below
-  const kinds = new Set(), fpts = (p.findings || []).reduce((a, f) => {
-    if (f.severity === "nitpick") { if (kinds.has(f.title)) return a; kinds.add(f.title); }
-    return a + (POINTS[f.severity] || 0);
-  }, 0);
-  const qpts = (p.questions || []).filter(q => !q.answer).reduce((a, q) => a + (q.costs || 0), 0);
-  const epts = p.earlier_points || 0, atReview = p.score_at_review ?? raw;
-  const other = raw == null ? 0 : Math.max(0, 100 - atReview - fpts - qpts - epts);
-  const breakdown = raw == null || together ? "" : `<div class="score-why small" title="The score is 100 minus these">100 <span class="muted">−</span> <b>${fpts}</b> <span class="muted">findings</span>${epts ? ` <span class="muted">−</span> <b>${epts}</b> <span class="muted" title="Earlier reviews' findings this review still counted as open">earlier findings</span>` : ""}${qpts ? ` <span class="muted">−</span> <b>${qpts}</b> <span class="muted">open questions</span>` : ""}${other ? ` <span class="muted">−</span> <b>${other}</b> <span class="muted" title="The review took these off without tying them to a finding or question, often risks named in the summary">not itemized</span>` : ""} <span class="muted">=</span> <b>${atReview}</b></div>${(p.credits || []).length ? `<div class="score-why small">${esc(p.score_at_review)} when reviewed, <b>${raw}</b> now: ${[...p.credits.map(c => `+${c.points} for ${esc(c.id)} ${c.why === "fixed" ? "fixed" : "passed on"}`), ...(p.cleared ? [`+${p.cleared} for the rest, since nothing is open now`] : [])].join(", ")}</div>` : ""}`;
+  /* the score is 100 minus what is still open: its findings, earlier ones it still counted, and questions that cost points */
+  const o = p.open_points || {}, part = (n, label, title) => n ? ` <span class="muted">−</span> <b>${n}</b> <span class="muted"${title ? ` title="${title}"` : ""}>${label}</span>` : "";
+  const parts = part(o.findings, "open findings") + part(o.earlier, "earlier findings", "Earlier reviews' findings this review still counted as open") + part(o.questions, "open questions");
+  const breakdown = sc == null ? "" : `<div class="score-why small" title="The score is 100 minus these">100${parts || ` <span class="muted">− nothing open</span>`} <span class="muted">=</span> <b>${sc}</b></div>${(p.credits || []).length ? `<div class="score-why small">${esc(p.score_at_review)} when reviewed, <b>${sc}</b> now: ${p.credits.map(c => `+${c.points} for ${esc(c.id)} ${{ fixed: "fixed", passed: "passed on", answered: "answered" }[c.why] || esc(c.why)}`).join(", ")}</div>` : ""}`;
   return `<div class="verdict-hero ${tone}">${ring}<div class="grow"><div class="verdict-badge ${tone}">${dot(tone)}${esc(label)}</div>${why ? `<div class="verdict-why">${txt(why)}</div>` : ""}${guessed ? '<div class="muted small">Worked out from the open findings; new reviews give their own call.</div>' : ""}${breakdown}${RUBRIC}</div>${together ? "" : trend(upTo)}</div>${clash ? `<div class="callout ${clash.others ? "bad" : "warn"} approved-anyway">${dot(clash.others ? "bad" : "warn")}<span>${esc(clash.text)}</span></div>` : ""}`;
 }
 /* Which way the score is heading: against the review before, and a small line of every score so far. */

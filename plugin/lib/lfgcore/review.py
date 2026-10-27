@@ -227,7 +227,8 @@ def record_path(repo, number):
 
 
 def load(repo, number):
-    return C.read_json(record_path(repo, number))
+    rec = C.read_json(record_path(repo, number))
+    return rescore(rec) if rec else rec  # records saved under an older score rule read the same as new ones
 
 
 POINTS = {"blocker": 25, "major": 12, "minor": 4, "nitpick": 1, "note": 0}  # the rubric's cost of each severity
@@ -245,61 +246,57 @@ def undecided(p):
 
 
 def rescore(rec):
-    """Each review's score as things stand: the score it gave, plus the points of every finding it counted that you
-    since passed on or that "Is it fixed?" found fixed (`credits`; `score_at_review` keeps the original). A finding
-    counts in its own review and in later ones that still listed it as open. Nitpicks cost once per kind, so a kind
-    comes back only when every one of them is settled. Once nothing it held against the PR is open, it is 100: the
-    points it took off without tying them to a finding come back too (`cleared`), unless Claude has since said what
-    the score is as things stand (`score_said`)."""
+    """Each review's score as things stand: 100 minus the points of what it counted that is still open, its findings
+    and earlier ones it still listed as open, plus its unanswered questions that cost points. The number the review
+    picked itself is never used (`score_given` keeps it), so nothing comes off without a finding or question behind
+    it. Nitpicks cost once per kind. `credits` names what came back since it ran (passed, fixed or answered) and
+    `score_at_review` the score before that."""
     by_id = {f["id"]: f for p in rec.get("passes") or [] for f in p.get("findings") or []}
+    settled = lambda f: f["status"] == "drop" or checked_fixed(f)
     for p in rec.get("passes") or []:
-        if p.get("score") is None:
-            continue
-        base = p.get("score_at_review", p["score"])
+        for k in ("cleared", "score_said"):  # from when the review's own number counted
+            p.pop(k, None)
         counted = list(p.get("findings") or []) + [
             by_id[x["id"]] for x in p.get("prior") or []
             if x.get("state") not in ("fixed", "withdrawn") and x.get("id") in by_id]
-        credits, nits = [], {}
+        costed, nits = [], {}
         for f in counted:
             if f["severity"] == "nitpick":
                 nits.setdefault(f.get("title") or f["id"], []).append(f)
-            elif POINTS.get(f["severity"]) and (f["status"] == "drop" or checked_fixed(f)):
-                credits.append(f)
-        credits += [fs[0] for fs in nits.values() if all(f["status"] == "drop" or checked_fixed(f) for f in fs)]
-        credits.sort(key=lambda f: [int(x) for x in f["id"].split(".") if x.isdigit()])
-        earlier = [f for f in counted[len(p.get("findings") or []):] if POINTS.get(f["severity"])]
-        if earlier:  # earlier findings it still counted, so the page can name them instead of "not itemized"
-            p["earlier_points"] = sum(POINTS[f["severity"]] for f in earlier)
+            elif POINTS.get(f["severity"]):
+                costed.append(f)
+        costed += [next((f for f in fs if not settled(f)), fs[0]) for fs in nits.values()]
+        costed.sort(key=lambda f: [int(x) for x in f["id"].split(".") if x.isdigit()])
+        still = [f for f in costed if not settled(f)]
+        credits = [{"id": f["id"], "points": POINTS[f["severity"]], "why": "passed" if f["status"] == "drop" else
+                    "fixed"} for f in costed if settled(f)]
+        asks = [q for q in p.get("questions") or [] if q.get("costs")]
+        credits += [{"id": q["id"], "points": q["costs"], "why": "answered"} for q in asks if q.get("answer")]
+        own = {f["id"] for f in p.get("findings") or []}
+        p["open_points"] = {  # what the score is made of, so the page can add it up
+            "findings": sum(POINTS[f["severity"]] for f in still if f["id"] in own),
+            "earlier": sum(POINTS[f["severity"]] for f in still if f["id"] not in own),
+            "questions": sum(q["costs"] for q in asks if not q.get("answer"))}
+        p.pop("earlier_points", None)
+        p.setdefault("score_given", p.get("score_at_review", p.get("score")))  # the review's own number, unused
+        p["score"] = max(0, 100 - sum(p["open_points"].values()))
+        if credits:
+            p["credits"] = credits
+            p["score_at_review"] = max(0, p["score"] - sum(c["points"] for c in credits))
+        else:
+            p.pop("credits", None)
+            p.pop("score_at_review", None)
         # what it held against the PR got fixed or passed: its verdict follows what is still open (a major left: not
-        # mergeable; only minors: almost; nothing: mergeable), never worse than it said, and its cap with it. An
-        # open question that costs points keeps the verdict as it was.
-        still = [f for f in counted if POINTS.get(f["severity"]) and not (f["status"] == "drop" or checked_fixed(f))]
+        # mergeable; only minors: almost; nothing: mergeable), never worse than it said. An open question that costs
+        # points keeps the verdict as it was.
         now = "not" if any(f["severity"] in ("blocker", "major") for f in still) else \
             "almost" if any(f["severity"] == "minor" for f in still) else "mergeable"
         rank = {"mergeable": 0, "almost": 1, "not": 2}
-        better = credits and p.get("verdict") in SCORE_CAP and rank[now] < rank[p["verdict"]] and not any(
-            q.get("costs") and not q.get("answer") for q in p.get("questions") or [])
-        if better:
+        if credits and p.get("verdict") in ("almost", "not") and rank[now] < rank[p["verdict"]] \
+                and not any(not q.get("answer") for q in asks):
             p["verdict_now"] = now
         else:
             p.pop("verdict_now", None)
-        clear = better
-        if credits:
-            p["score_at_review"] = base
-            p["credits"] = [{"id": f["id"], "points": POINTS[f["severity"]],
-                             "why": "passed" if f["status"] == "drop" else "fixed"} for f in credits]
-            start = p.get("score_given", base) if clear else base  # the verdict's cap is gone with the verdict
-            score = start + sum(c["points"] for c in p["credits"])
-            if not still and not p.get("score_said") and score < 100 \
-                    and not any(q.get("costs") and not q.get("answer") for q in p.get("questions") or []):
-                p["cleared"] = 100 - score
-            else:
-                p.pop("cleared", None)
-            p["score"] = cap_score(min(100, score + p.get("cleared", 0)), p.get("verdict_now") or p.get("verdict"))
-        elif "score_at_review" in p:
-            p["score"] = p.pop("score_at_review")
-            p.pop("credits", None)
-            p.pop("cleared", None)
     return rec
 
 
@@ -321,7 +318,7 @@ def all_records():
     for p in sorted(glob.glob(os.path.join(reviews_dir(), "*", "*.json"))):
         r = C.read_json(p)
         if r and r.get("passes"):
-            out.append(r)
+            out.append(rescore(r))
     return sorted(out, key=lambda r: r.get("updated", ""), reverse=True)
 
 
@@ -522,12 +519,10 @@ def save(repo, number, data, ticket=None, meta=None):
     verdict = data.get("verdict") or None
     if verdict not in (None,) + VERDICTS:
         raise ReviewError("verdict must be one of %s, or left out" % ", ".join(VERDICTS))
-    given, score = score, cap_score(score, verdict)
     rec["passes"].append({
         "n": n, "kind": "first" if n == 1 else "re-review", "ts": C.now_iso(), "reviewer": data.get("reviewer") or "",
         "head_sha": data.get("head_sha") or meta["head_sha"], "base": meta["base"],
-        "summary": _text(data.get("summary"), "summary"), "score": score, "verdict": verdict,
-        **({"score_given": given} if given != score else {}),  # before the verdict's cap, for when it lifts
+        "summary": _text(data.get("summary"), "summary"), "score_given": score, "verdict": verdict,
         "verdict_why": _text(data.get("verdict_why"), "verdict_why", 400) if verdict else "",
         "approach_notes": [_text(x, "approach note", 4000) for x in data.get("approach_notes") or []],
         "questions": [{"id": "q%d" % k, "ask": _text(q.get("ask"), "question", 1000), "why": _text(q.get("why"), "why",
@@ -1386,9 +1381,12 @@ ASK = ("Lee is talking to you about the review you did, from the LFG dashboard. 
        "conversation settles a change to the review (Lee asks for one, or you agree a finding is wrong, mis-rated or "
        "badly worded), end your reply with one ```json block {\"changes\": [{\"pr\": \"owner/repo#n\", \"id\": "
        "\"1.2\", and only the fields that change: \"title\", \"severity\", \"issue\", \"fix\", \"body\", \"reply\", "
-       "\"status\" (\"keep\" or \"drop\")}], \"summary\": \"only if the summary changes\", \"score\": only "
-       "if the score changes (0-100), \"verdict\" (\"mergeable\", \"almost\" or \"not\") and \"verdict_why\" only if "
-       "whether it can merge changes}. LFG applies it. Never save, post or run anything that writes.\n\n"
+       "\"status\" (\"keep\" or \"drop\")}], \"new\": [one per problem found now that no finding covers: "
+       "{\"title\", \"severity\", \"file\", \"line\", \"issue\", \"fix\", \"body\"}], \"summary\": \"only if the "
+       "summary changes\", \"verdict\" (\"mergeable\", \"almost\" or \"not\") and \"verdict_why\" only if "
+       "whether it can merge changes}. LFG applies it. The score is always 100 minus the points of what is still open "
+       "(findings and questions that cost points), worked out by LFG: never give or promise a score, and never hold "
+       "points back for a problem; make it a finding. Never save, post or run anything that writes.\n\n"
        "The review as it stands: %s\n\n%s")
 
 
@@ -1426,34 +1424,28 @@ def apply_changes(repo, number, n, out):
         if what:
             recs[(r, k)] = rec
             done.append("%s%s: %s" % ("" if (r, k) == (repo, number) else ref(r, k) + " ", f["id"], ", ".join(what)))
+    new = [f for f in (out or {}).get("new") or [] if isinstance(f, dict)][:5]
+    if new:
+        rec = recs.get((repo, number)) or need(repo, number)
+        p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
+        for f in new if p else []:
+            try:
+                f = _clean_finding(dict(f, since="missed"), len(p["findings"]) + 1)
+            except ReviewError:
+                continue
+            f["id"] = "%d.%d" % (p["n"], len(p["findings"]) + 1)
+            f["found_in_chat"] = True
+            p["findings"].append(f)
+            recs[(repo, number)] = rec
+            done.append("%s: new %s finding" % (f["id"], f["severity"]))
     v = (out or {}).get("verdict")
     if v in VERDICTS:
         rec = recs.get((repo, number)) or need(repo, number)
         p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
         if p and p.get("verdict") != v:
             p["verdict"], p["verdict_why"] = v, _text((out or {}).get("verdict_why"), "verdict_why", 400)
-            if cap_score(p.get("score"), v) != p.get("score"):
-                p["score"] = cap_score(p["score"], v)
-                if "score_at_review" in p:
-                    p["score_at_review"] = cap_score(p["score_at_review"], v)
-                done.append("score %d" % p["score"])
             recs[(repo, number)] = rec
             done.append("verdict %s" % v)
-    score = (out or {}).get("score")
-    if isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100:
-        rec = recs.get((repo, number)) or need(repo, number)
-        p = next((x for x in rec["passes"] if x["n"] == int(n)), None)
-        score = cap_score(score, p.get("verdict") if p else None)
-        if p and p.get("score") != score:
-            # what Claude now says is the score as things stand: work back the one before anything settled
-            p["score"] = p["score_at_review"] = score
-            p["score_said"] = True
-            rescore(rec)
-            back = sum(c["points"] for c in p.get("credits") or []) + p.get("cleared", 0)
-            p["score_at_review"] = max(0, score - back)
-            p["score"] = score
-            recs[(repo, number)] = rec
-            done.append("score %d" % score)
     summary = (out or {}).get("summary")
     if isinstance(summary, str) and summary.strip():
         rec = recs.get((repo, number)) or need(repo, number)
@@ -1644,12 +1636,6 @@ def answer(repo, number, n, qid, text):
 
 
 VERDICTS = ("mergeable", "almost", "not")
-SCORE_CAP = {"almost": 94, "not": 79}  # a PR that isn't ready never scores like one that is
-
-
-def cap_score(score, verdict):
-    """The score as high as the verdict allows: 100 only when nothing stands in the way of merging."""
-    return min(score, SCORE_CAP[verdict]) if score is not None and verdict in SCORE_CAP else score
 
 
 def verdict_of(p):
@@ -1844,7 +1830,7 @@ def check_fixed(repo, number, fid):
 
 DISCUSS = ("This is about one finding, %s: %s\nWhere: %s line %s\nIssue: %s\nSuggested fix: %s\nThe comment drafted "
            "for the author: %s%s\n\nLee says: %s\n\nIf Lee says it isn't needed and the code agrees, say so in a "
-           "sentence and drop it (\"status\": \"drop\"); leave \"score\" alone, LFG gives its points back. If you "
+           "sentence and drop it (\"status\": \"drop\"); LFG gives its points back. If you "
            "disagree, keep it and say plainly why it still matters and what has to change.")
 
 
