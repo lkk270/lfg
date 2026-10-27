@@ -198,7 +198,8 @@ POINTS = {"blocker": 25, "major": 12, "minor": 4, "nitpick": 1, "note": 0}  # th
 
 
 def checked_fixed(f):
-    return (f.get("check") or {}).get("state") == "fixed"
+    """Fixed: "Is it fixed?" said so, or LFG's own fix pass committed a fix for it."""
+    return (f.get("check") or {}).get("state") == "fixed" or bool((f.get("fixed") or {}).get("commit"))
 
 
 def undecided(p):
@@ -211,7 +212,9 @@ def rescore(rec):
     """Each review's score as things stand: the score it gave, plus the points of every finding it counted that you
     since passed on or that "Is it fixed?" found fixed (`credits`; `score_at_review` keeps the original). A finding
     counts in its own review and in later ones that still listed it as open. Nitpicks cost once per kind, so a kind
-    comes back only when every one of them is settled."""
+    comes back only when every one of them is settled. Once nothing it held against the PR is open, it is 100: the
+    points it took off without tying them to a finding come back too (`cleared`), unless Claude has since said what
+    the score is as things stand (`score_said`)."""
     by_id = {f["id"]: f for p in rec.get("passes") or [] for f in p.get("findings") or []}
     for p in rec.get("passes") or []:
         if p.get("score") is None:
@@ -250,11 +253,17 @@ def rescore(rec):
             p["credits"] = [{"id": f["id"], "points": POINTS[f["severity"]],
                              "why": "passed" if f["status"] == "drop" else "fixed"} for f in credits]
             start = p.get("score_given", base) if clear else base  # the verdict's cap is gone with the verdict
-            p["score"] = cap_score(min(100, start + sum(c["points"] for c in p["credits"])),
-                                   p.get("verdict_now") or p.get("verdict"))
+            score = start + sum(c["points"] for c in p["credits"])
+            if not still and not p.get("score_said") and score < 100 \
+                    and not any(q.get("costs") and not q.get("answer") for q in p.get("questions") or []):
+                p["cleared"] = 100 - score
+            else:
+                p.pop("cleared", None)
+            p["score"] = cap_score(min(100, score + p.get("cleared", 0)), p.get("verdict_now") or p.get("verdict"))
         elif "score_at_review" in p:
             p["score"] = p.pop("score_at_review")
             p.pop("credits", None)
+            p.pop("cleared", None)
     return rec
 
 
@@ -1365,8 +1374,9 @@ def apply_changes(repo, number, n, out):
         if p and p.get("score") != score:
             # what Claude now says is the score as things stand: work back the one before anything settled
             p["score"] = p["score_at_review"] = score
+            p["score_said"] = True
             rescore(rec)
-            p["score_at_review"] = max(0, score - sum(c["points"] for c in p.get("credits") or []))
+            p["score_at_review"] = max(0, score - sum(c["points"] for c in p.get("credits") or []) - p.get("cleared", 0))
             p["score"] = score
             recs[(repo, number)] = rec
             done.append("score %d" % score)

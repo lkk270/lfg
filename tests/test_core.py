@@ -3766,6 +3766,22 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual((p2["score"], [c["id"] for c in p2["credits"]]), (95, ["2.1"]))
         self.assertEqual(R.undecided(p2), ["2.2"])  # a finding checked fixed needs no Fix or Pass
 
+    def test_the_score_is_100_once_nothing_is_open(self):
+        f = self.finding
+        with mock.patch.object(R, "pr_meta", return_value=self.META):  # 26 off, 16 of it tied to findings
+            R.save("o/r", 7, {"summary": "s", "score": 74, "verdict": "not",
+                              "findings": [f(severity="major", title="a"), f(severity="minor", title="b", line=9)]})
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][0]["check"] = {"state": "fixed", "head": "b" * 40}
+        R.store(rec)
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["score"], p.get("cleared")), (86, None))  # 1.2 still open: 74 + 12
+        rec = R.load("o/r", 7)
+        rec["passes"][0]["findings"][1]["fixed"] = {"commit": "c" * 40}  # LFG's fix pass fixed it
+        R.store(rec)
+        p = R.load("o/r", 7)["passes"][0]
+        self.assertEqual((p["score"], p["cleared"], p["verdict_now"]), (100, 10, "mergeable"))
+
     def test_fresh_eyes_hides_earlier_reviews_and_others_then_notes_repeats_before_posting(self):
         f = self.finding
         with mock.patch.object(R, "pr_meta", return_value=self.META):
