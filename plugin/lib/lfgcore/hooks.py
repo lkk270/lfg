@@ -64,12 +64,27 @@ def pre_tool(data):
     from . import graphs as G
     from . import guard
     tool, tin = data.get("tool_name", ""), data.get("tool_input") or {}
-    verdict = guard.check(tool, tin, prefs=_prefs(data), cwd=data.get("cwd"))
+    verdict = guard.check_full(tool, tin, prefs=_prefs(data), cwd=data.get("cwd"))
+    if verdict and verdict[1] in guard.ACTION:
+        kind, row, why = verdict
+        where = ("lfg ui → Preferences → Git and GitHub actions → \"%s\" (every session), or Sessions → Rules "
+                 "(this session only)" % guard.rule_title(row))
+        C.audit("blocked" if kind == "block" else "asked", {"rule": row, "tool": tool, "why": why})
+        if kind == "ask":  # Claude Code's own prompt: the terminal's, or Studio's Allow / Deny
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "ask",
+                "permissionDecisionReason": "LFG: \"%s\" is set to Ask (%s). Change it in %s." % (
+                    guard.rule_title(row), why, where)}}))
+            return 0
+        sys.stderr.write("Blocked by LFG: \"%s\" is set to Block (%s). Change it in %s, or do it in your own "
+                         "terminal.\n" % (guard.rule_title(row), why, where))
+        return 2
     if verdict:
-        rule, why = verdict
+        _, rule, why = verdict
         C.audit("blocked", {"rule": rule, "tool": tool, "why": why})
         sys.stderr.write("Blocked by LFG rule %s (%s): %s. A human must do this in their own terminal, or lift it "
-                         "in lfg ui → Preferences → Safety rules.\n" % (rule, guard.rule_title(rule), why))
+                         "in lfg ui → Preferences → Safety rules → \"%s. %s\".\n"
+                         % (rule, guard.rule_title(rule), why, rule, guard.rule_title(rule)))
         return 2
     if GRAPH_TOOL_RX.match(tool):
         root, rid = _repo(data)
@@ -215,8 +230,9 @@ def session_start(data):
         lines[0] = ("LFG %s is on in this repo. Commits, pushes, amends, force-pushes, opening PRs and merging them "
                     "follow the user's Preferences (lfg-preferences.md, plus any rules changed for this session), "
                     "which are checked before every command; do what they say, including committing or pushing on "
-                    "your own when they say so. Never read .env or keys, never deploy, no other GitHub writes."
-                    % C.VERSION)
+                    "your own when they say so. Each git and GitHub write is allowed, asked about or blocked by its "
+                    "row under Git and GitHub actions; a blocked one is the user's to do. Never read .env or keys, "
+                    "never deploy." % C.VERSION)
     elif C.config()["guard"].get("allow_commit") is True:
         lines[0] = lines[0].replace("never commit/push/gh-write", "commit only when the user asks (never --amend), "
                                     "never push/gh-write").replace("; leave changes unstaged", "")

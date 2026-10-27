@@ -14,10 +14,13 @@ HOME = os.path.expanduser("~")
 # The standing rules by number: (title, what it means, how it is enforced).
 # "guard" means this module blocks it before the tool runs; the others hold through another mechanism.
 RULES = {
-    "1": ("Read-only git", "Agents never commit, push, merge, rebase, tag, drop stashes, hard-reset, clean, delete "
-          "branches or discard uncommitted work. Read-only git (status, diff, log, show, blame) is fine.", "guard"),
-    "2": ("Read-only GitHub", "No gh writes: PRs, issues, releases, repos, secrets, variables, workflow runs, or "
-          "gh api with any method other than GET. Logging in with gh auth login is done by you.", "guard"),
+    "1": ("Other git writes", "Git commands that change history or the remote and have no row of their own under "
+          "Preferences → Git and GitHub actions: tags, non-fast-forward merges and pulls, cherry-picks, reverts, "
+          "git clean -f, submodule changes, gc and prune. Read-only git (status, diff, log, show, blame) is fine.",
+          "guard"),
+    "2": ("Other GitHub writes", "gh writes with no row of their own under Preferences → Git and GitHub actions: "
+          "closing or approving PRs, issues, releases, repos, secrets, variables, workflow runs, and gh api writes "
+          "other than comments and review-thread replies. Logging in with gh auth login is done by you.", "guard"),
     "3": ("Never bypass checks", "No --no-verify, core.hooksPath overrides, SKIP= or HUSKY=0 tricks, and no "
           "disabling CI jobs.", "guard"),
     "4": ("Never read secret files", "Not even if asked: .env files (except .env.example), keys, certificates, "
@@ -52,8 +55,45 @@ RULES = {
 }
 
 
+PROTECTED_BRANCHES = ("main", "master", "qa", "prod", "production")
+
+# The git and GitHub writes that each have their own row in Preferences → Git and GitHub actions, Allow / Ask / Block:
+# (id, title, default, what it covers). Ask makes Claude Code ask you before the command runs. A row in SPARES_WORK
+# reads Allow as "allow when no uncommitted work is lost, else ask". Reads are always allowed; what has no row falls
+# to rules 1 and 2. They apply once your Preferences are switched on (_prefs_on); before that every one blocks.
+ACTIONS = [
+    ("act_commit", "Commit", "allow", "`git commit` (amending is \"Rewrite history\")."),
+    ("act_push", "Push to a branch", "allow", "`git push` to any branch but main, master, qa or prod, without "
+                                               "force."),
+    ("act_open_pr", "Open a PR", "allow", "`gh pr create`."),
+    ("act_edit_pr", "Edit your own PR's title or description", "allow",
+     "`gh pr edit` with only `--title`, `--body` or `--body-file`, on an open PR you opened (LFG asks GitHub first). "
+     "Reviewers, base branch and labels are \"Other GitHub writes\"."),
+    ("act_comment", "Comment on a PR or issue", "allow", "`gh pr comment`, `gh issue comment`, `gh pr review "
+                                                          "--comment`, and the same through `gh api`."),
+    ("act_thread", "Reply to or resolve a review thread", "allow",
+     "Replying to a review comment and resolving or unresolving its thread, through `gh api`."),
+    ("act_ff_sync", "Catch up with the remote", "allow",
+     "`git merge --ff-only` and `git pull --ff-only`: moves a branch forward to its remote, never a merge commit."),
+    ("act_stash", "Stash", "allow", "`git stash` and `stash pop`/`apply`. Dropping or clearing stashes loses them."),
+    ("act_restore", "Restore a file", "allow", "`git restore`, `git checkout -- <file>` and `git reset --hard` "
+                                               "without moving the branch: puts files back as committed."),
+    ("act_switch", "Switch branch", "allow", "`git switch` and `git checkout <branch>`; forced, they drop your "
+                                             "changes."),
+    ("act_push_main", "Push to main", "ask", "`git push` to main, master, qa or prod, or `--all`."),
+    ("act_force_push", "Force-push", "ask", "`git push --force`, `--force-with-lease`, `+branch` and `--mirror`."),
+    ("act_merge_pr", "Merge a PR", "ask", "`gh pr merge`."),
+    ("act_rewrite", "Rewrite history", "ask", "`git commit --amend`, `rebase`, `reset` to another commit, "
+                                              "`branch -f`, `update-ref`, `filter-branch` and `filter-repo`."),
+    ("act_delete_branch", "Delete or rename branches", "ask", "`git branch -d/-D/-m`, `git push --delete` and "
+                                                              "`git push origin :branch`."),
+]
+SPARES_WORK = {"act_stash", "act_restore", "act_switch"}
+ACTION = {a[0]: a for a in ACTIONS}
+
+
 def rule_title(rule):
-    return RULES.get(str(rule), ("",))[0]
+    return ACTION[rule][1] if rule in ACTION else RULES.get(str(rule), ("",))[0]
 
 # ------------------------------------------------------------------ secret paths (rule 4)
 
@@ -164,7 +204,8 @@ class Block(Exception):
 
 # What check() was given for this call: your Preferences (prefs.effective) and the session's folder. A rule whose
 # preference `rule_<n>` is "ask" no longer blocks; empty (the selftest, direct calls) means every rule blocks.
-_CTX = {"values": {}, "loose": frozenset(), "cwd": None}
+# acts: the Git and GitHub action rows decide (your Preferences are on); asks: what they want you to approve.
+_CTX = {"values": {}, "loose": frozenset(), "cwd": None, "acts": False, "asks": []}
 
 
 def _block(rule, why, hard=False):
@@ -172,6 +213,19 @@ def _block(rule, why, hard=False):
     could otherwise use to lift the rest; those always block."""
     if hard or rule not in _CTX["loose"]:
         raise Block(rule, why)
+
+
+def _act(aid, why, lost=False):
+    """A command with its own row under Git and GitHub actions: block it, note an ask (check_full() turns that into
+    Claude Code's prompt) or let it through. lost: it would lose uncommitted work, so Allow on a SPARES_WORK row
+    asks instead."""
+    value = _CTX["values"].get(aid, ACTION[aid][2])
+    if value == "allow" and lost and aid in SPARES_WORK:
+        value, why = "ask", why + ", which would lose uncommitted work"
+    if value == "block":
+        raise Block(aid, why)
+    if value == "ask":
+        _CTX["asks"].append((aid, why))
 
 
 def _pref_on(pid):
@@ -406,17 +460,18 @@ def _prefs_on():
         return False
 
 
-PREFS_DECIDE_GIT = {"commit", "push"}
-
-
 def _git(argv, envs, raw):
     args = argv[1:]
-    sub, i = None, 0
+    sub, i, here = None, 0, _CTX["cwd"]
     while i < len(args):
         a = args[i]
         if a in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") and i + 1 < len(args):
             if a == "-c" and re.search(r"core\.hookspath|hooks", args[i + 1], re.I):
                 _block("3", "overriding git hooks (-c core.hooksPath) bypasses checks")
+            if a == "-C":
+                here = here and os.path.join(here, os.path.expanduser(args[i + 1]))
+            elif a in ("--git-dir", "--work-tree"):
+                here = None  # somewhere else: what it holds is unknown
             i += 2
             continue
         if a.startswith("-"):
@@ -429,7 +484,7 @@ def _git(argv, envs, raw):
         _block("3", "skipping git hooks / checks (--no-verify, SKIP=, HUSKY=0)")
     if sub is None:
         return
-    if sub in PREFS_DECIDE_GIT and _prefs_on():
+    if _CTX["acts"] and _git_act(sub, rest, here):
         return
     if sub == "commit" and "--amend" not in rest and _commit_allowed():
         return
@@ -463,6 +518,147 @@ def _git(argv, envs, raw):
         _block("1", "changing submodules is a human action")
     if sub in ("mv", "rm") and "--cached" not in rest and sub == "rm":
         pass  # git rm only stages deletions of tracked files; the working-tree edit is reversible via git
+
+
+def _git_out(here, *args):
+    """git's output in here, or None when it fails or here is unknown (the caller then assumes the worst)."""
+    import subprocess
+    if not here:
+        return None
+    try:
+        cp = subprocess.run(["git", *args], cwd=here, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return cp.stdout.strip() if cp.returncode == 0 else None
+
+
+def _changed(here, paths=()):
+    """True if any tracked file (of paths, or anywhere) has uncommitted changes, or if git can't say."""
+    out = _git_out(here, "status", "--porcelain", "--untracked-files=no", "--", *paths)
+    return out is None or bool(out)
+
+
+def _is_commit(here, ref):
+    return _git_out(here, "rev-parse", "--verify", "-q", ref + "^{commit}")
+
+
+def _git_act(sub, rest, here):
+    """Decide a git write that has its own row under Git and GitHub actions. False: it has none (rule 1 decides)."""
+    words = [r for r in rest if not r.startswith("-")]
+    if sub == "commit":
+        if "--amend" in rest:
+            _act("act_rewrite", "`git commit --amend` rewrites the last commit")
+        else:
+            _act("act_commit", "`git commit`")
+    elif sub == "push":
+        _git_push(rest, here)
+    elif sub in ("merge", "pull") and _ff_only(rest):
+        _act("act_ff_sync", "`git %s --ff-only`" % sub)
+    elif sub in ("rebase", "update-ref", "filter-branch", "filter-repo"):
+        _act("act_rewrite", "`git %s` rewrites history" % sub)
+    elif sub == "stash":
+        if words[:1] in (["drop"], ["clear"]):
+            _act("act_stash", "`git stash %s`" % words[0], lost=True)
+        else:
+            _act("act_stash", "`git stash%s`" % (" " + words[0] if words else ""))
+    elif sub == "branch":
+        if any(r in ("-f", "--force") for r in rest) and words:
+            _act("act_rewrite", "`git branch -f` moves a branch to another commit")
+        elif any(r in ("-D", "-d", "--delete", "-M", "-m", "--move") for r in rest):
+            _act("act_delete_branch", "deleting or renaming a branch")
+        else:
+            return False
+    elif sub == "reset":
+        before = rest[:rest.index("--")] if "--" in rest else rest
+        cand = next((r for r in before if not r.startswith("-")), None)
+        target = cand and _is_commit(here, cand)
+        if target and target != _git_out(here, "rev-parse", "HEAD"):
+            _act("act_rewrite", "`git reset %s` moves the branch to another commit" % cand)
+        elif cand and here is None:
+            _act("act_rewrite", "`git reset %s` in a folder LFG can't check" % cand)
+        elif any(r in ("--hard", "--merge", "--keep") for r in rest):
+            _act("act_restore", "`git reset --hard` puts every file back as committed", lost=_changed(here))
+        # else unstaging files, or a reset to where the branch already is: nothing is lost
+    elif sub == "restore":
+        if "--staged" in rest and not any(r in ("--worktree", "-W") for r in rest):
+            return True  # unstaging: the files keep your changes
+        paths = _paths(rest, ("-s", "--source"))
+        _act("act_restore", "`git restore %s`" % " ".join(paths), lost=_changed(here, paths) or not paths)
+    elif sub in ("switch", "checkout"):
+        _git_switch(sub, rest, words, here)
+    else:
+        return False
+    return True
+
+
+def _paths(rest, takes_value=()):
+    """The file arguments of a command: everything after `--`, else every word that isn't a flag or a flag's value."""
+    if "--" in rest:
+        return rest[rest.index("--") + 1:]
+    out, skip = [], False
+    for r in rest:
+        if skip:
+            skip = False
+        elif r in takes_value:
+            skip = True
+        elif not r.startswith("-"):
+            out.append(r)
+    return out
+
+
+def _git_switch(sub, rest, words, here):
+    forced = any(r in ("-f", "--force", "--discard-changes") for r in rest)
+    creating = any(r in ("-b", "-c", "--create", "--orphan") for r in rest)
+    files = sub == "checkout" and not creating and (
+        "--" in rest or any(w == "." or (here and not _is_commit(here, w) and os.path.exists(os.path.join(here, w)))
+                            for w in words))
+    if files:
+        paths = _paths(rest)
+        if "--" not in rest and paths and _is_commit(here, paths[0]):
+            paths = paths[1:]  # `git checkout <commit> <file>`
+        _act("act_restore", "`git checkout -- %s`" % " ".join(paths), lost=_changed(here, paths) or not paths)
+    elif any(r in ("-C", "-B", "--force-create") for r in rest):
+        name = words[0] if words else ""
+        _act("act_switch", "`git %s` resets branch %s" % (sub, name),
+             lost=here is None or bool(name and _is_commit(here, name)))
+    else:
+        # in a folder LFG can't see, `git checkout x` might be a file it would put back
+        _act("act_switch", "`git %s%s`" % (sub, " --force" if forced else ""),
+             lost=(forced and _changed(here)) or (here is None and sub == "checkout" and not creating))
+
+
+def _git_push(rest, here):
+    """Each branch a push writes to, judged on its own row: delete, force, main or a working branch."""
+    vals = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+    words = _paths(rest, vals)
+    specs = words[1:]  # after the remote
+    force = any(r in ("-f", "--force", "--force-if-includes", "--mirror") or r.startswith("--force-with-lease")
+                for r in rest) or any(sp.startswith("+") for sp in specs)
+    if any(r in ("-d", "--delete") for r in rest):
+        _act("act_delete_branch", "`git push --delete` deletes a branch on the remote")
+        return
+    if any(sp.startswith(":") for sp in specs):
+        _act("act_delete_branch", "`git push <remote> :<branch>` deletes a branch on the remote")
+        specs = [sp for sp in specs if not sp.startswith(":")]
+        if not specs:
+            return
+    if "--all" in rest or "--mirror" in rest or "--branches" in rest:
+        dsts = list(PROTECTED_BRANCHES[:1])
+    elif specs:
+        dsts = [sp.lstrip("+").split(":")[-1].replace("refs/heads/", "") for sp in specs]
+    else:
+        dsts = [None]
+    cur = None
+    for i, dst in enumerate(dsts):
+        if dst in (None, "HEAD"):
+            cur = cur or _git_out(here, "branch", "--show-current")
+            dsts[i] = cur or None
+    if force:
+        _act("act_force_push", "`git push --force` replaces what is on the remote")
+    elif any(d is None or d in PROTECTED_BRANCHES for d in dsts):
+        _act("act_push_main", "`git push` to %s" % (", ".join(d or "a branch LFG can't tell" for d in dsts)))
+    else:
+        _act("act_push", "`git push` to %s" % ", ".join(dsts))
 
 
 def _ff_only(rest):
@@ -523,19 +719,31 @@ def _gh(argv):
                 method = a[2:].upper()
         has_fields = any(a in ("-f", "-F", "--field", "--raw-field", "--input")
                          or a.startswith(("--field=", "--raw-field=", "--input=")) for a in args)
-        if method not in (None, "GET") or (has_fields and method != "GET"):
-            _block("2", "`gh api` write request; only GET is allowed")
+        if method in (None, "GET") and not has_fields and not any("mutation" in a for a in args):
+            return
+        if args[1:2] == ["graphql"] and method in (None, "POST") and not any(
+                "mutation" in a or "=@" in a or a.startswith("--input") for a in args):
+            return  # a GraphQL query is a read, though gh sends it as a POST
+        if _CTX["acts"] and _gh_api_act(args[1:], method):
+            return
         if any("mutation" in a for a in args):
             _block("2", "GraphQL mutations are writes")
+        _block("2", "`gh api` write request; only GET is allowed")
+    if _CTX["acts"]:
+        if (top, sub) == ("pr", "create"):
+            return _act("act_open_pr", "`gh pr create`")
+        if (top, sub) == ("pr", "merge"):
+            return _act("act_merge_pr", "`gh pr merge`")
+        if (top, sub) in (("pr", "comment"), ("issue", "comment")) or (
+                (top, sub) == ("pr", "review") and any(a in ("-c", "--comment") for a in args)
+                and not any(a in ("-a", "--approve", "-r", "--request-changes") for a in args)):
+            return _act("act_comment", "`gh %s %s`" % (top, sub))
+        if (top, sub) == ("pr", "edit"):
+            target = _pr_edit_text_only(args[2:])
+            if target is not False and _own_open_pr(*target):
+                return _act("act_edit_pr", "`gh pr edit` of your PR's title or description")
+    elif (top, sub) == ("pr", "create") and _CTX["values"].get("open_pr") in ("ask", "auto"):
         return
-    if (top, sub) == ("pr", "merge") and _prefs_on():
-        return
-    if (top, sub) == ("pr", "create") and _CTX["values"].get("open_pr") in ("ask", "auto"):
-        return
-    if (top, sub) == ("pr", "edit") and _pref_on("edit_pr"):
-        target = _pr_edit_text_only(args[2:])
-        if target is not False and _own_open_pr(*target):
-            return
     if (top, sub) in GH_ALLOW or (top, None) in GH_ALLOW:
         return
     if (top, sub) == ("repo", "edit") and _pref_on("gh_default_branch"):
@@ -543,6 +751,84 @@ def _gh(argv):
         if repo is not False and _own_repo(repo):
             return
     _block("2", "`gh %s%s` is not on the read-only allowlist" % (top, " " + sub if sub else ""))
+
+
+GH_API_VALUE = {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
+                "-t", "--template", "--hostname", "--cache", "-p", "--preview"}
+THREAD_MUTATIONS = {"resolveReviewThread", "unresolveReviewThread", "addPullRequestReviewThreadReply"}
+COMMENT_MUTATIONS = {"addComment"}
+REST_COMMENT = re.compile(r"^/?repos/[^/]+/[^/]+/issues/\d+/comments$")
+REST_REVIEW_COMMENT = re.compile(r"^/?repos/[^/]+/[^/]+/pulls/\d+/comments$")
+REST_THREAD_REPLY = re.compile(r"^/?repos/[^/]+/[^/]+/pulls/\d+/comments/\d+/replies$")
+
+
+def _gh_api_act(args, method):
+    """Decide a `gh api` write that is a comment or a review-thread reply or resolve. False: some other write."""
+    endpoint, fields, i = None, [], 0
+    while i < len(args):
+        a = args[i]
+        flag, eq, val = a.partition("=")
+        if flag in GH_API_VALUE:
+            if not eq:
+                val, i = (args[i + 1] if i + 1 < len(args) else ""), i + 1
+            if flag in ("-f", "-F", "--field", "--raw-field"):
+                fields.append(val)
+            elif flag == "--input":
+                return False  # the request body is in a file LFG doesn't read
+        elif not a.startswith("-") and endpoint is None:
+            endpoint = a
+        i += 1
+    if method not in (None, "POST") or not endpoint:
+        return False
+    if endpoint == "graphql":
+        query = next((f.split("=", 1)[1] for f in fields if f.startswith("query=")), "")
+        names = _mutations(query) if not query.startswith("@") else None
+        if not names or not names <= THREAD_MUTATIONS | COMMENT_MUTATIONS:
+            return False
+        if names & THREAD_MUTATIONS:
+            _act("act_thread", "replying to or resolving a review thread")
+        if names & COMMENT_MUTATIONS:
+            _act("act_comment", "commenting through `gh api graphql`")
+        return True
+    if REST_THREAD_REPLY.match(endpoint) or (REST_REVIEW_COMMENT.match(endpoint)
+                                              and any(f.startswith("in_reply_to=") for f in fields)):
+        _act("act_thread", "replying to a review comment")
+        return True
+    if REST_COMMENT.match(endpoint) or REST_REVIEW_COMMENT.match(endpoint):
+        _act("act_comment", "commenting through `gh api`")
+        return True
+    return False
+
+
+def _mutations(query):
+    """The top-level fields of a GraphQL mutation (what it changes), or None if it isn't one LFG can read."""
+    m = re.match(r"\s*mutation\b[^{]*\{", query)
+    if not m:
+        return None
+    names, depth, i, paren = set(), 1, m.end(), 0
+    while i < len(query) and depth:
+        c = query[i]
+        if c == '"':
+            j = query.find('"', i + 1)
+            while j > 0 and query[j - 1] == "\\":
+                j = query.find('"', j + 1)
+            if j < 0:
+                return None
+            i = j
+        elif c == "(":
+            paren += 1
+        elif c == ")":
+            paren -= 1
+        elif c == "{" and not paren:
+            depth += 1
+        elif c == "}" and not paren:
+            depth -= 1
+        elif depth == 1 and not paren and (c.isalpha() or c == "_"):
+            w = re.match(r"[A-Za-z_]\w*(\s*:\s*[A-Za-z_]\w*)?", query[i:])
+            names.add(re.split(r"\s*:\s*", w.group(0))[-1])  # `alias: field` counts as field
+            i += len(w.group(0)) - 1
+        i += 1
+    return names if depth == 0 and query[i:].strip() == "" else None
 
 
 PR_EDIT_TEXT = {"-t", "--title", "-b", "--body", "-F", "--body-file"}
@@ -802,6 +1088,9 @@ def analyze_bash(cmd, depth=0):
             if t == "<" and j + 1 < len(seg) and is_secret_path(seg[j + 1]):
                 _secret(seg[j + 1], "reading a secret file (%s)" % seg[j + 1])
         base = os.path.basename(argv[0])
+        if base == "cd":  # `cd <worktree> && git restore x`: the git commands after it run there
+            to = os.path.expanduser(argv[1]) if argv[1:] and not argv[1].startswith("-") else None
+            _CTX["cwd"] = to and (os.path.join(_CTX["cwd"], to) if _CTX["cwd"] else (to if os.path.isabs(to) else None))
         looked = argv[1:] + [argv[0]]
         if base in NAMES_ONLY or (base == "git" and _git_word(argv) in NAMES_ONLY_GIT):
             # these only look at a file's name or whether it exists; a redirect still opens it
@@ -924,11 +1213,28 @@ FILE_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRea
 
 def check(tool_name, tool_input, prefs=None, cwd=None):
     """Return None if allowed, or (rule, why) if blocked. prefs: your Preferences for this session
-    (prefs.effective), which can lift a rule (`rule_<n>`: "ask") or allow one narrow case; None blocks everything."""
+    (prefs.effective), which can lift a rule (`rule_<n>`: "ask") or allow one narrow case; None blocks everything.
+    A Git and GitHub action row set to Ask counts as blocked here: nobody is there to ask (the gate, ci-local)."""
+    v = check_full(tool_name, tool_input, prefs, cwd)
+    return v and v[1:]
+
+
+def check_full(tool_name, tool_input, prefs=None, cwd=None):
+    """None if allowed, else ("block" or "ask", rule or action row id, why). The hook turns "ask" into Claude
+    Code's own prompt."""
+    try:
+        rule, why = _check(tool_name, tool_input, prefs, cwd)
+    except Block as b:
+        return "block", b.rule, b.why
+    return ("ask", rule, why) if rule else None
+
+
+def _check(tool_name, tool_input, prefs, cwd):
     ti = tool_input or {}
     values = prefs or {}
     saved = dict(_CTX)
-    _CTX.update(values=values, cwd=cwd, loose=frozenset(r for r in RULES if values.get("rule_" + r) == "ask"))
+    _CTX.update(values=values, cwd=cwd, loose=frozenset(r for r in RULES if values.get("rule_" + r) == "ask"),
+                acts=bool(values) and _prefs_on(), asks=[])
     try:
         if tool_name in FILE_TOOLS:
             p = ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or ""
@@ -961,11 +1267,10 @@ def check(tool_name, tool_input, prefs=None, cwd=None):
             url = ti.get("url", "")
             if re.search(r"[?&](token|key|secret|password|auth)=", url, re.I):
                 _block("6", "a credential in a URL query string")
-    except Block as b:
-        return b.rule, b.why
+        asks = _CTX["asks"]
+        return (asks[0][0], "; ".join(w for _, w in asks)) if asks else (None, None)
     finally:
         _CTX.update(saved)
-    return None
 
 
 SELFTEST = [
@@ -1077,6 +1382,57 @@ SELFTEST = [
 ]
 
 
+# The Git and GitHub action rows, with Preferences on and their defaults (plus any change named): (command, changes,
+# "allow" | "ask" | "block"). No folder is given, so LFG can't see uncommitted work and assumes some would be lost.
+ACT_SELFTEST = [
+    ("git commit -m x", {}, "allow"),
+    ("git commit -m x", {"act_commit": "block"}, "block"),
+    ("git commit --amend --no-edit", {}, "ask"),
+    ("git push origin feat", {}, "allow"),
+    ("git push -u origin HEAD:feat", {}, "allow"),
+    ("git push origin main", {}, "ask"),
+    ("git push", {}, "ask"),  # which branch is unknown here
+    ("git push --force-with-lease origin feat", {}, "ask"),
+    ("git push origin +feat", {}, "ask"),
+    ("git push origin --delete feat", {}, "ask"),
+    ("git push origin :feat", {}, "ask"),
+    ("git merge --ff-only origin/main", {}, "allow"),
+    ("git pull --ff-only", {"act_ff_sync": "block"}, "block"),
+    ("git rebase main", {}, "ask"),
+    ("git stash", {}, "allow"),
+    ("git stash pop", {}, "allow"),
+    ("git stash drop", {}, "ask"),
+    ("git restore --staged app.py", {}, "allow"),
+    ("git restore app.py", {}, "ask"),
+    ("git reset --hard", {}, "ask"),
+    ("git reset -- app.py", {}, "allow"),
+    ("git switch feat", {}, "allow"),
+    ("git checkout -b feat", {}, "allow"),
+    ("git switch --discard-changes feat", {}, "ask"),
+    ("git branch -D feat", {}, "ask"),
+    ("git branch -D feat", {"act_delete_branch": "allow"}, "allow"),
+    ("git tag v1", {}, "block"),
+    ("git cherry-pick abc", {}, "block"),
+    ("gh pr create --fill", {}, "allow"),
+    ("gh pr merge 3 --squash", {}, "ask"),
+    ("gh pr comment 3 -b x", {}, "allow"),
+    ("gh issue comment 3 -b x", {"act_comment": "block"}, "block"),
+    ("gh pr review 3 --comment -b x", {}, "allow"),
+    ("gh pr review 3 --approve", {}, "block"),
+    ("gh pr close 3", {}, "block"),
+    ("gh api -X POST repos/o/r/pulls/3/comments/9/replies -f body=x", {}, "allow"),
+    ("gh api repos/o/r/issues/3/comments -f body=x", {}, "allow"),
+    ("gh api -X DELETE repos/o/r/issues/comments/9", {}, "block"),
+    ("gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"T\"}) { thread { id } } }'", {},
+     "allow"),
+    ("gh api graphql -f query='mutation { r: resolveReviewThread(input: {threadId: \"T\"}) { thread { id } } "
+     "deleteRepository(input: {}) { clientMutationId } }'", {}, "block"),
+    ("gh api graphql -f query='query { viewer { login } }'", {}, "allow"),
+    ("git push origin feat && gh pr merge 3", {"act_open_pr": "block"}, "ask"),
+    ("gh pr merge 3 && gh pr create", {"act_open_pr": "block"}, "block"),
+]
+
+
 def selftest():
     """The default rules, so it also passes on a machine with guard.allow_commit on."""
     global _commit_allowed, _prefs_on
@@ -1088,6 +1444,12 @@ def selftest():
             got = check(tool, ti) is not None
             if got != want:
                 failures.append((tool, ti, want))
+        _prefs_on = lambda: True  # noqa: E731
+        defaults = {a[0]: a[2] for a in ACTIONS}
+        for cmd, changes, want in ACT_SELFTEST:
+            v = check_full("Bash", {"command": cmd}, prefs=dict(defaults, **changes))
+            if (v[0] if v else "allow") != want:
+                failures.append(("Bash", {"command": cmd}, want))
     finally:
         _commit_allowed = real
         _prefs_on = real_p

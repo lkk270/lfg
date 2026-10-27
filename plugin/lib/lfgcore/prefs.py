@@ -22,7 +22,7 @@ from . import guard as G
 
 PREFS_MD = os.path.join(C.HOME, ".claude", "lfg-preferences.md")
 IMPORT_LINE = "@~/.claude/lfg-preferences.md"
-PROTECTED_BRANCHES = ("main", "master", "qa", "prod", "production")
+PROTECTED_BRANCHES = G.PROTECTED_BRANCHES
 
 STYLE = "How Claude talks to you"
 # Built in. Options are listed strictest first: a change to a later option loosens the rule.
@@ -55,14 +55,6 @@ BUILTIN = [
          {"value": "ask", "label": "When I say so", "text": "Push only when I ask you to in this session."},
          {"value": "auto", "label": "After every commit", "text": "Push right after each commit, to the branch "
           "you're on."}]},
-    {"id": "git_ff_sync", "group": "Git", "title": "Catch up with the remote", "kind": "switch", "default": False,
-     "enforce": True,
-     "about": "On: Claude may bring a local branch up to date with its remote when no merge commit is needed "
-              "(`git merge --ff-only`, `git pull --ff-only`), for example main after your PR merges. It can't lose "
-              "work. Off: blocked by safety rule 1.",
-     "text": "You may fast-forward a local branch to its remote with `git merge --ff-only` or `git pull --ff-only`, "
-             "for example to update main after a PR merges. Never a merge that makes a merge commit.",
-     "off_text": ""},
     {"id": "open_pr", "group": "GitHub", "title": "Opening PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
          {"value": "never", "label": "Never: I open them", "text": "Never open a pull request."},
@@ -71,15 +63,6 @@ BUILTIN = [
          {"value": "auto", "label": "On its own, after the first push", "text": "Open a pull request (`gh pr "
           "create`) on your own after the first push of a branch that has none, never from main, master, qa or "
           "prod."}]},
-    {"id": "edit_pr", "group": "GitHub", "title": "Editing PR title and description", "kind": "switch",
-     "default": False, "enforce": True,
-     "about": "On: Claude may change the title and description of an open pull request you opened "
-              "(`gh pr edit --title`, `--body`, `--body-file`), and nothing else about it: no reviewers, base branch, "
-              "labels or anything else. LFG asks GitHub that the PR is open and yours first. Off: blocked by safety "
-              "rule 2.",
-     "text": "You may change the title and description of an open pull request I opened, with `gh pr edit` and only "
-             "`--title`, `--body` or `--body-file`. Never reviewers, the base branch, labels or anything else.",
-     "off_text": ""},
     {"id": "merge_pr", "group": "GitHub", "title": "Merging PRs", "kind": "choice", "default": "never",
      "enforce": True, "options": [
          {"value": "never", "label": "Never: I merge", "text": "Never merge a pull request."},
@@ -236,11 +219,11 @@ ABOUT = {
     ("open_pr", "never"):
         "Claude is blocked from opening pull requests; you open them.",
     ("open_pr", "ask"):
-        "Claude opens a PR only when you say so. Commenting on or closing one stays blocked; editing its title and "
-        "description follows \"Editing PR title and description\".",
+        "Claude opens a PR only when you say so. Whether it may run the command at all is \"Open a PR\" under Git "
+        "and GitHub actions.",
     ("open_pr", "auto"):
-        "Claude opens a PR by itself after it first pushes a branch that has none. Commenting on or closing one "
-        "stays blocked; editing its title and description follows \"Editing PR title and description\".",
+        "Claude opens a PR by itself after it first pushes a branch that has none. Whether it may run the command at "
+        "all is \"Open a PR\" under Git and GitHub actions.",
     ("merge_pr", "never"):
         "Claude is blocked from merging pull requests; you merge.",
     ("style_point_words", "20"): "Each point, bullet or sentence is at most 20 words.",
@@ -252,6 +235,22 @@ for _p in BUILTIN:
         _p["about"] = ABOUT[(_p["id"], None)]
     for _o in _p.get("options") or []:
         _o["about"] = ABOUT.get((_p["id"], _o["value"]), "")
+
+# What Claude may run, one row per git or GitHub write (guard.ACTIONS). The rows above say when Claude does something;
+# these say whether the command runs, asks you first, or is blocked.
+ACTS = "Git and GitHub actions"
+for _id, _title, _default, _covers in G.ACTIONS:
+    _spares = _id in G.SPARES_WORK
+    BUILTIN.append({
+        "id": _id, "group": ACTS, "title": _title, "kind": "choice", "default": _default, "enforce": True,
+        "about": _covers, "options": [
+            {"value": "block", "label": "Block", "text": "LFG blocks %s (%s)." % (_title.lower(), _covers),
+             "about": "LFG blocks it, even if you ask."},
+            {"value": "ask", "label": "Ask", "text": "",
+             "about": "Claude Code asks you to approve each one before it runs."},
+            {"value": "allow", "label": "Allow when nothing is lost" if _spares else "Allow", "text": "",
+             "about": "It runs without asking when no uncommitted work would be lost; otherwise Claude Code asks "
+                      "you first." if _spares else "It runs without asking."}]})
 
 # The guard's safety rules (guard.RULES), one choice each. "ask" lifts the block; Claude is still told the rule.
 STAYS_BLOCKED = {
@@ -310,7 +309,12 @@ def _take_reminder(sid, d):
 
 
 def _migrate(vals):
-    """The old amend and force_push switches became one `rewrite` choice: either one on means review-sized fixes."""
+    """The old amend and force_push switches became one `rewrite` choice: either one on means review-sized fixes.
+    The edit_pr and git_ff_sync switches became the action rows act_edit_pr and act_ff_sync: on is Allow, off Block."""
+    for old, new in (("edit_pr", "act_edit_pr"), ("git_ff_sync", "act_ff_sync")):
+        if old in vals:
+            on = vals.pop(old)
+            vals.setdefault(new, "allow" if on else "block")
     if "amend" in vals or "force_push" in vals:
         on = vals.pop("amend", False) or vals.pop("force_push", False)
         vals.pop("force_push", None)
@@ -668,7 +672,7 @@ def _rewrite_allowed(values, cwd, amend_all=False, push=False, branch=None, loca
     whatever the checkout it runs from has checked out."""
     mode = values.get("rewrite", "never")
     if mode == "never":
-        return "amending and force-pushing are off for this session"
+        return '"Amend and force-push" (Git) is "Never"'
     branch = branch or _branch(cwd)
     if branch in PROTECTED_BRANCHES:
         return "rewriting main, master, qa or prod is never allowed"
@@ -708,7 +712,7 @@ def check_command(cmd, values, cwd=None):
             sub, rest = _git_sub(argv)
             if sub == "commit":
                 if values["commits"] == "never":
-                    return "your rule for this session is that you commit, not Claude"
+                    return '"Commits" (Git) is "Never: I make every commit"'
                 if "--amend" in rest:
                     why = _rewrite_allowed(values, here, amend_all=any(a in ("-a", "--all") or
                                                                       (a.startswith("-") and not a.startswith("--")
@@ -717,13 +721,13 @@ def check_command(cmd, values, cwd=None):
                         return why
             if sub == "push":
                 if values["push"] == "never":
-                    return "your rule for this session is that you push, not Claude"
+                    return '"Push" (Git) is "Never: I push"'
                 force = any(a in ("-f", "--force", "--force-with-lease", "--force-if-includes") or
                             a.startswith("--force-with-lease=") for a in rest) or \
                     any(a.startswith("+") for a in rest if not a.startswith("-"))
                 if force:
                     if values["rewrite"] == "never":
-                        return "force-pushing is off for this session"
+                        return 'force-pushing is off: "Amend and force-push" (Git) is "Never"'
                     specs = [a.lstrip("+") for a in rest if not a.startswith("-")][1:]  # after the remote
                     # each refspec is local:remote (or one name for both); none means this checkout's branch
                     pairs = [(sp.split(":")[0] or "HEAD", sp.split(":")[-1].replace("refs/heads/", "")) for sp in specs]
@@ -736,11 +740,13 @@ def check_command(cmd, values, cwd=None):
                                                    local=src.replace("refs/heads/", "") if specs else "HEAD")
                             if why:
                                 return why
+        if base == "gh" and argv[1:3] == ["pr", "create"] and values.get("open_pr", "never") == "never":
+            return '"Opening PRs" (GitHub) is "Never: I open them"'
         if base == "gh" and argv[1:3] == ["pr", "merge"]:
             if values["merge_pr"] == "never":
-                return "your rule for this session is that you merge PRs, not Claude"
+                return '"Merging PRs" (GitHub) is "Never: I merge"'
             if "--squash" not in argv and "-s" not in argv:
-                return "PRs are merged as one squashed commit: add --squash"
+                return 'PRs are merged as one squashed commit ("Merging PRs", GitHub): add --squash'
             pr, repo, delete = _merge_target(argv)
             if delete or values.get("delete_merged"):
                 head = _pr_head(cwd, pr, repo)
@@ -750,7 +756,7 @@ def check_command(cmd, values, cwd=None):
                     if delete:
                         return "this PR comes from %s, which is never deleted: drop --delete-branch" % head
                 elif delete and not values.get("delete_merged"):
-                    return "deleting the branch after a merge is off: drop --delete-branch"
+                    return '"Delete the branch after merging" (GitHub) is off: drop --delete-branch'
                 elif not delete:
                     return "your rule is to delete the PR's branch (%s) after merging: add --delete-branch" % head
         if base == "lfg" and argv[1:3] == ["prefs", "set"] and "--by-user" in argv:
@@ -832,8 +838,8 @@ def hook(event):
             if tool == "Bash":
                 why = check_command(str(ti.get("command") or ""), effective(sid, d), cwd=data.get("cwd"))
                 if why:
-                    sys.stderr.write("Blocked by your rules: %s. Change it in lfg ui → Sessions → Rules if you "
-                                     "meant to.\n" % why)
+                    sys.stderr.write("Blocked by your rules: %s. Change it in lfg ui → Preferences (every session) "
+                                     "or Sessions → Rules (this session only) if you meant to.\n" % why)
                     return 2
     except Exception as e:  # noqa: BLE001
         sys.stderr.write("lfg prefs hook error: %s\n" % type(e).__name__)

@@ -19,13 +19,13 @@ Agents read git and GitHub; the human writes. Every change is left **unstaged** 
 
 Wrapping doesn't change the verdict: `cd x && git push`, `sh -c`, `bash -lc`, `eval`, `xargs`, aliases, variables and subshells are parsed by `lfg-guard` and blocked the same way.
 
-If the user's Preferences are switched on (`lfg prefs status` says hooks: true), they decide `git commit`, `git push` (including force-push and amend), `gh pr create` and `gh pr merge`, and their own check runs before each command: follow `lfg-preferences.md` and any rules changed for this session, including committing or pushing without being asked when they say so. Everything else in rules 1 to 3 still holds.
+If the user's Preferences are switched on (`lfg prefs status` says hooks: true), each git and GitHub write has its own row under Preferences → Git and GitHub actions, set to Allow, Ask or Block: commit, push to a branch, push to main, force-push, open a PR, edit your own PR's title or description, comment, reply to or resolve a review thread, merge a PR, rewrite history, delete or rename branches, stash, restore a file, switch branch, catch up with the remote. Allow runs it; Ask makes Claude Code ask the user first (stash, restore and switch ask only when uncommitted work would be lost); Block stops it. What has no row stays under rule 1 (Other git writes) or rule 2 (Other GitHub writes). The Git and GitHub rows in `lfg-preferences.md` (Commits, Push, Opening PRs, Merging PRs) still say when to do it: follow them and any rules changed for this session, including committing or pushing without being asked when they say so.
 
 If `guard.allow_commit` is `true` in `~/.lfg/config.json`, `git commit` (not `--amend`) is allowed and you commit when the user asks. Everything else in rule 1, and rules 2 and 3, still holds.
 
 ## When blocked
 
-The guard exits 2 with: `Blocked by LFG rule <N>: <why>. A human must do this in their own terminal.`
+The guard exits 2 with `Blocked by LFG rule <N>: <why>. ...`, or `Blocked by LFG: "<row>" is set to Block ...` for a Git and GitHub actions row. Both name the row the user can change.
 
 1. Don't retry with a variant.
 2. Tell the user the exact command to run themselves, with paths filled in, e.g.
