@@ -1,3 +1,44 @@
+/* The full-screen pages (product home, intro) never flash the dashboard shell while the first data loads. */
+(h => { if (!h || h === "#" || /^#(lfg|onboarding|unlock=)/.test(h)) document.body.classList.add("bare"); })(location.hash);
+/* Appearance (Settings → Appearance), kept per browser: mode, a light and a dark theme, accent, density, text size,
+   glow and motion. Applied before the first paint, and again when the system switches light/dark. */
+const AP_DEFAULT = { mode: "system", light: "lfg", dark: "midnight", accent: "orange", density: "comfortable", text: "m", glow: "on", motion: "on" };
+function apRead() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("lfg.appearance") || "{}");
+    if (!saved.v && saved.accent === "blue") delete saved.accent;  // blue was the default before v2, not a choice
+    return Object.assign({}, AP_DEFAULT, saved);
+  } catch (e) { return Object.assign({}, AP_DEFAULT); }
+}
+function apApply(a) {
+  a = a || apRead();
+  const dark = a.mode === "dark" || (a.mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  const r = document.documentElement.dataset;
+  r.mode = dark ? "dark" : "light"; r.theme = dark ? a.dark : a.light;
+  r.accent = a.accent; r.density = a.density; r.text = a.text; r.glow = a.glow; r.motion = a.motion;
+}
+function apSet(k, v) { const a = apRead(); a[k] = v; a.v = 2; try { localStorage.setItem("lfg.appearance", JSON.stringify(a)); } catch (e) { /* private window: this visit only */ } apApply(a); apFavicon(); return a; }
+/* The logo, drawn in the accent colour (inline, so it follows the theme); the favicon is rebuilt to match. */
+let LOGO_N = 0;
+function logoSvg(size) {
+  const g = "lg" + (++LOGO_N);
+  return `<svg class="lfg-logo" width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="${g}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--logo-a)"/><stop offset=".55" style="stop-color:var(--logo-b)"/><stop offset="1" style="stop-color:var(--logo-c)"/></linearGradient></defs><rect width="32" height="32" rx="7" fill="url(#${g})"/><path d="M8.5 9.5 15 16l-6.5 6.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M15.5 9.5 22 16l-6.5 6.5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="26.2" cy="16" r="1.6" fill="#fff"/></svg>`;
+}
+function hexMix(a, b, t) {  // t of a, the rest b
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return "#" + x.map((v, i) => Math.round(v * t + y[i] * (1 - t)).toString(16).padStart(2, "0")).join("");
+}
+function apFavicon() {
+  const c = (getComputedStyle(document.documentElement).getPropertyValue("--blue") || "").trim();
+  if (!/^#[0-9a-f]{6}$/i.test(c)) return;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${hexMix(c, "#ffffff", .72)}"/><stop offset=".55" stop-color="${c}"/><stop offset="1" stop-color="${hexMix(c, "#000000", .62)}"/></linearGradient></defs><rect width="32" height="32" rx="7" fill="url(#g)"/><path d="M8.5 9.5 15 16l-6.5 6.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M15.5 9.5 22 16l-6.5 6.5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="26.2" cy="16" r="1.6" fill="#fff"/></svg>`;
+  const link = document.querySelector('link[rel="icon"]');
+  if (link) link.href = "data:image/svg+xml," + encodeURIComponent(svg);
+}
+apApply();
+document.addEventListener("DOMContentLoaded", apFavicon); apFavicon();
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { apApply(); apFavicon(); }); } catch (e) { /* old browsers */ }
 /* LFG dashboard: a plain-language view of what LFG is doing in your repos. Read-only, except Settings, which saves
    only with the local edit key from `lfg ui`. Author: Varun Singh. No external resources. */
 "use strict";
@@ -354,7 +395,8 @@ function md(text, link) {
         while (i < L.length && /^\s{2,}\S/.test(L[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(L[i])) item += " " + L[i++].trim();
         buf.push(item);
       }
-      out += `<${ordered ? "ol" : "ul"}>${buf.map(b => `<li>${inline(b, link)}</li>`).join("")}</${ordered ? "ol" : "ul"}>`; continue;
+      const li = b => { const t = /^\[( |x|X)\]\s+(.*)$/.exec(b); return t ? `<li class="task${t[1] === " " ? "" : " done"}"><span class="cb" aria-hidden="true"></span><span>${inline(t[2], link)}</span></li>` : `<li>${inline(b, link)}</li>`; };
+      out += `<${ordered ? "ol" : "ul"}>${buf.map(li).join("")}</${ordered ? "ol" : "ul"}>`; continue;
     }
     if (!l.trim()) { flush(); i++; continue; }
     para.push(l.trim()); i++;
@@ -382,7 +424,25 @@ function renderFile(name, text) {
 }
 
 // ------------------------------------------------------------------ readable views (never raw JSON)
-const txt = v => inline(typeof v === "string" ? v : v == null ? "" : String(v));
+/* Agents sometimes write a field as structured data ({criterion, seam}, a list, counts) where a sentence was expected:
+   flatten it to readable text instead of "[object Object]". */
+const human = k => String(k).replace(/[_-]+/g, " ").replace(/^\w/, c => c.toUpperCase());
+function plain(v) {
+  if (v == null) return "";
+  if (typeof v !== "object") return String(v);
+  if (Array.isArray(v)) return v.map(plain).filter(Boolean).join("; ");
+  return Object.entries(v).filter(([, x]) => x != null && x !== "" && !(Array.isArray(x) && !x.length))
+    .map(([k, x]) => `${human(k)}: ${plain(x)}`).join(" · ");
+}
+const txt = v => inline(plain(v));
+/* A task's verification: a sentence, or {criterion, seam} (what must hold, and where it's proved) */
+function verifyHtml(v) {
+  if (v && typeof v === "object" && !Array.isArray(v) && (v.criterion || v.seam)) {
+    const rest = Object.fromEntries(Object.entries(v).filter(([k]) => k !== "criterion" && k !== "seam"));
+    return `${v.criterion ? `<p>${txt(v.criterion)}</p>` : ""}${v.seam ? `<p class="muted small">Proved by: ${txt(v.seam)}</p>` : ""}${Object.keys(rest).length ? `<p class="muted small">${txt(rest)}</p>` : ""}`;
+  }
+  return `<p>${txt(v)}</p>`;
+}
 const label = k => { const s = words(k).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); };
 /* Any JSON as headings, lists and sentences */
 function readable(v) {
@@ -426,7 +486,7 @@ function taskItem(t) {
   if (!t || typeof t !== "object") return "";
   const steps = Array.isArray(t.steps) ? t.steps : [], deps = Array.isArray(t.depends_on) ? t.depends_on : [];
   const body = `${steps.length ? `<div class="k">Steps</div><ol>${steps.map(s => `<li>${txt(s)}</li>`).join("")}</ol>` : ""}
-    ${t.verification ? `<div class="k">How we know it works</div><p>${txt(t.verification)}</p>` : ""}
+    ${t.verification ? `<div class="k">How we know it works</div>${verifyHtml(t.verification)}` : ""}
     ${t.notes ? `<div class="k">Notes</div><p>${txt(t.notes)}</p>` : ""}
     ${deps.length ? `<p class="muted small">Waits for: ${esc(deps.join(", "))}</p>` : ""}`;
   return `<details class="item"><summary>${dot(t.passes ? "ok" : "")}<span class="grow">${txt(t.description || t.id || "Task")}</span><span class="muted small nowrap">${t.passes ? "done" : "to do"}</span></summary><div class="item-body">${body}</div></details>`;
@@ -483,7 +543,51 @@ const openKnow = e => {
   if (make) openDrawer(...make());
 };
 document.addEventListener("click", openKnow);
+document.addEventListener("click", async e => {  // [data-copy="<id>"]: copy that element's text
+  const b = e.target.closest("[data-copy]");
+  if (!b) return;
+  const el = document.getElementById(b.dataset.copy);
+  try { await navigator.clipboard.writeText(el ? el.textContent : ""); b.textContent = "Copied"; } catch (err) { b.textContent = "Select and copy"; }
+  setTimeout(() => (b.textContent = "Copy"), 1600);
+});
 document.addEventListener("keydown", openKnow);
+
+
+function wireOnboarding(root) {
+  const saveBtn = $("#onboard-save", root);
+  const skipBtn = $("#onboard-skip", root);
+  const msgEl = $("#onboard-msg", root);
+  if (!saveBtn) return;
+  const count = () => { const n = $$("[data-feature]", root).filter(c => c.checked).length; $("#wl-count", root).textContent = `${n} selected`; };
+  $$("[data-feature]", root).forEach(c => c.addEventListener("change", count)); count();
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+    const selected = $$("[data-feature]", root).filter(c => c.checked).map(c => c.dataset.feature);
+    const r = await save("onboarding_save", { features: selected });
+    if (r.ok) {
+      state.pages = r.pages || NAV.map(p => p[0]);
+      renderNav("studio");
+      state.pendingTour = "page-sessions";
+      location.hash = "#studio";
+    } else {
+      saveBtn.disabled = false; saveBtn.textContent = "Start with these";
+      if (msgEl) saidMsg(msgEl, r);
+    }
+  };
+  skipBtn.onclick = async () => {
+    skipBtn.disabled = true;
+    const r = await save("onboarding_save", { skip: true });
+    if (r.ok) {
+      state.pages = NAV.map(p => p[0]);
+      renderNav("studio");
+      state.pendingTour = "page-sessions";
+      location.hash = "#studio";
+    } else {
+      skipBtn.disabled = false;
+      if (msgEl) saidMsg(msgEl, r);
+    }
+  };
+}
 
 function wire(root) {
   $$("[data-scope]", root).forEach(a => a.onclick = e => {
@@ -497,12 +601,6 @@ function wire(root) {
     const d = await api("file", { run, f });
     openDrawer(a.dataset.title || a.textContent, renderFile(f, d.text));
   });
-  $$("[data-view]", root).forEach(b => b.onclick = async () => {
-    const box = document.getElementById(b.dataset.target);
-    box.innerHTML = '<div class="loading">Opening… large repos can take a minute the first time.</div>';
-    const d = await api("view", { kind: b.dataset.view });
-    box.innerHTML = d.src ? `<iframe class="viewer mt" src="${esc(d.src)}" title="${esc(b.textContent)}" referrerpolicy="no-referrer"></iframe>` : empty("Not made yet", fmtWhy(d.message));
-  });
   $$("[data-rule-module]", root).forEach(a => a.onclick = e => {
     e.preventDefault();
     const m = (state.rules.modules || []).find(x => x.name === a.dataset.ruleModule);
@@ -515,6 +613,12 @@ function wire(root) {
     b.disabled = true; b.textContent = "Starting…";
     const r = await save("run_checks", { repo: state.repo, run: b.dataset.runChecks });
     if (!r.ok) { b.disabled = false; b.textContent = "Run checks again"; alert(String(r.why || "Couldn't start the checks.").replace(/`/g, "")); return; }
+    state.cache = {}; route();
+  });
+  $$("[data-run-needed]", root).forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const r = await save("run_needed", { repo: state.repo, run: b.dataset.run, needed: b.dataset.runNeeded === "1" });
+    if (!r.ok) { b.disabled = false; return alert(String(r.why || "Not saved.")); }
     state.cache = {}; route();
   });
   if ($("[data-checks-running]", root)) setTimeout(() => { if (document.body.contains(root) && $("[data-checks-running]", root)) { state.cache = {}; route(); } }, 10000);
@@ -613,15 +717,68 @@ function saidMsg(el, d, okText) {
 }
 function fieldInput(f, locked) {
   const id = `cfg-${f.key}`, dis = locked ? "disabled" : "", v = f.value;
-  if (f.type === "bool") return `<input type="checkbox" id="${id}" data-cfg="${esc(f.key)}" ${v ? "checked" : ""} ${dis}>`;
-  if (f.type === "choice") return `<select id="${id}" data-cfg="${esc(f.key)}" ${dis}>${f.options.map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc((f.labels || {})[o] || o)}</option>`).join("")}</select>`;
+  if (f.type === "bool") return `<span class="tgl-wrap"><input type="checkbox" id="${id}" data-cfg="${esc(f.key)}" ${v ? "checked" : ""} ${dis} role="switch"><span class="tgl"></span></span>`;
+  if (f.type === "choice") return `<select id="${id}" data-cfg="${esc(f.key)}" ${dis}>${f.options.map(o => `<option ${o === v ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
   if (f.type === "int") return `<input type="number" id="${id}" data-cfg="${esc(f.key)}" min="${f.min}" max="${f.max}" value="${esc(v)}" ${dis}>`;
   const val = Array.isArray(v) ? v.join(", ") : v ?? "";
   return `<input type="text" id="${id}" data-cfg="${esc(f.key)}" value="${esc(val)}" ${dis}>`;
 }
+/* General settings, grouped by what they're for; the model choices get their own card */
+const SET_GROUPS = [
+  ["How LFG works", "What Claude may do, how big a change can be for each lane, and the line LFG adds to replies.", k => /^(guard|lanes|replies|graphs)\./.test(k)],
+  ["Agent models", "Which Claude model each of LFG's agents uses.", k => k.startsWith("models.")],
+  ["Dashboard and disk space", "", k => /^(ui|storage)\./.test(k)],
+];
+const settingRow = (f, unlocked) => `<label class="set-row" for="cfg-${esc(f.key)}"><div><div class="set-label">${esc(f.label.replace(/^Model:\s*/, "").replace(/-/g, " ").replace(/^./, c => c.toUpperCase()))}</div>${f.help ? `<div class="set-help">${esc(f.help)}</div>` : ""}</div><div class="set-input">${fieldInput(f, !unlocked)}</div></label>`;
+function settingsGroups(cfg, unlocked) {
+  const fields = cfg.fields.filter(f => !f.owner), used = new Set();
+  const row = f => settingRow(f, unlocked);
+  const card = (title, note, list) => list.length ? `<div class="set-section"><h4>${esc(title)}</h4>${note ? `<p class="muted">${esc(note)}</p>` : ""}${list.map(row).join("")}</div>` : "";
+  let out = SET_GROUPS.map(([t, n, test]) => { const list = fields.filter(f => test(f.key)); list.forEach(f => used.add(f.key)); return card(t, n, list); }).join("");
+  out += card("Other", "", fields.filter(f => !used.has(f.key)));
+  return out;
+}
+const AP_THEMES = {
+  light: [["lfg", "LFG", "Soft white, cool ink", ["#f6f8fc", "#ffffff", "#0e1729", "#2563eb", "#f1f4fa"]],
+    ["paper", "Paper", "Warm neutral, easy on the eyes", ["#fbfaf7", "#ffffff", "#2b2a26", "#2563eb", "#f6f4ef"]],
+    ["mist", "Mist", "Cool grey, crisp contrast", ["#f4f5f7", "#ffffff", "#111318", "#2563eb", "#eceef2"]]],
+  dark: [["midnight", "Midnight", "Deep navy with an accent glow", ["#070b14", "#0d1424", "#e6ebf5", "#3b82f6", "#0a101e"]],
+    ["graphite", "Graphite", "Neutral grey, no tint", ["#111214", "#18191c", "#ececee", "#3b82f6", "#141518"]],
+    ["carbon", "Carbon", "True black for OLED screens", ["#000000", "#0a0a0b", "#f2f2f3", "#3b82f6", "#050506"]]],
+};
+const AP_ACCENTS = [["orange", "#ea580c"], ["blue", "#2563eb"], ["violet", "#7c3aed"], ["green", "#059669"], ["rose", "#e11d48"]];
+function settingsAppearance() {
+  const a = apRead();
+  const seg = (k, opts) => `<div class="seg">${opts.map(([v, t]) => `<button class="pill${a[k] === v ? " on" : ""}" data-ap="${k}" data-v="${v}">${t}</button>`).join("")}</div>`;
+  const card = (kind, [id, name, about, [pg, sf, tx, , sd]]) => `<button class="ap-theme${a[kind] === id ? " on" : ""}" data-ap="${kind}" data-v="${id}" style="--p:${pg}">
+    <span class="ap-prev" style="background:${pg}"><i class="s" style="background:${sd}"></i><span class="c" style="background:${sf};box-shadow:0 0 0 1px ${tx}1a"><b style="background:${tx}"></b><b style="background:${tx}55"></b><b class="a" style="background:var(--blue)"></b></span></span>
+    <span class="ap-name">${esc(name)}<span class="muted">${esc(about)}</span></span></button>`;
+  const row = (label, help, ctl) => `<div class="set-row"><div><div class="set-label">${label}</div>${help ? `<div class="set-help">${help}</div>` : ""}</div><div class="set-input">${ctl}</div></div>`;
+  return `<div class="set-section"><h4>Mode</h4>${row("Light or dark", "System follows your computer's setting.", seg("mode", [["system", "System"], ["light", "Light"], ["dark", "Dark"]]))}</div>
+    <div class="set-section"><h4>Light theme</h4><div class="ap-grid">${AP_THEMES.light.map(t => card("light", t)).join("")}</div><p class="muted small">Used in light mode.</p></div>
+    <div class="set-section"><h4>Dark theme</h4><div class="ap-grid">${AP_THEMES.dark.map(t => card("dark", t)).join("")}</div><p class="muted small">Used in dark mode.</p></div>
+    <div class="set-section"><h4>Look and feel</h4>
+      ${row("Accent colour", "Buttons, links, selection and focus.", `<div class="ap-acc">${AP_ACCENTS.map(([v, c]) => `<button class="${a.accent === v ? "on" : ""}" data-ap="accent" data-v="${v}" style="background:${c}" title="${v}" aria-label="${v}"></button>`).join("")}</div>`)}
+      ${row("Density", "Compact fits more rows on screen.", seg("density", [["comfortable", "Comfortable"], ["compact", "Compact"]]))}
+      ${row("Text size", "", seg("text", [["s", "Small"], ["m", "Default"], ["l", "Large"]]))}
+      ${row("Background glow", "The faint coloured light behind the page.", seg("glow", [["on", "On"], ["off", "Off"]]))}
+      ${row("Motion", "Animations and transitions.", seg("motion", [["on", "On"], ["off", "Reduced"]]))}
+    </div>
+    <div class="set-actions"><button class="btn" data-ap-reset>Reset to default</button><span class="muted small">Saved in this browser.</span></div>`;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-ap]");
+  if (b) { apSet(b.dataset.ap, b.dataset.v); $$(`[data-ap="${b.dataset.ap}"]`).forEach(x => x.classList.toggle("on", x === b)); return; }
+  if (e.target.closest("[data-ap-reset]")) { try { localStorage.removeItem("lfg.appearance"); } catch (err) { /* ignore */ } apApply(); apFavicon(); route({ soft: true }); }
+});
 function settingsGeneral() {
   const { cfg, unlocked } = state.settings;
-  return `<div>${notifyRow()}${cfg.fields.filter(f => !f.owner).map(f => `<label class="set-row" for="cfg-${esc(f.key)}"><div><div class="set-label">${esc(f.label)}</div><div class="set-help">${esc(f.help || "")}</div></div><div class="set-input">${fieldInput(f, !unlocked)}</div></label>`).join("")}</div>
+  return `<div>${notifyRow()}</div><div class="set-section"><h4>Features</h4><p class="muted">Pick what you use; the sidebar shows only those pages. Changes apply right away.</p>
+      <div id="features-section"><div class="loading">Loading features…</div></div>
+      <label class="row mt"><input type="checkbox" id="show-all-pages" ${state.settings?.showAll ? "checked" : ""} ${!unlocked ? "disabled" : ""}> Show every page in the sidebar anyway</label>
+      <p class="muted small" style="margin-top:8px"><a href="#onboarding">Run the welcome again</a></p>
+    </div>
+    ${settingsGroups(cfg, unlocked)}
     <div class="set-actions"><button class="btn primary" id="cfg-save" ${unlocked ? "" : "disabled"}>Save</button><span class="save-msg" id="cfg-msg"></span></div>`;
 }
 function settingsSkills() {
@@ -748,13 +905,13 @@ async function loadClaudeCode() {
     <div class="box"><ul class="list">${d.legacy.map(l => `<li>${dot("warn")}<div class="grow"><div class="title">${esc(l.title)}</div><div class="meta">${esc(l.fix)}</div></div>${l.default ? `<button class="btn small" data-cc="legacy_fix" data-id="${esc(l.id)}" ${dis}>Fix</button>` : ""}</li>`).join("")}</ul></div></div>` : "";
   box.innerHTML = `<p class="muted">What LFG does to Claude Code, and where. Everything here is recorded and can be undone; nothing outside the repos you pick is touched.</p>
     <span class="save-msg" id="cc-msg"></span>${legacy}
-    <div class="set-section"><h4>Where LFG is on</h4><p class="muted">In other repos Claude Code works exactly as if LFG weren't installed: no skills, hooks or MCP servers.</p>
+    <div class="set-section" id="cc-where"><h4>Where LFG is on</h4><p class="muted">In other repos Claude Code works exactly as if LFG weren't installed: no skills, hooks or MCP servers.</p>
       <label class="row"><input type="checkbox" data-cc="everywhere" ${R.everywhere ? "checked" : ""} ${dis}> Turn LFG on in every repo <span class="muted small">(not recommended)</span></label>
       <div class="box mt">${repoRows ? `<ul class="list">${repoRows}</ul>` : empty("No repos yet", "Run <code>lfg enable</code> in a repo, or open one in Claude Code after enabling it.")}</div></div>
     <div class="set-section"><h4>Integrations</h4><p class="muted">Feature packs (Headroom, SonarQube, Dictate, pentest with Ollama and Strix, and the rest) and their settings are on the <a href="#integrations">Integrations</a> page.</p></div>
     <div class="set-section"><h4>Safety</h4>
       <div class="box pad"><div class="row">${dot("ok")}<div class="grow"><b>Guard</b><div class="meta">On in every LFG repo: blocks commits, pushes, secret reads and the rest of the 18 rules (Settings → Rules). Recently blocked: ${d.blocked.length ? d.blocked.slice(0, 3).map(b => `rule ${esc(b.rule)} (${esc(b.tool)})`).join(", ") : "nothing"}.</div></div></div>
-      <label class="row mt"><input type="checkbox" data-cc="hardened" ${d.hardened ? "checked" : ""} ${dis}><span><b>Hardened mode</b><span class="meta"> · also add Claude Code deny rules (git commit/push, secret files…) to each LFG repo's <code>.claude/settings.local.json</code>, never to your user settings</span></span></label></div></div>
+      <label class="row mt" id="cc-hardened"><input type="checkbox" data-cc="hardened" ${d.hardened ? "checked" : ""} ${dis}><span><b>Hardened mode</b><span class="meta"> · also add Claude Code deny rules (git commit/push, secret files…) to each LFG repo's <code>.claude/settings.local.json</code>, never to your user settings</span></span></label></div></div>
     <div class="set-section"><h4>MCP servers LFG brings</h4><p class="muted">Only in LFG repos. One that isn't set up stays quiet and offers no tools.</p>
       <div class="box"><ul class="list">${d.mcp.map(m => `<li>${dot(m.ready ? "ok" : "")}<div class="grow"><div class="title">${esc(m.name)}</div><div class="meta">${m.ready ? "ready" : fmtWhy(m.why)}</div></div></li>`).join("")}</ul></div></div>
     <div class="set-section"><h4>Your Claude Code setup <span class="muted small">(read-only; LFG leaves these alone)</span></h4>
@@ -993,6 +1150,7 @@ function wireSettings(root) {
   if ($("#storage-box", root)) loadStorage();
   if ($("#tools-box", root)) loadTools();
   if ($("#int-box", root)) loadIntegrations();
+  if ($("#features-section", root)) loadFeatures();
   wireRules(root);
   const cs = $("#cfg-save", root);
   if (cs) cs.onclick = async () => {
@@ -1008,6 +1166,7 @@ function wireSettings(root) {
     saidMsg($("#cfg-msg"), d, d.ok ? `Saved ${plural(d.changed.length, "change")}.` : "");
     if (d.ok) state.settings.cfg = await api("settings");
   };
+
   $$("[data-skill]", root).forEach(a => a.onclick = e => {
     e.preventDefault();
     $$("[data-skill]", root).forEach(x => x.classList.toggle("on", x === a));
@@ -1130,11 +1289,40 @@ function endTour() {
 async function offerTours() {
   let t;
   try { t = await api("tours"); } catch (e) { return; }
+  if (!t.setup_guide_done) { setupGuide(true); return; }  // first run: the setup guide comes before anything else
   const seen = k => { try { return localStorage.getItem("lfg.tour." + k); } catch (e) { return null; } };
   const remember = (k, how) => { try { localStorage.setItem("lfg.tour." + k, how); } catch (e) { /* ignore */ } save("tour_done", { name: k, how }); };
   const d = t.dictate || {};
   const promo = $("#promo");
   promo.innerHTML = "";
+  // New in this version: Welcome (choose your pages) and Insights. Shown before the Dictate banner, once.
+  if (!t.news_welcome_closed && !seen("news-welcome") && (location.hash.slice(1).split("/")[0] || "home") !== "onboarding") {
+    promo.innerHTML = `<div class="promo" role="region" aria-label="New in LFG">
+      <div class="grow"><div class="promo-title"><span class="tag">New</span> Choose your pages, and Insights</div>
+        <div class="promo-text"><b>Welcome</b> lets you pick the features you use so the sidebar shows only their pages. <b>Insights</b> runs quick checks on this project: a review coach for your changes, explain a file, and test ideas.</div></div>
+      <div class="promo-actions"><button class="btn small primary" data-news="welcome">Choose pages</button><button class="btn small" data-news="insights">Open Insights</button>
+        <button class="icon-btn" data-news="close" aria-label="Close" title="Don't show again">&times;</button></div></div>`;
+    const close = () => { remember("news-welcome", "closed"); promo.innerHTML = ""; };
+    $('[data-news="welcome"]', promo).onclick = () => { close(); location.hash = "#onboarding"; };
+    $('[data-news="insights"]', promo).onclick = () => { close(); location.hash = "#insights"; };
+    $('[data-news="close"]', promo).onclick = close;
+    return;
+  }
+  // A hidden feature the user has started to need: offer its pages once (yes, or "not now" for a month)
+  let feats = null;
+  try { feats = await api("features"); } catch (e) { feats = null; }
+  const sug = feats && feats.suggestion;
+  if (sug) {
+    promo.innerHTML = `<div class="promo" role="region" aria-label="Show more of LFG">
+      <div class="grow"><div class="promo-title">${esc(sug.name)}</div><div class="promo-text">${esc(sug.why)}</div></div>
+      <div class="promo-actions"><button class="btn small primary" data-sug="yes">Show it</button><button class="btn small" data-sug="later">Not now</button></div></div>`;
+    $$("[data-sug]", promo).forEach(b => b.onclick = async () => {
+      const r = await save("feature_suggestion", { feature: sug.feature, answer: b.dataset.sug });
+      promo.innerHTML = "";
+      if (r.ok && b.dataset.sug === "yes") { applyPages(r); location.hash = "#" + sug.pages[0]; }
+    });
+    return;
+  }
   // Dictate off: a banner on every page until it is turned on or closed (new installs and updates alike)
   if (!d.on && !d.banner_closed && !seen("dictate-banner")) {
     promo.innerHTML = `<div class="promo" role="region" aria-label="New: LFG Dictate">
@@ -1171,10 +1359,12 @@ async function offerTours() {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["home", "Home"], ["sessions", "Sessions"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["insights", "Insights"], ["docs", "Docs"],
+const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["home", "Home"], ["studio", "Studio"], ["sessions", "Sessions"], ["todos", "Todos"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["insights", "Insights"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["integrations", "Integrations"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
+TITLES.onboarding = "Welcome"; TITLES.lfg = "Home";
 const PAGES = {};
+state.pages = NAV.map(p => p[0]);  // visible nav pages, set from onboarding
 
 async function cachedRuns() {
   const key = "runs:" + state.repo;
@@ -1203,6 +1393,573 @@ function runAttention(r) {
   return out.sort((a, b) => (a[0] === "bad" ? 0 : 1) - (b[0] === "bad" ? 0 : 1));
 }
 
+const FEATURE_ICON = { coding: "code", reviews: "review", security: "checks", knowledge: "knowledge", planning: "issues" };
+
+/* Insights: understand code you didn't write, without opening an editor. Three tabs, each answering one question:
+   Your changes (is this safe to approve?), Hotspots (where does this codebase break?), Files (what is this and why
+   is it like this?). Everything comes from git on this computer; nothing here edits code. */
+const INS = { file: "" };
+PAGES.insights = async arg => {
+  const [tab, ...rest] = (arg || "").split("/");
+  if (tab === "files" && rest.length) { INS.file = rest.join("/"); sessionStorage.setItem("lfg.tab.insights", "files"); }
+  else if (["changes", "hotspots", "files"].includes(tab)) sessionStorage.setItem("lfg.tab.insights", tab);
+  return `${head("Insights", "Understand what changed, where the code is fragile, and why it looks the way it does. From your git history, on this computer.")}
+    ${tabs("insights", [
+      ["changes", "Your changes", null, () => `<div id="ins-changes"><div class="loading">Reading your changes…</div></div>`],
+      ["hotspots", "Hotspots", null, () => `<div id="ins-hot"><div class="loading">Reading the history…</div></div>`],
+      ["files", "Files", null, () => `<div class="fx-search"><span class="fx-search-ico">${icon("docs")}</span><input id="ins-file" list="ins-files" placeholder="Type a file path, e.g. src/billing.py" value="${esc(INS.file)}" autocomplete="off" aria-label="File"><button class="btn primary" id="ins-open">Explain</button></div><div id="ins-file-out"></div>`],
+    ])}
+    <datalist id="ins-files"></datalist>`;
+};
+const insLink = p => `<a href="#insights/files/${esc(p)}" class="ins-path">${esc(p)}</a>`;
+const LEVEL = { HIGH_RISK: ["bad", "Fix before merging"], NEEDS_WORK: ["warn", "Needs a look"], READY_TO_REVIEW: ["ok", "No red flags"] };
+function insChanges(d) {
+  if (d.error) return unavailable({ why: d.error }, "Couldn't read your changes");
+  if (d.message) return empty("No changes yet", "When this branch has changes, committed or not, they show up here with what to check before merging.");
+  const [tone, label] = LEVEL[d.risk_level] || ["", d.risk_level];
+  const files = d.files_reviewed || [];
+  const added = files.reduce((a, f) => a + (f.additions || 0), 0);
+  const issues = (d.issues || []).map(i => ({ severity: i.severity, file: i.file, line: i.line, title: i.message, fix: i.suggestion }));
+  const shown = issues.filter(i => i.severity !== "low"), low = issues.filter(i => i.severity === "low");
+  const q = d.questions || [], hot = d.touches_hotspots || [], pat = d.patterns || [];
+  return `<div class="ins-summary"><span class="st"><span class="dot ${tone}"></span>${esc(label)}</span><span class="muted">${plural(files.length, "file")} · +${n(added)} lines · compared with <code>${esc(d.base_branch || "")}</code></span><span class="grow"></span><button class="btn small" id="ins-recheck">Check again</button></div>
+    ${q.length ? `<h3 class="ins-h">Before you approve, ask</h3><ol class="ins-questions box">${q.map(x => `<li>${esc(x.q)}</li>`).join("")}</ol>` : ""}
+    ${shown.length ? `<h3 class="ins-h">Worth a look</h3>${shown.map(findingCard).join("")}` : ""}
+    ${hot.length ? `<h3 class="ins-h">Touches fragile code</h3><ul class="ins-hot box">${hot.slice(0, 5).map(h => `<li>${dot(h.level === "high" ? "bad" : "warn")}<div class="grow">${insLink(h.path)}<div class="muted small">${esc(h.reasons.join(" · "))}</div></div></li>`).join("")}${hot.length > 5 ? `<li class="muted">and ${hot.length - 5} more, in <a href="#insights/hotspots">Hotspots</a></li>` : ""}</ul>` : ""}
+    ${pat.length ? `<h3 class="ins-h">Keeps coming up</h3><ul class="ins-list box">${pat.map(p => `<li>${esc(p.kind)}<span class="muted"> · in ${p.times} of your last ${p.of} checks</span></li>`).join("")}</ul>` : ""}
+    ${!q.length && !shown.length && !hot.length ? `<p class="muted">Nothing stood out. These are pattern checks, not a review: <code>/lfg:review-coach</code> in Claude Code gives you one.</p>` : ""}
+    <details class="ins-more"><summary>${plural(files.length, "changed file")}${low.length ? ` · ${plural(low.length, "note")} in tests` : ""}</summary>
+      <ul class="ins-list">${files.map(f => `<li>${insLink(f.path)}<span class="muted"> · ${f.new ? "new, " : ""}+${n(f.additions || 0)}${f.deletions ? ` −${n(f.deletions)}` : ""}</span></li>`).join("")}</ul>
+      ${low.length ? low.map(findingCard).join("") : ""}
+      <div class="ins-pick mt"><input id="ins-base" placeholder="Compare with another branch (default: found automatically)"><button class="btn small" id="ins-base-go">Compare</button></div>
+    </details>`;
+}
+function insHotspots(d) {
+  if (d.error) return unavailable({ why: d.error }, "Couldn't read the history");
+  const f = d.files || [];
+  if (!f.length) return empty("No hotspots yet", `Nothing changed often enough in the last ${d.days} days to stand out.`);
+  return `<p class="muted">The files that keep needing fixes are where the next bug most likely is. From ${plural(d.commits, "commit")} in the last ${d.days} days.</p>
+    ${(d.rising || []).length ? `<p class="ins-warn">${dot("bad")}Fixes are rising in ${d.rising.map(a => `<code>${esc(a)}</code>`).join(", ")}: more in the last ${d.half} days than the ${d.half} before.</p>` : ""}
+    <ul class="ins-hot box">${f.map(h => `<li>${dot(h.level === "high" ? "bad" : "warn")}<div class="grow">${insLink(h.path)}<div class="muted small">${esc(h.reasons.join(" · "))}</div>
+      ${h.recent_fixes.length ? `<details class="ins-fixes"><summary>Recent fixes</summary><ul>${h.recent_fixes.map(c => `<li><code>${esc(c.sha.slice(0, 7))}</code> ${esc(c.date)} ${esc(c.subject)}</li>`).join("")}</ul></details>` : ""}</div></li>`).join("")}</ul>
+    ${(d.areas || []).length > 1 ? `<h3 class="ins-h">By folder</h3><div class="box">${table(d.areas, [{ k: "area", label: "Folder", html: r => `<code>${esc(r.area)}</code>` }, { k: "files", label: "Files changed", num: true }, { k: "changes", label: "Changes", num: true }, { k: "fixes", label: "Fixes", num: true }, { k: "trend", label: "Trend", html: r => r.trend === "rising" ? `<b>rising</b> <span class="muted">${r.fixes_recent} vs ${r.fixes_earlier}</span>` : r.trend === "falling" ? `falling <span class="muted">${r.fixes_recent} vs ${r.fixes_earlier}</span>` : '<span class="muted">steady</span>' }], { sort: "fixes", filter: false })}</div>` : ""}
+    <p class="muted small mt">Dependency risks (known vulnerabilities, end-of-life packages) are in <a href="#checks">Checks</a>, from <code>/lfg:secure</code>.</p>`;
+}
+function insWhy(d) {
+  if (d.error) return `<p class="muted">${esc(d.error)}</p>`;
+  if (!d.commits.length) return `<p class="muted">No history yet: this hasn't been committed.</p>`;
+  return `<ol class="ins-timeline">${d.commits.map(c => `<li><div><b>${esc(c.subject)}</b></div>
+    <div class="muted small">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer"><code>${esc(c.sha.slice(0, 7))}</code></a>` : `<code>${esc(c.sha.slice(0, 7))}</code>`} · ${esc(c.author)} · ${esc(c.date)}${c.fix ? ' <span class="tag bad">fix</span>' : ""}${c.refs.map(r => ` · ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.label)}</a>` : esc(r.label)}`).join("")}</div>
+    ${c.body ? `<details><summary class="small">Details</summary><div class="ins-body">${esc(c.body)}</div></details>` : ""}</li>`).join("")}</ol>`;
+}
+/* Files: understand one file without opening it. Empty: what this is for, and files worth starting with. */
+function insFilePicker(hot) {
+  const files = (hot && hot.files) || [];
+  const fragile = files.slice(0, 5), recent = files.slice().sort((a, b) => (b.last || "").localeCompare(a.last || "")).slice(0, 5);
+  const chip = f => `<button class="fx-chip" data-pick="${esc(f.path)}"><span class="fx-chip-dir">${esc(f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "")}</span><b>${esc(f.path.split("/").pop())}</b></button>`;
+  return `<div class="fx-intro box pad"><div class="fx-intro-h"><h3>Understand any file without opening it</h3><p class="muted">Pick a file and LFG reads it and its git history for you.</p></div>
+    <div class="fx-what">${[["docs", "What it does", "Its purpose, in its own words, and everything it defines."], ["runs", "Why it's like this", "The commits, PRs and tickets that shaped each part."], ["checks", "What to test", "Test ideas, past bugs to guard, and a test file to start from."]].map(([ic, t, d]) => `<div><span class="fx-what-ico">${icon(ic)}</span><b>${t}</b><span class="muted">${d}</span></div>`).join("")}</div></div>
+    ${fragile.length ? `<h3 class="ins-h">Start with a fragile file</h3><div class="fx-chips">${fragile.map(chip).join("")}</div>` : ""}
+    ${recent.length ? `<h3 class="ins-h">Changed recently</h3><div class="fx-chips">${recent.map(chip).join("")}</div>` : ""}`;
+}
+function insFile(ex, ts) {
+  if (ex.error) return unavailable({ why: ex.error }, "Couldn't open it");
+  const w = ex.why_its_here || {};
+  const defs = (ex.how_it_works || []).slice().sort((a, b) => a.line - b.line);
+  const ideas = (ts && ts.suggested_tests) || [];
+  const tests = ex.related_tests || [], fixes = w.recent_fixes || [];
+  const dir = ex.file.includes("/") ? ex.file.slice(0, ex.file.lastIndexOf("/") + 1) : "", name = ex.file.split("/").pop();
+  const P = { 1: "Start here", 2: "Edge case", 3: "Nice to have" };
+  ideas.forEach(t => { if (t.category === "regression") t.kind = "Past bug"; });
+  const kindTag = k => `<span class="tag ${k === "class" ? "blue" : ""}">${k === "class" ? "class" : "fn"}</span>`;
+  const overview = `${ex.summary ? `<p class="fx-sum">${inline(ex.summary)}</p>` : '<p class="muted">The file doesn\'t describe itself. Ask Claude: <code>/lfg:explain</code> how it works.</p>'}
+    ${fixes.length ? `<div class="callout warn fx-warn"><b>Fixed ${plural(fixes.length, "time")} in the last six months:</b> ${fixes.slice(0, 2).map(f => `“${esc(f.message.replace(/[.\s]+$/, ""))}”`).join(", ")}${fixes.length > 2 ? "…" : ""}. Change it carefully.</div>` : ""}
+    ${defs.length ? `<h3 class="ins-h">What's in it <span class="tag">${defs.length}</span></h3>
+      <div class="fx-defs box">${defs.map((x, k) => `<div class="fx-def"><div class="fx-def-row">${kindTag(x.type)}<code class="fx-def-n">${esc(x.name)}</code><span class="fx-def-d">${x.docstring ? inline(x.docstring) : '<span class="faint">no description</span>'}</span><span class="fx-def-l">line ${x.line}</span><button class="btn small" data-why="${x.line}" data-end="${defs[k + 1] ? defs[k + 1].line - 1 : ""}">History</button></div><div class="ins-why"></div></div>`).join("")}</div>` : ""}
+    ${(ex.potential_issues || []).length ? `<h3 class="ins-h">Worth a look</h3><div class="box">${ex.potential_issues.map(i => `<div class="fx-issue"><span class="tag warn">line ${esc(i.line)}</span>${esc(i.message)}</div>`).join("")}</div>` : ""}`;
+  const history = `<div id="ins-why-file"><div class="loading">Reading the history…</div></div>`;
+  const testsTab = `${tests.length ? `<p class="muted">Already tested in ${tests.map(t => insLink(t)).join(", ")}.</p>` : '<p class="muted">No test file covers it yet: start with the file below.</p>'}
+    ${ts && ts.skeleton ? `<div class="ins-skel"><div class="row"><b>A test file to start from</b><span class="muted small">every test is skipped until it's written, so it runs as-is</span><span class="grow"></span><button class="btn small" data-copy="ins-skel-code">Copy</button></div><pre class="out" id="ins-skel-code">${esc(ts.skeleton)}</pre></div>` : ""}
+    ${ideas.length ? `<h3 class="ins-h">Test ideas <span class="tag">${ideas.length}</span></h3><div class="box">${table(ideas, [{ k: "priority", label: "", html: r => `<span class="tag ${r.kind ? "bad" : r.priority === 1 ? "blue" : ""}">${esc(r.kind || P[r.priority] || "")}</span>`, sort: r => r.priority }, { k: "test_name", label: "Test", html: r => `<code>${esc(r.test_name)}</code>` }, { k: "reason", label: "Why" }], { sort: "priority", dir: 1, filter: false })}</div>` : ""}`;
+  return `<div class="fx-file">
+    <div class="fx-head box pad"><div class="fx-path"><span>${esc(dir)}</span><b>${esc(name)}</b></div>
+      <div class="fx-tags">${ex.language ? `<span class="tag">${esc(ex.language)}</span>` : ""}${w.total_commits ? `<span class="tag">${plural(w.total_commits, "commit")}</span>` : '<span class="tag">not committed yet</span>'}${tests.length ? `<span class="tag ok">tested</span>` : '<span class="tag warn">no tests</span>'}${fixes.length ? `<span class="tag bad">${fixes.length} recent ${fixes.length === 1 ? "fix" : "fixes"}</span>` : ""}</div>
+      ${w.created_by ? `<div class="muted small">Added by ${esc(w.created_by)} on ${esc(w.created_date)} · last changed by ${esc(w.last_modified_by)} on ${esc(w.last_modified_date)}</div>` : ""}
+      <button class="link small fx-back" data-fx-back>← Pick another file</button></div>
+    ${tabs("insfile", [["overview", "Overview", null, () => overview], ["history", "History", null, () => history], ["tests", "Tests", ideas.length || null, () => testsTab]])}
+  </div>`;
+}
+function wireInsights(root) {
+  const dl = $("#ins-files", root);
+  if (dl && !dl.dataset.loaded) { dl.dataset.loaded = "1"; api("insight_files").then(d => { dl.innerHTML = (d.files || []).map(f => `<option value="${esc(f)}">`).join(""); }).catch(() => {}); }
+  const ch = $("#ins-changes", root);
+  if (ch && !ch.dataset.done) {
+    ch.dataset.done = "1";
+    const load = async base => {
+      ch.innerHTML = '<div class="loading">Reading your changes…</div>';
+      try { ch.innerHTML = insChanges(await api("insight_review", base ? { base } : {})); } catch (e) { ch.innerHTML = unavailable({ why: e.message }); }
+      const again = $("#ins-recheck", ch); if (again) again.onclick = () => load(base);
+      const go = $("#ins-base-go", ch); if (go) go.onclick = () => load($("#ins-base", ch).value.trim());
+    };
+    load("");
+  }
+  const hot = $("#ins-hot", root);
+  if (hot && !hot.dataset.done) {
+    hot.dataset.done = "1";
+    api("insight_hotspots").then(d => { hot.innerHTML = insHotspots(d); mountTables(hot); }).catch(e => { hot.innerHTML = unavailable({ why: e.message }); });
+  }
+  const out = $("#ins-file-out", root), inp = $("#ins-file", root);
+  if (out && inp && !out.dataset.wired) {
+    out.dataset.wired = "1";
+    const wireFile = file => {
+      const histBox = () => $("#ins-why-file", out);
+      const loadHist = async () => { const b = histBox(); if (b && !b.dataset.done) { b.dataset.done = "1"; b.innerHTML = insWhy(await api("insight_why", { file })); } };
+      $$("[data-tabs=insfile] .tab", out).forEach(t => t.addEventListener("click", () => setTimeout(() => { if (t.dataset.k === "history") loadHist(); wireDefs(); }, 0)));
+      if (sessionStorage.getItem("lfg.tab.insfile") === "history") loadHist();
+      const wireDefs = () => $$("[data-why]", out).forEach(b => b.onclick = async () => {
+        const box = b.closest(".fx-def").querySelector(".ins-why");
+        if (box.innerHTML) { box.innerHTML = ""; b.textContent = "History"; return; }
+        b.textContent = "Reading…";
+        box.innerHTML = insWhy(await api("insight_why", { file, start: b.dataset.why, end: b.dataset.end }));
+        b.textContent = "Hide";
+      });
+      wireDefs();
+      const back = $("[data-fx-back]", out); if (back) back.onclick = () => { INS.file = ""; inp.value = ""; showPicker(); };
+    };
+    const open = async file => {
+      file = (file || inp.value).trim();
+      if (!file) return;
+      INS.file = file; inp.value = file;
+      out.innerHTML = '<div class="loading">Reading the file and its history…</div>';
+      const [ex, ts] = await Promise.all([api("insight_explain", { file }), api("insight_tests", { file }).catch(() => null)]);
+      out.innerHTML = insFile(ex, ts); mountTabs(out); mountTables(out); wireFile(file);
+    };
+    const showPicker = async () => {
+      out.innerHTML = insFilePicker(null);
+      let hot = null; try { hot = await api("insight_hotspots"); } catch (e) { hot = null; }
+      if (!INS.file) out.innerHTML = insFilePicker(hot);
+      $$("[data-pick]", out).forEach(b => b.onclick = () => open(b.dataset.pick));
+    };
+    $("#ins-open", root).onclick = () => open();
+    inp.onkeydown = e => { if (e.key === "Enter") open(); };
+    if (INS.file) open(INS.file); else showPicker();
+  }
+  $$(".tab", root).forEach(t => { if (!t.dataset.insWired) { t.dataset.insWired = "1"; t.addEventListener("click", () => setTimeout(() => wireInsights(root), 0)); } });
+}
+
+/* ------------------------------------------------------------------ product home, intro journey, page tours
+   The home (#lfg, what `lfg ui` opens) and the first-run intro are full-screen pages without the sidebar. Their
+   pictures are small HTML snapshots of the real screens (aria-hidden), not screenshots, so they follow the theme. */
+const BARE = ["lfg", "onboarding"];
+/* Snapshots of the real screens, for the landing page and the intro. `A(d)` marks a part that animates in on the
+   landing page, d steps after its row scrolls into view (elsewhere they just show). */
+const A = (d, cls = "") => ` class="lp-a${cls ? " " + cls : ""}" style="--d:${d}"`;
+const MOCK = {
+  run: () => `<div class="mk mk-run"><div class="mk-row"><span class="tag blue">Standard lane</span><span class="mk-dim">run 0142 · feature/rate-limit</span></div>
+    <div class="mk-title">Add rate limiting to the public API</div>
+    <div class="mk-steps">${[["Brief", "done"], ["Plan", "done"], ["Build", "done"], ["Check", "now"], ["Review", ""], ["Ship", ""]].map(([st, c], i) => `<span${A(1 + i * .6, `mk-step ${c}`)}>${c === "done" ? "✓ " : ""}${st}</span>`).join("")}</div>
+    <div class="mk-bar"><span style="--w:62%"></span></div>
+    <div${A(5, "mk-dim")}>Tests 48 passed · lint clean · security check running…</div></div>`,
+  diff: () => `<div class="mk mk-diff"><div class="mk-file"><span class="mk-st">M</span>api/limits.py<span class="grow"></span><span class="mk-add">+14</span><span class="mk-del">−3</span></div>
+    <div class="mk-lines">
+      <div${A(0, "mk-l")}><i>18</i><i></i><code>def allow(client, now):</code></div>
+      <div${A(.5, "mk-l del")}><i>19</i><i>−</i><code>    window = now // 60</code></div>
+      <div${A(1, "mk-l add")}><i>19</i><i>+</i><code>    hits = [t for t in log[client] if now - t &lt; 60]</code></div>
+      <div${A(1.5, "mk-l add sel")}><i>20</i><i>+</i><code>    if len(hits) &gt;= LIMIT:</code></div>
+      <div${A(2, "mk-l add")}><i>21</i><i>+</i><code>        return False</code></div>
+    </div>
+    <div class="mk-thread"><div${A(3.5, "mk-me")}>Why a sliding window and not a fixed one?</div>
+      <div${A(5, "mk-ai wipe")}><span class="mk-ai-h"><span class="ai-badge">AI</span> from the diff and callers</span>A fixed minute lets a client send 2× the limit across the boundary (59s + 61s). The sliding window counts the last 60 seconds, so bursts stay capped. <code>login()</code> and <code>search()</code> call this.</div>
+      <div${A(9, "mk-acts")}><span class="tag">Ask a follow-up</span><span class="tag ok">Resolve</span></div></div></div>`,
+  comment: () => `<div class="mk mk-cmt"><div class="mk-row"><span class="tag bad">High</span><span class="mk-dim">reviewer · api/auth.py:42</span></div>
+    <div class="mk-title">Token expiry isn't checked before refresh</div>
+    <div class="mk-ai"><span class="mk-ai-h"><span class="ai-badge">AI</span> take</span>Valid: <code>refresh()</code> trusts the cached token. Fix is one line: compare <code>exp</code> first.</div>
+    <div class="mk-acts"><span class="tag blue">Will fix</span><span class="tag">Discuss</span><span class="tag">Not now</span></div></div>`,
+  questions: () => `<div class="mk mk-q"><div class="mk-row"><span class="st"><span class="dot warn"></span>Needs a look</span><span class="mk-dim">6 files · +212 lines vs main</span></div>
+    <div class="mk-h">Before you approve, ask</div>
+    <ol class="mk-ol"><li${A(1)}>It changes <code>billing.py</code>, which needed 4 fixes recently. How would you know if it broke?</li>
+      <li${A(3)}>Your team decided <b>“money is integer cents”</b>. Does this still follow it?</li>
+      <li${A(5)}>Nothing tests <code>refunds.py</code>. Which check shows it still works?</li></ol></div>`,
+  hotspots: () => `<div class="mk mk-hot">${[["bad", "billing/charge.py", "needed 5 fixes · fixes rising · no tests", 92], ["warn", "api/limits.py", "changed 14 times · 3 people", 64], ["warn", "auth/session.py", "needed 2 fixes · 900 lines", 41]].map(([t, p, r, w], i) => `<div${A(i * 1.2, "mk-hot-r")}>${dot(t)}<div class="grow"><code>${p}</code><div class="mk-dim">${r}</div><span class="mk-heat ${t}"><i style="--w:${w}%;--d:${1 + i * 1.2}"></i></span></div></div>`).join("")}</div>`,
+  why: () => `<div class="mk mk-why"><div class="mk-row"><code>def allow()</code><span class="mk-dim">· why is this here?</span></div>
+    <ol class="mk-tl">${[["Count the last 60s instead of the minute", "PR #318", "Sarah · 3 days ago", ""], ["fix: clients doubled their burst at :00", "ENG-412", "Rahul · 2 weeks ago", "fix"], ["Add per-client rate limits", "PR #201", "Mike · 4 months ago", ""]].map(([t, r, w, f], i) => `<li${A(1 + i * 1.6)}><b>${t}</b><div class="mk-dim">${w} · <span class="tag blue">${r}</span>${f ? ' <span class="tag bad">fix</span>' : ""}</div></li>`).join("")}</ol></div>`,
+  guard: () => `<div class="mk mk-term"><div class="mk-dots"><i></i><i></i><i></i></div>
+    <div${A(0)}><span class="mk-p">claude ›</span> git push origin main</div>
+    <div${A(1.5, "mk-red")}>✕ LFG guard: pushing is yours to do. Changes are ready to commit.</div>
+    <div${A(3)}><span class="mk-p">claude ›</span> cat .env</div>
+    <div${A(4.5, "mk-red")}>✕ LFG guard: secrets stay unread.</div>
+    <div${A(6)}><span class="mk-p">claude ›</span> git commit -m "Add sliding-window rate limit"</div>
+    <div${A(7.5, "mk-yel")}>? Asks you first. Approve in Claude Code.</div></div>`,
+  dictate: () => `<div class="mk mk-dict"><div class="mk-dict-text">“${"Add a test for the refund path, and make it fail on negative amounts".split(" ").map((w, i, all) => `<span${A(1 + i * .35)}>${w}${i < all.length - 1 ? " " : ""}</span>`).join("")}”<span class="mk-caret"></span></div>
+    <div class="mk-pill">${"<i></i>".repeat(9)}</div><div class="mk-dim mk-center">Hold <kbd>⌥</kbd> <kbd>Space</kbd>, speak, let go</div></div>`,
+};
+/* Go editorless: each editor as an app tile with its logo (ui_assets/editors): [name, file, tile background, logo size] */
+const EDITORS = [["VS Code", "vscode", "#ffffff", 68], ["Cursor", "cursor", "", 100], ["JetBrains", "jetbrains", "linear-gradient(135deg, #ff8f1f, #ff318c 45%, #7b5cff)", 56],
+  ["Zed", "zed", "#0c0e14", 54], ["Sublime Text", "sublime", "", 100], ["Xcode", "xcode", "#ffffff", 80], ["Antigravity", "antigravity", "#ffffff", 82]];
+/* the hero's window: a Studio session, one sentence in, the pipeline running */
+const HERO_STEPS = [["Grill", "brief and acceptance criteria"], ["Plan", "4 tasks · standard lane"], ["Build", "test-first, in its own worktree"],
+  ["Check", "lint · types · tests · security"], ["Review", "standards · spec · blast radius"], ["Ship", "commit message and PR notes ready"]];
+const FLOW = [["Ask", "/lfg:lfg add rate limiting", "One sentence in Claude Code."], ["Grill", "brief + acceptance criteria", "It asks until the goal is sharp."],
+  ["Plan", "design · tasks · lane", "Small, testable slices."], ["Build", "agents in worktrees", "Test-first, one task each."],
+  ["Check", "lint · tests · security · review", "Proof from exit codes."], ["Ship", "ready to commit", "You push. Always."]];
+const SHOWCASE = [  // [kicker, icon, punch line (em = the highlight), what it is, snapshot, link]
+  ["Reviews", "review", "Argue with the diff. <em>Win.</em>", "Open any pull request and ask about one line. Answers come from the code and everything that calls it, not from memory. Push back, decide what to fix, move on.", () => MOCK.diff(), "#review"],
+  ["Insights", "insights", "Know what to ask <em>before you approve.</em>", "Every change arrives with the questions a senior engineer would ask: the fragile files it touches, the tests it skipped, the team decisions it might break.", () => MOCK.questions(), "#insights"],
+  ["Hotspots", "target", "See the next bug <em>before it's filed.</em>", "Files that keep needing fixes, ranked from your own history, with the reason in plain words. Pay down debt where it actually hurts.", () => MOCK.hotspots(), "#insights/hotspots"],
+  ["History", "branch", "Every line has a story. <em>Read it in seconds.</em>", "Any function's history, newest first: the commits that shaped it and the PRs and tickets behind them. Context without blame, without an editor.", () => MOCK.why(), "#insights/files"],
+  ["Runs", "runs", "Watch the work, <em>not the keystrokes.</em>", "One sentence becomes a run you can follow: brief, plan, build, checks, review. You step in only where it needs a decision.", () => MOCK.run(), "#runs"],
+  ["Guard", "checks", "It can't push, deploy or <em>read your secrets.</em>", "Guard rails enforced in code on every command, not asked for nicely in a prompt. Commits wait for your yes.", () => MOCK.guard(), "#settings"],
+  ["Dictate", "mic", "Say it. <em>It's typed.</em>", "Hold a shortcut anywhere on your Mac and talk. Transcribed on the Mac and pasted where your cursor is; your audio never leaves it.", () => MOCK.dictate(), "#integrations"],
+];
+/* The open-source tools LFG stands on. Thank you. */
+const THANKS = [
+  ["Claude Code", "the agent LFG runs inside", "https://claude.com/claude-code"],
+  ["code-review-graph", "the code map agents read instead of whole files", "https://pypi.org/project/code-review-graph/"],
+  ["graphify", "the code wiki, call flows and architecture map", "https://pypi.org/project/graphifyy/"],
+  ["Omnigraph", "dev-graph and second-brain: what LFG remembers", ""],
+  ["Headroom", "context compression that saves tokens", ""],
+  ["Cactus · Whistle", "on-device speech-to-text for Dictate", "https://cactuscompute.com/blog/whistle"],
+  ["mattpocock/skills", "the grill, plan and TDD skills LFG adapts", "https://github.com/mattpocock/skills"],
+  ["Cloudflare security-audit-skill", "the security review method", "https://github.com/cloudflare/security-audit-skill"],
+  ["Semgrep", "code scanning", ""], ["Gitleaks", "secret scanning", ""], ["Trivy", "container and dependency scanning", ""],
+  ["OSV-Scanner", "known vulnerabilities in dependencies", ""], ["Hadolint", "Dockerfile checks", ""], ["zizmor · actionlint", "GitHub Actions checks", ""],
+  ["Strix", "offline pentests", ""], ["Ollama", "the local model for pentests", ""], ["SonarQube", "code quality, run locally", ""],
+  ["uv", "fast, isolated Python tool installs", ""], ["PyObjC", "the macOS bits of Dictate", ""],
+];
+const lfgMark = () => `<span class="lp-mark">${logoSvg(22)}LFG</span>`;
+
+PAGES.lfg = async () => {
+  let n = 0;
+  try { n = ((await api("guide")).skills || []).length; } catch (e) { n = 0; }
+  return `<div class="lp">
+  <header class="lp-nav"><a href="#lfg" class="lp-home" data-scroll="top" aria-label="Back to the top">${lfgMark()}</a><nav><a href="#lfg" data-scroll="lp-film">Film</a><a href="#lfg" data-scroll="lp-features">Features</a><a href="#lfg" data-scroll="lp-reviews">Reviews</a><a href="#lfg" data-scroll="lp-thanks">Open source</a><a href="#onboarding">Intro</a></nav>
+    <a class="btn primary" href="#studio">Open dashboard →</a></header>
+  <section class="lp-hero">
+    <span class="wl-pill"><span class="tag">New</span> Insights and talk-to-the-diff reviews</span>
+    <h1>Stop writing code.<br><em>Start directing it.</em></h1>
+    <p>The bottleneck moved. It isn't typing any more; it's deciding what to build, steering the agents that build it, and trusting what ships. LFG is the cockpit for that, inside Claude Code.</p>
+    <div class="lp-cta"><a class="btn primary big" href="#studio">Open dashboard</a><a class="btn big lp-ghost" href="#onboarding">Take the intro</a></div>
+    <div class="lp-win" aria-hidden="true"><div class="lp-win-bar"><i></i><i></i><i></i><span>Studio · your-project</span></div>
+      <div class="lp-win-b"><div class="lp-win-me">/lfg:lfg add rate limiting to the public API</div>
+        <ol class="lp-win-steps">${HERO_STEPS.map(([t, d], i) => `<li class="todo" data-step="${t}" style="--i:${i}"><span class="lp-win-dot"></span><b>${t}</b><span>${d}</span><em></em></li>`).join("")}</ol>
+        <div class="lp-win-ask"><span>Claude wants to edit <code>api/limits.py</code></span><span class="lp-win-btns"><span class="lp-win-btn on">Allow once</span><span class="lp-win-btn">Deny</span></span><span class="lp-win-ok">✓ Allowed</span></div>
+        <div class="lp-win-done"><span class="lp-win-check">✓</span><b>Ready to commit.</b><span>6 files · 48 tests pass · review approved · nothing pushed</span></div></div></div>
+  </section>
+  <section class="lp-editors" id="lp-editors">
+    <h2 class="lp-ed-h">Go editorless</h2>
+    <div class="lp-ed">${EDITORS.map(([name, file, bg, size], i) => `<div class="lp-ed-i" style="--i:${i}"><span class="lp-ed-tile${bg ? "" : " bare"}" style="${bg ? `background:${bg};` : ""}--s:${size}%"><img src="/assets/editors/${file}.svg" alt="" draggable="false"><i class="lp-ed-x" aria-hidden="true"></i></span><span class="lp-ed-n">${esc(name)}</span></div>`).join("")}</div>
+    <p class="lp-ed-p">Great editors. You just won't be editing.<br><b>Describe the change, review the result, ship.</b></p></section>
+  <section class="lp-punch lp-reveal">
+    <div><b>Coding was the skill.<br><em>Orchestration</em> is the new one.</b><p>You decide what gets built and in what order. Specialist agents do the typing, in their own worktrees.</p></div>
+    <div><b>Read intent,<br>not diffs.</b><p>Every change arrives with why it was made, what it touches and what to ask before you approve it.</p></div>
+    <div><b>Ship with proof,<br>not hope.</b><p>Lint, types, tests, security and a review on every change, judged from exit codes, never an agent's claim.</p></div>
+  </section>
+  <section class="lp-sec lp-film lp-reveal" id="lp-film"><div class="lp-k">The launch film</div><h2>See it in <em>a minute and a half.</em></h2>
+    <div class="lp-film-v"><video src="${LAUNCH_VIDEO}" controls playsinline preload="metadata" aria-label="The LFG launch film"></video></div></section>
+  <section class="lp-sec lp-feats" id="lp-features"><div class="lp-k">What you get</div><h2>Everything you'd open an editor for. <em>Without one.</em></h2>
+    ${SHOWCASE.map(([k, ico, punch, d, v, href], i) => `<div class="lp-row lp-reveal${i % 2 ? " flip" : ""}"${k === "Reviews" ? ' id="lp-reviews"' : ""}><div class="lp-copy"><span class="lp-kick">${icon(ico)}${k}</span><h3>${punch}</h3><p>${d}</p><a href="${href}" class="lp-link">Open ${k} →</a></div><div class="lp-vis" aria-hidden="true">${v()}</div></div>`).join("")}
+  </section>
+  <section class="lp-facts lp-reveal"><div><b>${n || "25+"}</b><span>skills, one per job</span></div><div><b>8</b><span>specialist agents</span></div><div><b>18</b><span>guard rules, in code</span></div><div><b>0</b><span>lines of your code sent by Insights</span></div></section>
+  <section class="lp-sec lp-thanks lp-reveal" id="lp-thanks"><div class="lp-k">Built on open source</div><h2>Thank you</h2>
+    <p class="muted">LFG is a thin layer on top of other people's excellent work. These projects do the heavy lifting.</p>
+    <div class="lp-tk">${THANKS.map(([n, what, url]) => `<${url ? `a href="${url}" target="_blank" rel="noopener noreferrer"` : "div"} class="lp-tk-i"><b>${esc(n)}</b><span>${esc(what)}</span></${url ? "a" : "div"}>`).join("")}</div></section>
+  <section class="lp-end lp-reveal"><h2>Ready when you are.</h2><p class="muted">Open Claude Code in a repo, run <code>lfg enable</code>, and say what you want.</p>
+    <div class="lp-cta"><a class="btn primary big" href="#studio">Open dashboard</a><a class="btn big" href="https://github.com/varun-singhh/lfg" target="_blank" rel="noopener noreferrer" data-gh-star>★ Star on GitHub</a></div></section>
+  <footer class="lp-foot"><div class="lp-lfg">Let's F<span>**</span>king go.</div>
+    <div class="lp-foot-row">${lfgMark()}<span class="muted small">Runs on your computer · never pushes or deploys · open source</span><span class="grow"></span><a href="#studio">Dashboard</a><a href="#help">Help</a></div></footer>
+  </div>`;
+};
+
+/* The landing page: sections animate in as they scroll into view (once; none with reduced motion) */
+function wireLanding(root) {
+  const parts = $$("#lp-editors, .lp-reveal", root), win = $(".lp-win", root);
+  if (!("IntersectionObserver" in window) || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    parts.forEach(x => x.classList.add("in"));
+    if (win) { $$(".lp-win-steps li", win).forEach(li => { li.className = "done"; }); $(".lp-win-ask", win).classList.add("on", "ok"); $(".lp-win-done", win).classList.add("on"); }
+    launchVideo();
+    return;
+  }
+  if (win) heroRun(win);
+  launchVideo();
+  const io = new IntersectionObserver(es => es.forEach(x => { if (x.isIntersecting) { x.target.classList.add("in"); io.unobserve(x.target); } }), { threshold: 0.2 });
+  parts.forEach(x => io.observe(x));
+}
+
+/* The launch film, offered once on the home page. It counts as seen the moment it shows (tours.json, and this
+   browser as a fallback), so quitting `lfg ui` or closing the tab mid-film doesn't bring it back: the next start goes
+   straight to the home page, and the film stays on it under "The launch film". It waits until the first-run setup
+   guide is done so the two never stack. */
+const LAUNCH_VIDEO = "https://github.com/user-attachments/assets/bcc10777-99ec-4f32-9b55-19702dbade8f";
+async function launchVideo() {
+  if ($(".lv")) return;
+  let t;
+  try { t = await api("tours"); } catch (e) { return; }
+  let local = null;
+  try { local = localStorage.getItem("lfg.launchVideo"); } catch (e) { /* private window */ }
+  if (!t || t.launch_video_seen || local || !t.setup_guide_done || (location.hash.slice(1).split("/")[0] || "lfg") !== "lfg") return;
+  try { localStorage.setItem("lfg.launchVideo", "seen"); } catch (e) { /* private window */ }
+  save("tour_done", { name: "launch-video", how: "finished" });  // seen once it shows, whatever happens next
+  const box = document.createElement("div");
+  box.className = "lv";
+  box.innerHTML = `<div class="lv-shade"></div><video class="lv-v" src="${LAUNCH_VIDEO}" playsinline preload="auto" aria-label="The LFG launch film"></video>`;
+  document.body.appendChild(box);
+  const v = $(".lv-v", box);
+  let gone = false;
+  const close = () => {
+    if (gone) return;
+    gone = true;
+    try { v.pause(); } catch (e) { /* ignore */ }
+    box.remove();
+    document.removeEventListener("keydown", onKey, true);
+    document.removeEventListener("pointerdown", unmute, true);
+  };
+  // Browsers only autoplay with sound after the page has had a click or key press. If this one refuses, play muted
+  // and turn the sound on at the first click or key press, which then also counts as permission to play.
+  const unmute = () => { v.muted = false; v.play().catch(() => {}); document.removeEventListener("pointerdown", unmute, true); };
+  const onKey = e => { if (e.key === "Escape") close(); else unmute(); };
+  document.addEventListener("keydown", onKey, true);
+  box.addEventListener("click", e => { if (e.target === v) { if (v.muted) return; v.paused ? v.play() : v.pause(); } else close(); });
+  v.addEventListener("ended", close);
+  window.addEventListener("hashchange", close, { once: true });
+  v.play().catch(() => { v.muted = true; v.play().catch(() => {}); document.addEventListener("pointerdown", unmute, true); });
+}
+
+/* The hero's window plays a whole run: each stage works, then is done; the permission prompt shows up during Build
+   and is allowed; then "Ready to commit", a pause, and again. Stops once the page is left. */
+function heroRun(win) {
+  const steps = $$(".lp-win-steps li", win), ask = $(".lp-win-ask", win), done = $(".lp-win-done", win);
+  const set = (li, st) => { li.className = st; $("em", li).textContent = st === "run" ? "working…" : ""; };
+  let t = 0;
+  const at = (ms, fn) => setTimeout(() => { if (document.body.contains(win)) fn(); }, t += ms);
+  const play = () => {
+    t = 0;
+    steps.forEach(li => set(li, "todo")); ask.classList.remove("on", "ok"); done.classList.remove("on");
+    steps.forEach((li, i) => {
+      at(i ? 250 : 1400, () => set(li, "run"));
+      if (li.dataset.step === "Build") { at(1000, () => ask.classList.add("on")); at(1100, () => ask.classList.add("ok")); }
+      at(li.dataset.step === "Build" ? 900 : 1150, () => set(li, "done"));
+    });
+    at(300, () => done.classList.add("on"));
+    at(4500, play);
+  };
+  play();
+}
+
+/* The setup guide: run `lfg init` in a repo, turn LFG on for it in Settings, hardened mode, and where to find this
+   again. The first time, it opens by itself and has to be finished: no close button, Escape and clicks outside do
+   nothing. The ⓘ button in the top bar opens it any time. Steps on Settings light up the real controls, which stay
+   usable (the dimmed parts around them are not). */
+const SG_STEPS = [
+  { title: "Set up LFG in three steps", next: "Start", body: () => `<p>Two minutes, once. LFG only works in repos you turn it on for, so let's do that for your first one.</p>
+      <ol class="sg-list"><li><div><b>Run <code>lfg init</code></b> in your repo</div><span>builds the code map LFG's agents read</span></li>
+        <li><div><b>Turn LFG on</b> for it in Settings</div><span>skills, guard and hooks, in that repo only</span></li>
+        <li><div><b>Choose hardened mode</b></div><span>a second lock, enforced by Claude Code itself</span></li></ol>` },
+  { title: "1 · Run lfg init in your repo", body: () => `<p>In a terminal, go to the project you want LFG to work on and run:</p>
+      <div class="sg-cmd"><pre id="sg-cmd">cd path/to/your-repo
+lfg init</pre><button class="btn small" data-copy="sg-cmd">Copy</button></div>
+      <p class="muted small">It builds the code map (a minute or two the first time). The repo then shows up in the project picker and in Settings.</p>
+      <div class="sg-found" id="sg-found"></div>`,
+    live: card => {
+      const box = $("#sg-found", card);
+      const tick = async () => {
+        const r = await api("repos").catch(() => null), n = (r && r.repos) || [];
+        if (box.isConnected) box.innerHTML = n.length ? `${dot("ok")}<span>LFG sees ${n.length === 1 ? "" : `${n.length} repos: `}<b>${n.slice(0, 3).map(x => esc(x.name || x.id)).join(", ")}</b>${n.length > 3 ? "…" : ""}</span>`
+          : `${dot("warn")}<span>No repo yet. Run <code>lfg init</code> in one and it shows up here.</span>`;
+      };
+      tick(); return setInterval(tick, 3000);
+    } },
+  { title: "2 · Turn LFG on for that repo", page: "settings", tab: "claudecode", target: "#cc-where",
+    body: () => `<p>Find your repo in this list and press <b>Turn on</b>. Claude Code then gets LFG's skills, guard and hooks in that repo; every other repo stays exactly as it was.</p><p class="muted small">Same as running <code>lfg enable</code> inside the repo.</p>` },
+  { title: "3 · Hardened mode", page: "settings", tab: "claudecode", target: "#cc-hardened",
+    body: () => `<p>Recommended. On top of LFG's guard, it writes Claude Code's own deny rules (commit and push, secret files) into each LFG repo's <code>.claude/settings.local.json</code>, so Claude Code itself refuses them too.</p><p class="muted small">Never touches your user settings. Same as <code>lfg enable --hardened</code>.</p>` },
+  { title: "Find this again any time", target: "#guide-btn", next: "Finish",
+    body: () => `<p>This guide lives behind the <b>ⓘ</b> button in the top bar. Every command LFG understands is under <a href="#help">Help</a>, and these switches stay in <b>Settings → Claude Code</b>.</p>` },
+];
+function setupGuide(first) {
+  if ($("#sg")) return;
+  const back = location.hash || "#studio";
+  const root = document.createElement("div");
+  root.id = "sg"; root.className = "sg";
+  root.innerHTML = `${'<div class="sg-m"></div>'.repeat(4)}<div class="sg-ring" hidden></div><div class="sg-card" role="dialog" aria-modal="true" aria-labelledby="sg-t" tabindex="-1"></div>`;
+  document.body.append(root); document.body.classList.add("sg-open");
+  const card = $(".sg-card", root), masks = $$(".sg-m", root), ring = $(".sg-ring", root);
+  let target = null, live = null;  // target: the selector being lit up (pages re-render, so it's found again each time)
+  const place = () => {
+    const vw = innerWidth, vh = innerHeight, el = target && $(target);
+    if (!el) {
+      masks[0].style.cssText = "left:0;top:0;width:100%;height:100%"; masks.slice(1).forEach(m => { m.style.cssText = "display:none"; });
+      ring.hidden = true; card.classList.add("center"); card.style.cssText = ""; return;
+    }
+    const r = el.getBoundingClientRect(), p = 8;
+    const x = Math.max(0, r.left - p), y = Math.max(0, r.top - p), x2 = Math.min(vw, r.right + p), y2 = Math.min(vh, r.bottom + p);
+    masks[0].style.cssText = `left:0;top:0;width:100%;height:${y}px`;
+    masks[1].style.cssText = `left:0;top:${y2}px;width:100%;height:${Math.max(0, vh - y2)}px`;
+    masks[2].style.cssText = `left:0;top:${y}px;width:${x}px;height:${y2 - y}px`;
+    masks[3].style.cssText = `left:${x2}px;top:${y}px;width:${Math.max(0, vw - x2)}px;height:${y2 - y}px`;
+    ring.hidden = false; ring.style.cssText = `left:${x}px;top:${y}px;width:${x2 - x}px;height:${y2 - y}px`;
+    card.classList.remove("center");
+    const cw = card.offsetWidth, ch = card.offsetHeight;
+    const top = y2 + 14 + ch <= vh ? y2 + 14 : y - 14 - ch >= 0 ? y - 14 - ch : Math.max(12, vh - ch - 12);
+    card.style.cssText = `left:${Math.min(Math.max(12, x2 - cw), vw - cw - 12)}px;top:${top}px`;
+  };
+  const waitFor = async (sel, tab) => {
+    for (let k = 0; k < 300; k++) {  // Settings → Claude Code reads Claude Code's setup first: give it time
+      if (tab) { const b = $(`[data-tabs="settings"] .tab[data-k="${tab}"]`); if (b && !b.classList.contains("on")) b.click(); }
+      const el = $(sel); if (el) return el;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return null;
+  };
+  const keys = e => {  // no way out but through; Tab stays inside the card
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); }
+    if (e.key === "Tab") { const f = $$("button, a[href]", card); if (f.length && !card.contains(document.activeElement)) { e.preventDefault(); f[0].focus(); } }
+  };
+  const timer = setInterval(place, 250);
+  addEventListener("resize", place); document.addEventListener("keydown", keys, true);
+  let seq = 0;
+  const show = async i => {
+    const s = SG_STEPS[i], mine = ++seq;
+    clearInterval(live); live = null; target = null;
+    if (s.page && (location.hash.slice(1).split("/")[0] || "") !== s.page) location.hash = "#" + s.page;
+    card.innerHTML = `<div class="sg-dots" aria-hidden="true">${SG_STEPS.map((_, k) => `<i class="${k === i ? "on" : k < i ? "done" : ""}"></i>`).join("")}</div>
+      <h2 id="sg-t">${s.title}</h2><div class="sg-b">${s.body()}</div>
+      <div class="sg-a">${i ? '<button class="btn" data-sg="back">Back</button>' : ""}<span class="grow"></span><span class="muted small">${i + 1} of ${SG_STEPS.length}</span><button class="btn primary" data-sg="next">${s.next || "Next"}</button></div>`;
+    place(); card.focus();
+    if (s.live) live = s.live(card);
+    const bk = $('[data-sg="back"]', card); if (bk) bk.onclick = () => show(i - 1);
+    $('[data-sg="next"]', card).onclick = () => i < SG_STEPS.length - 1 ? show(i + 1) : finish();
+    $$("a[href^='#']", card).forEach(a => a.onclick = e => e.preventDefault());  // links are pointers here, not exits
+    if (!s.target) return;
+    const wait = document.createElement("p"); wait.className = "muted small sg-wait"; wait.textContent = s.page ? "Loading Settings…" : "";
+    if (s.page && !$(s.target)) $(".sg-b", card).append(wait);
+    const el = await waitFor(s.target, s.tab);
+    if (mine !== seq) return;  // moved on meanwhile
+    wait.remove();
+    if (el) { target = s.target; el.scrollIntoView({ block: "center" }); place(); }
+  };
+  const finish = () => {
+    clearInterval(timer); clearInterval(live); removeEventListener("resize", place); document.removeEventListener("keydown", keys, true);
+    root.remove(); document.body.classList.remove("sg-open");
+    if (first) save("tour_done", { name: "setup-guide" });
+    if (location.hash !== back) location.hash = back;
+  };
+  show(0);
+}
+document.addEventListener("click", e => { if (e.target.closest("#guide-btn")) setupGuide(false); });
+
+/* Star buttons: with the GitHub CLI signed in, one click stars it from your account; otherwise they open GitHub */
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-gh-star]");
+  if (!b || b.dataset.busy) return;
+  const g = state.gh;  // fetched at startup, so this click can decide now
+  if (!g || !g.ready) return;  // not signed in: the link opens github.com as usual
+  e.preventDefault();
+  if (g.starred) { b.textContent = "★ Starred, thank you"; return; }
+  b.dataset.busy = "1"; b.textContent = "Starring…";
+  const r = await save("github_star", {});
+  b.textContent = r.ok && r.starred ? "★ Starred, thank you" : "★ Star on GitHub";
+  if (r.ok && r.starred) state.gh = Object.assign({}, g, { starred: true });
+  delete b.dataset.busy;
+  if (!(r.ok && r.starred)) window.open(r.url || b.href, "_blank", "noopener");
+}, true);
+/* In-page links on the home page scroll to their section; the hash stays #lfg, so the router never sees them */
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-scroll]");
+  if (!a) return;
+  e.preventDefault();
+  const el = a.dataset.scroll === "top" ? null : document.getElementById(a.dataset.scroll);
+  if (a.dataset.scroll !== "top" && !el) return;
+  const top = el ? Math.max(0, el.getBoundingClientRect().top + scrollY - 68) : 0, from = scrollY;
+  const calm = document.documentElement.dataset.motion === "off" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+  window.scrollTo({ top, behavior: calm ? "auto" : "smooth" });
+  setTimeout(() => { if (scrollY === from && Math.abs(top - from) > 4) window.scrollTo(0, top); }, 350);  // smooth scrolling unsupported
+});
+/* The first-run intro: one feature per step, each with its snapshot, then pick what to use. */
+const JOURNEY = [
+  { k: "Welcome", t: "Welcome to LFG", d: "You're about to stop writing code and start directing it. Here's the 60-second version of how.", v: () => `<div class="jv-stack">${MOCK.run()}</div>` },
+  { k: "The flow", t: "One sentence in, a checked change out", d: "Say what you want in Claude Code. LFG grills it into a brief, plans small slices, builds them test-first and checks everything before you see it.", v: () => `<ol class="lp-flow mini">${FLOW.map(([t, c], i) => `<li><span class="lp-n">${String(i + 1).padStart(2, "0")}</span><b>${t}</b><code>${esc(c)}</code></li>`).join("")}</ol>` },
+  { k: "Reviews", t: "Talk to the diff", d: "Ask about a single line or a single review comment and get an answer from the code. Decide what to fix without opening a file.", v: () => MOCK.diff() },
+  { k: "Insights", t: "Know what to ask before you approve", d: "The fragile files a change touches, the tests it skipped and the team decisions it might break, as questions.", v: () => MOCK.questions() },
+  { k: "History", t: "Why is this code here?", d: "Every function's story: the commits that shaped it, with the PRs and tickets behind them.", v: () => MOCK.why() },
+  { k: "Guard", t: "Agents can't do the scary things", d: "No pushes, no deploys, no reading secrets. Commits ask you first. Enforced on every command.", v: () => MOCK.guard() },
+];
+const OBS = { step: 0 };
+async function journeyPicker() {
+  const d = await api("onboarding");
+  const unlocked = await isUnlocked();
+  const tile = f => {
+    const on = d.complete ? f.enabled : f.id === "coding";
+    return `<label class="wl-tile"><input type="checkbox" data-feature="${esc(f.id)}" ${on ? "checked" : ""} ${unlocked ? "" : "disabled"}><span class="wl-check" aria-hidden="true"></span>
+      <span class="wl-ico">${icon(FEATURE_ICON[f.id] || "home")}</span><b>${esc(f.name)}</b><span class="wl-desc">${esc(f.description)}</span>
+      ${(f.page_titles || []).length ? `<span class="wl-pages">${f.page_titles.map(t => `<span class="tag blue">${esc(t)}</span>`).join("")}</span>` : ""}<span class="wl-skills">${(f.skills || []).slice(0, 4).map(k => `<code>${esc(k)}</code>`).join(" ")}</span></label>`;
+  };
+  return `${unlocked ? "" : `<div class="callout wl-note">Read-only. To change anything, run <code>lfg ui</code> in your own terminal.</div>`}
+    <div class="wl-pick-h"><div><h2>What will you use?</h2><p class="muted">The sidebar shows only these pages. Change it any time in Settings.</p></div><span class="tag blue" id="wl-count"></span></div>
+    <div class="wl-grid">${(d.features || []).map(tile).join("")}</div>
+    <div class="wl-actions"><button class="btn primary big" id="onboard-save" ${unlocked ? "" : "disabled"}>Start with these</button><button class="btn big" id="onboard-skip" ${unlocked ? "" : "disabled"}>Show me everything</button><span class="save-msg" id="onboard-msg"></span><span class="grow"></span><a class="btn big" href="https://github.com/varun-singhh/lfg" target="_blank" rel="noopener noreferrer" data-gh-star>★ Star LFG on GitHub</a></div>`;
+}
+PAGES.onboarding = async arg => {
+  OBS.step = arg === "pick" ? JOURNEY.length : 0;
+  return `<div class="ob">
+    <header class="lp-nav">${lfgMark()}<span class="grow"></span><a class="ob-skip" href="#onboarding/pick" data-ob-skip>Skip intro</a></header>
+    <div id="ob-body"></div></div>`;
+};
+async function drawJourney(root) {
+  const body = $("#ob-body", root);
+  if (!body) return;
+  const i = OBS.step, last = JOURNEY.length;
+  const dots = `<div class="ob-dots">${JOURNEY.concat([{ k: "Pick" }]).map((s, j) => `<button class="ob-dot${j === i ? " on" : j < i ? " done" : ""}" data-ob-go="${j}" aria-label="${esc(s.k)}"><span></span>${esc(s.k)}</button>`).join("")}</div>`;
+  if (i >= last) {
+    body.innerHTML = `${dots}<section class="wl-pick ob-pick">${await journeyPicker()}</section>`;
+    wireOnboarding(root);
+  } else {
+    const s = JOURNEY[i];
+    body.innerHTML = `${dots}<section class="ob-card"><div class="ob-copy"><span class="tag blue">${esc(s.k)}</span><h1>${esc(s.t)}</h1><p>${esc(s.d)}</p>
+      <div class="ob-nav">${i ? '<button class="btn big" data-ob="back">Back</button>' : ""}<button class="btn primary big" data-ob="next">${i === last - 1 ? "Pick what you'll use →" : "Next →"}</button></div>
+      <div class="muted small">${i + 1} of ${last}</div></div><div class="ob-vis" aria-hidden="true">${s.v()}</div></section>`;
+  }
+  $$("[data-ob-go]", body).forEach(b => b.onclick = () => { OBS.step = +b.dataset.obGo; drawJourney(root); });
+  const nx = $('[data-ob="next"]', body); if (nx) nx.onclick = () => { OBS.step++; drawJourney(root); };
+  const bk = $('[data-ob="back"]', body); if (bk) bk.onclick = () => { OBS.step--; drawJourney(root); };
+  const sk = $("[data-ob-skip]", root); if (sk) sk.onclick = e => { e.preventDefault(); OBS.step = last; drawJourney(root); };
+}
+
+/* A tour for every dashboard page: the Tour button in the top bar starts the one for the page you're on. */
+const PAGE_TOURS = {
+  studio: [
+    { sel: "#nav", title: "Your dashboard", body: () => "Everything LFG does, by what you're doing: <b>Your work</b> (runs, todos, reviews, checks), <b>This project</b> (code, insights, docs) and <b>LFG</b> itself (usage, skills, settings)." },
+    { sel: "#repo", title: "Pick a project", body: () => "Every page shows the project picked here, and the branch below it narrows runs and checks to one branch." },
+    { sel: "#ss-comp", title: "Studio", body: () => "Run Claude Code here: describe the task, <code>/</code> for skills, <code>@</code> for files, drop in screenshots. Sessions from your terminal and the desktop app show up too." },
+    { sel: "#bell", title: "Notifications", body: () => "When a check finishes, a run needs a decision or a review is ready, it shows up here." },
+    { sel: "#tour-btn", title: "A tour on every page", body: () => "Press <b>Tour</b> on any page to see what it's for." },
+  ],
+  todos: [{ sel: "[data-td-add]", title: "Add a todo", body: () => "Type and press Enter. It's tagged with the project you're in." }, { sel: ".td-st", title: "Status", body: () => "Click the coloured tag to move it along: to do, in progress, done." }, { sel: ".td-a", title: "Linear and notes", body: () => "Turn any todo into a Linear ticket, or add notes." }],
+  runs: [{ title: "Runs", body: () => "Every request you give LFG becomes a run: brief, plan, build, checks, review and ship, with each stage's files." }, { sel: ".runs-bar", title: "Find a run", body: () => "Search by what it was for, its branch or its issue." }],
+  review: [{ title: "Reviews", body: () => "Review pull requests and AI chats here. Open one to see the diff, the comments and a chat beside it." }, { sel: ".rv-top", title: "Start a review", body: () => "Pick a pull request or a chat. LFG reads the diff and its callers before it says anything." }, { title: "Talk to the diff", body: () => "In a review, click a line number to ask about that line, or <b>Discuss</b> on a comment to argue with it. Mark each comment <b>Will fix</b> or <b>Not now</b>." }],
+  checks: [{ sel: ".view .cols", title: "Latest checks", body: () => "The newest code review, security check and ship check for this project, and what they found." }, { sel: ".view .tabs", title: "Findings", body: () => "Every finding with what's wrong, why it matters and what to do, sorted by severity." }],
+  code: [{ title: "Code", body: () => "The code map LFG's agents read instead of whole files, and the architecture's health." }],
+  insights: [{ sel: '[data-tabs="insights"]', title: "Three questions", body: () => "<b>Your changes</b>: is this safe to approve? <b>Hotspots</b>: where does this code break? <b>Files</b>: what is this and why is it like this?" }, { sel: "#ins-changes", title: "Before you approve", body: () => "The questions a senior engineer would ask, the fragile files you touched and the problems that keep coming back." }],
+  docs: [{ sel: ".doc-nav", title: "Docs", body: () => "LFG's wiki for this project and the docs you asked for: project-wide at the top, then one folder per branch." }],
+  knowledge: [{ title: "Knowledge", body: () => "Decisions, rules and lessons LFG remembers about this project, and your own notes. Save one with <code>/lfg:note</code>." }],
+  usage: [{ title: "Usage", body: () => "What Claude Code cost, by day, model and project, and what Headroom saved." }],
+  skills: [{ title: "Skills", body: () => "Every skill Claude Code can load on this computer, yours and every plugin's, with name clashes and how much context they cost." }],
+  integrations: [{ sel: ".int-list", title: "Integrations", body: () => "Turn tools on and off: knowledge graphs, Headroom, SonarQube, Dictate, pentests, Linear. Each one installs locally and can be removed." }],
+  settings: [{ sel: ".view .tabs", title: "Settings", body: () => "<b>Claude Code</b>: where LFG is on. <b>General</b>: features, updates, models. Every change is backed up and can be undone." }],
+  help: [{ title: "Help", body: () => "How LFG works, every command grouped by what it is for, and short answers." }],
+};
+Object.keys(PAGE_TOURS).forEach(k => Object.defineProperty(TOURS, "page-" + k, { get: () => PAGE_TOURS[k], enumerable: true }));
+function wireTourButton(key) {
+  const b = $("#tour-btn");
+  if (!b) return;
+  b.hidden = !PAGE_TOURS[key];
+  b.onclick = () => startTour("page-" + key);
+}
+
+/* Runs: each with tags (its PR and that PR's state, its issue, a fix run) and whether it still needs anything (done,
+   or not needed: its PR merged or closed, its branch merged, or you said so). Search finds runs by meaning: a vector
+   search over each run's brief, tasks and notes, on this computer. */
+const LIFE = { active: ["Active", "on"], done: ["Done", "ok"], "not-needed": ["Not needed", ""] };
+const runTags = r => `${(r.tags || []).map(t => t.href ? `<a class="tg ${t.tone || ""}" href="${esc(t.href)}" target="_blank" rel="noopener noreferrer" title="${esc(t.state ? `${t.text} is ${t.state.toLowerCase()} on GitHub` : t.text)}" data-stop>${esc(t.text)}${t.state === "MERGED" ? " · merged" : t.state === "CLOSED" ? " · closed" : ""}</a>` : `<span class="tg ${t.tone || ""}"${t.title ? ` title="${esc(t.title)}"` : ""}>${esc(t.text)}</span>`).join("")}${r.life && r.life !== "active" ? `<span class="tg${r.life === "done" ? " ok" : " faded"}" title="${esc(r.life_why || "")}">${esc(LIFE[r.life][0])}${r.life_why && r.life === "not-needed" ? ` · ${esc(r.life_why)}` : ""}</span>` : ""}`;
 PAGES.home = async () => {
   const d = await api("overview");
   if (d.available === false) return unavailable(d, "No project yet");
@@ -1248,14 +2005,55 @@ PAGES.runs = async arg => {
   if (arg) return runDetail(arg);
   const d = await cachedRuns();
   if (d.available === false) return unavailable(d);
+  const v = state.runsView = Object.assign({ filter: "active", q: "", hits: null, engine: null }, state.runsView || {});
+  const count = k => d.runs.filter(r => k === "all" || (r.life || "active") === k).length;
+  const chip = (k, label) => `<button class="pill${v.filter === k ? " on" : ""}" data-runs-filter="${k}">${label} <span class="muted">${count(k)}</span></button>`;
   return `${head("Runs", "Each run is one piece of work LFG took from idea to a commit you can review. Click one to see where it is.")}
-    <div class="box">${table(d.runs, [
-      { k: "slug", label: "Work", html: r => `${esc(runName(r))}${r.current ? ' <span class="tag">current</span>' : ""}${r.about ? `<div class="about clamp">${txt(r.about)}</div>` : ""}<div class="sub">${r.owner ? `filed under ${esc(r.owner_name)} · ${plural(r.tasks_here, "task")} for this repo, ${n(r.tasks_here_done)} done` : r.branch ? `branch ${esc(r.branch)}` : ""}</div>`, sort: r => runName(r) },
-      { k: "progress", label: "Where it is", html: r => esc(runLine(r, d.stages)), sort: r => r.progress },
-      { k: "attn", label: "Status", html: r => { const a = runAttention(r); return a.length ? `<span class="st" title="${esc(a[0][1])}">${dot(a[0][0])}${esc(a[0][2])}${a.length > 1 ? ` +${a.length - 1}` : ""}</span>` : `<span class="st">${dot("ok")}On track</span>`; }, sort: r => runAttention(r).length },
-      { k: "created", label: "Started", html: r => `<span class="nowrap">${ago(r.created)}</span>` },
-    ], { onRow: r => (location.hash = "#runs/" + encodeURIComponent(r.run)), emptyTitle: "No runs yet", emptyBody: "Start one in Claude Code with <code>/lfg:lfg</code> and what you want built." })}</div>`;
+    <div class="runs-bar"><input type="search" id="runs-q" placeholder="Search runs by what they're about, e.g. &quot;partition id on windows&quot;" value="${esc(v.q)}" autocomplete="off">
+      <span class="seg">${chip("active", "Active")}${chip("done", "Done")}${chip("not-needed", "Not needed")}${chip("all", "All")}</span></div>
+    <div id="runs-note" class="muted small"></div>
+    <div class="box" id="runs-box"></div>`;
 };
+function runsTable() {
+  const d = state.cache["runs:" + state.repo], v = state.runsView, box = $("#runs-box");
+  if (!d || !box) return;
+  let rows = d.runs.filter(r => v.filter === "all" || (r.life || "active") === v.filter);
+  if (v.hits) {  // search: only matches, best first
+    const rank = Object.fromEntries(v.hits.map((h, i) => [h.run, [i, h.score]]));
+    rows = d.runs.filter(r => rank[r.run] && (v.filter === "all" || (r.life || "active") === v.filter)).sort((x, y) => rank[x.run][0] - rank[y.run][0]);
+    rows.forEach(r => { r.match = rank[r.run][1]; });
+  }
+  box.innerHTML = table(rows, [
+    { k: "slug", label: "Work", html: r => `${esc(runName(r))}${r.current ? ' <span class="tag">current</span>' : ""}${v.hits && r.match != null ? ` <span class="tg on" title="How close it is to your search">${Math.round(r.match * 100)}% match</span>` : ""}${r.about ? `<div class="about clamp">${txt(r.about)}</div>` : ""}<div class="sub">${r.owner ? `filed under ${esc(r.owner_name)} · ${plural(r.tasks_here, "task")} for this repo, ${n(r.tasks_here_done)} done` : r.branch ? `<span class="brtag">${esc(r.branch)}</span>` : ""}</div><div class="run-tags">${runTags(r)}</div>`, sort: r => runName(r) },
+    { k: "progress", label: "Where it is", html: r => esc(runLine(r, d.stages)), sort: r => r.progress },
+    { k: "attn", label: "Status", html: r => { if (r.fix && r.fix.working) return `<span class="st">${dot("on")}AI working</span>`; if (r.life === "not-needed") return `<span class="st">${dot("")}${esc(r.life_why || "Not needed")}</span>`; const a = runAttention(r); return a.length ? `<span class="st" title="${esc(a[0][1])}">${dot(a[0][0])}${esc(a[0][2])}${a.length > 1 ? ` +${a.length - 1}` : ""}</span>` : `<span class="st">${dot("ok")}${r.life === "done" ? "Done" : "On track"}</span>`; }, sort: r => runAttention(r).length },
+    { k: "created", label: "Started", html: r => `<span class="nowrap">${ago(r.created)}</span>` },
+  ], { filter: false, onRow: r => (location.hash = "#runs/" + encodeURIComponent(r.run)), emptyTitle: v.hits ? "No run matches that" : v.filter === "active" ? "Nothing active" : "No runs here", emptyBody: v.hits ? "Try other words, or the All filter." : v.filter === "active" ? "Every run is done or not needed. See Done or All." : "Start one in Claude Code with <code>/lfg:lfg</code> and what you want built." });
+  mountTables(box);
+}
+let runsTimer = null;
+function wireRuns(root) {
+  if (!$("#runs-box", root)) return;
+  const v = state.runsView, note = $("#runs-note", root);
+  const engineNote = r => {
+    if (!r || !r.engine) { note.innerHTML = ""; return; }
+    note.innerHTML = r.engine === "embeddings" ? `Searching by meaning with <code>${esc(r.model)}</code> on your Ollama.`
+      : `Word-based vector search (TF-IDF). For search by meaning, install the local embedding model <code>${esc(r.model)}</code> (about 270 MB, from the Ollama library, runs only on your Ollama): <button class="btn small" id="runs-model">Install</button>`;
+    const b = $("#runs-model", note);
+    if (b) b.onclick = async () => { b.disabled = true; b.textContent = "Installing…"; const s = await save("ollama_pull", { name: r.model }); note.innerHTML = s.ok ? "Downloading the model in the background; search uses it once it's ready." : fmtWhy(s.why || "Couldn't start the download."); };
+  };
+  const run = async () => {
+    const q = $("#runs-q", root).value.trim(); v.q = q;
+    if (!q) { v.hits = null; engineNote(null); return runsTable(); }
+    note.innerHTML = '<span class="spin"></span> Searching…';
+    const r = await api("runs_search", { q });
+    if (v.q !== q) return;  // a newer search is on its way
+    v.hits = r.results || []; engineNote(r); runsTable();
+  };
+  $("#runs-q", root).oninput = () => { clearTimeout(runsTimer); runsTimer = setTimeout(run, 350); };
+  $$("[data-runs-filter]", root).forEach(b => b.onclick = () => { v.filter = b.dataset.runsFilter; $$("[data-runs-filter]", root).forEach(x => x.classList.toggle("on", x === b)); runsTable(); });
+  if (v.q) run(); else runsTable();
+}
 
 const FILE_NAMES = { "01-brief.md": "The idea, written up", "02-design.md": "The plan", "tasks.json": "Task list", "04-qa.md": "Test report",
   "ready.json": "Check results", "05-secure.json": "Security check", "05-pentest.json": "Security test", "06-review.json": "Code review",
@@ -1341,6 +2139,9 @@ function stackHtml(d, mode) {
   return `${epic}<div class="k mt">Stacks in ${esc(d.gh_repo)}</div>${stacks}`;
 }
 
+const runLifeBar = (d, run) => d.owner_name ? "" : `<div class="run-life"><div class="run-tags">${runTags(d)}</div><span class="grow"></span>${d.archived
+  ? `<button class="btn small" data-run-needed="1" data-run="${esc(run)}">Needed again</button>`
+  : `<button class="btn small" data-run-needed="0" data-run="${esc(run)}" title="Hide it from Active; nothing is deleted">Mark not needed</button>`}</div>`;
 async function runDetail(run) {
   const [d, all] = await Promise.all([api("run", { run }), cachedRuns()]);
   if (d.available === false) return unavailable(d);
@@ -1364,7 +2165,7 @@ async function runDetail(run) {
     : `<p><button class="btn small" data-run-checks="${esc(run)}">Run checks again</button> <span class="muted small">lint, types, tests and build, in the background</span></p>`;
   const checks = d.checks.length ? `${recheck}<div class="box items">${readyChecks(d.checks, run)}</div>` : recheck;
   crumbs("runs", runName(d));
-  return `${head(runName(d), `${d.ticket ? `<span class="tag mono">${esc(d.ticket)}</span> ` : ""}${d.owner_name ? `Filed under ${esc(d.owner_name)} · ` : ""}${d.branch ? `On branch ${esc(d.branch)} · ` : ""}started ${ago(d.created)}`, '<a class="back" href="#runs">← All runs</a>')}
+  return `${head(runName(d), `${d.ticket ? `<span class="tag mono">${esc(d.ticket)}</span> ` : ""}${d.owner_name ? `Filed under ${esc(d.owner_name)} · ` : ""}${d.branch ? `On branch ${esc(d.branch)} · ` : ""}started ${ago(d.created)}`, '<a class="back" href="#runs">← All runs</a>')}${runLifeBar(d, run)}
     ${d.about ? `<p class="about lead">${txt(d.about)}</p>` : ""}
     ${stackBox({ run }, "strip")}
     <div class="panel"><div class="row"><b>${p.finished ? "All steps done" : `${p.done} of ${p.total} steps done`}</b><span class="muted${p.blocked ? " stuck-text" : ""}">${p.finished ? "· the commit message is ready for you to review" : `· next: ${esc(NEXT[p.next])}`}</span></div>
@@ -1412,56 +2213,6 @@ PAGES.issues = async () => {
     ])}`;
 };
 
-/* Insights: where this project keeps breaking (Hotspots) and why a file or some lines look the way they do (Why),
-   from git history only. Ported from upstream LFG. */
-PAGES.insights = async arg => {
-  const file = arg ? decodeURIComponent(arg) : "";
-  if (file) sessionStorage.setItem("lfg.tab.insights", "why");  // a file link opens on Why
-  const d = await api("insight_hotspots");
-  if (d.error) return `${head("Insights", "Where this project keeps breaking, and why code is the way it is.")}${unavailable({ why: d.error })}`;
-  const tag = f => tagHtml(f.level === "high" ? "Fix-prone" : "Watch", f.level === "high" ? "bad" : "warn");
-  const row = f => `<li><div class="grow"><div class="title">${tag(f)} <a class="mono" href="#insights/${encodeURIComponent(f.path)}">${esc(f.path)}</a>${f.trend === "rising" ? ` ${tagHtml("fixes rising", "warn")}` : ""}</div>
-    <div class="meta">${esc(f.reasons.join(" · "))}${f.tests.length ? ` · tested by <span class="mono">${esc(f.tests.slice(0, 2).join(", "))}</span>` : ""}</div>
-    ${f.recent_fixes.length ? `<details class="more"><summary class="small">Recent fixes</summary><ul class="small">${f.recent_fixes.map(x => `<li><span class="mono muted">${esc(x.date)}</span> ${esc(x.subject)}</li>`).join("")}</ul></details>` : ""}</div></li>`;
-  const areas = (d.areas || []).map(a => `<tr><td class="mono">${esc(a.area)}</td><td>${n(a.fixes)}</td><td>${n(a.changes)}</td><td>${n(a.files)}</td><td>${a.trend === "rising" ? tagHtml("rising", "warn") : a.trend === "falling" ? tagHtml("falling", "ok") : '<span class="muted">steady</span>'}</td></tr>`).join("");
-  const hot = `<p class="muted small">From ${plural(d.commits, "commit")} in the last ${d.days} days. Fixes are commits whose message says they fixed something; generated files are left out. Click a file to see why it's there.</p>
-    ${d.files.length ? `<ul class="items box">${d.files.map(row).join("")}</ul>` : empty("Nothing stands out", "No file changed twice or more in this window.")}
-    ${areas ? `<div class="k mt">By folder</div><div class="box"><table><thead><tr><th>Folder</th><th>Fixes</th><th>Changes</th><th>Files</th><th>Trend (last ${d.half} days)</th></tr></thead><tbody>${areas}</tbody></table></div>` : ""}`;
-  const why = `<div class="row wrap ins-pick"><input type="search" id="ins-file" list="ins-files" placeholder="A file in this project, e.g. src/app.py" value="${esc(file)}" autocomplete="off"><datalist id="ins-files"></datalist>
-    <input type="text" id="ins-lines" placeholder="Lines, e.g. 40-60 (optional)" size="18"><button class="btn primary" id="ins-go">Why is this here?</button></div><div id="ins-why"></div>`;
-  return `${head("Insights", "Where this project keeps breaking, and why code is the way it is. From git history only; nothing leaves this computer.")}
-    ${tabs("insights", [["hot", "Hotspots", d.files.length || null, () => hot], ["why", "Why is this here", null, () => why]])}`;
-};
-function insightWhy(d) {
-  if (d.error) return `<p class="muted">${esc(d.error)}</p>`;
-  if (!d.commits.length) return '<p class="muted">No commits found for that.</p>';
-  return `<p class="muted small">${plural(d.commits.length, "commit")} shaped ${esc(d.path)}${d.start ? `, lines ${d.start}-${d.end}` : ""}, newest first · ${plural(d.authors, "author")}${d.fixes ? ` · ${n(d.fixes)} ${d.fixes === 1 ? "fix" : "fixes"}` : ""}</p>
-    <ul class="items box">${d.commits.map(c => `<li><div class="grow"><div class="title">${c.fix ? tagHtml("fix", "warn") + " " : ""}${esc(c.subject)}</div>
-      <div class="meta">${c.url ? `<a class="mono" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.sha.slice(0, 8))} ↗</a>` : `<span class="mono">${esc(c.sha.slice(0, 8))}</span>`} · ${esc(c.author)} · ${esc(c.date)}${c.refs.map(r => ` · ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.label)} ↗</a>` : esc(r.label)}`).join("")}</div>
-      ${c.body ? `<details class="more"><summary class="small">The full message</summary><div class="pre-wrap small">${esc(c.body)}</div></details>` : ""}</div></li>`).join("")}</ul>`;
-}
-function wireInsights(root) {
-  const go = async () => {
-    const f = $("#ins-file", root), box = $("#ins-why", root);
-    if (!f || !box || !f.value.trim()) return;
-    const [s, e] = ($("#ins-lines", root).value.match(/\d+/g) || []);
-    box.innerHTML = '<div class="skeleton"></div>';
-    box.innerHTML = insightWhy(await api("insight_why", { file: f.value.trim(), ...(s ? { start: s, end: e || s } : {}) }));
-  };
-  const mount = () => {
-    const f = $("#ins-file", root);
-    if (!f || f.dataset.wired) return;
-    f.dataset.wired = "1";
-    let t;
-    f.oninput = () => { clearTimeout(t); t = setTimeout(async () => { const r = await api("insight_files", { q: f.value.trim() }); $("#ins-files", root).innerHTML = (r.files || []).map(x => `<option value="${esc(x)}">`).join(""); }, 200); };
-    f.onkeydown = e => { if (e.key === "Enter") go(); };
-    $("#ins-lines", root).onkeydown = e => { if (e.key === "Enter") go(); };
-    $("#ins-go", root).onclick = go;
-    if (f.value) go();
-  };
-  mount();
-  $$('[data-tabs="insights"] .tab', root).forEach(t => t.addEventListener("click", () => setTimeout(mount, 0)));
-}
 
 /* Local SonarQube: what SonarCloud would flag, found before you push */
 function sonarTab(q) {
@@ -1507,7 +2258,7 @@ PAGES.checks = async () => {
   for (const d of [r, s]) if (d.available === false) return unavailable(d);
   const last = s.secure[0], ship = s.shipcheck[0], rev = r.verdicts[0];
   const open = r.findings.filter(f => !f.feedback);
-  const sum = `<div class="cols">${stat("Latest code review", rev ? say(rev.verdict)[0] : "None yet", rev ? plural(rev.findings, "finding") : "run <code>/lfg:expert</code>")}${stat("Latest security check", last ? say(last.verdict)[0] : "None yet", last ? (last.blocking ? `${plural(last.blocking, "problem")} to fix` : "nothing blocking") : "run <code>/lfg:secure</code>")}${stat("Latest ship check", ship ? (ship.pass ? "Passed" : "Failed") : "None yet", ship ? `${ship.ok} of ${ship.total} checks passed${(ship.manual || []).length ? ` · ${ship.manual.length} for you to do` : ""}` : "run <code>/lfg:ship</code>")}</div>`;
+  const sum = `<div class="cols">${stat("Latest code review", rev ? say(rev.verdict)[0] : "None yet", rev ? plural(rev.findings, "finding") : "run <code>/lfg:review-coach</code>")}${stat("Latest security check", last ? say(last.verdict)[0] : "None yet", last ? (last.blocking ? `${plural(last.blocking, "problem")} to fix` : "nothing blocking") : "run <code>/lfg:secure</code>")}${stat("Latest ship check", ship ? (ship.pass ? "Passed" : "Failed") : "None yet", ship ? `${ship.ok} of ${ship.total} checks passed${(ship.manual || []).length ? ` · ${ship.manual.length} for you to do` : ""}` : "run <code>/lfg:ship</code>")}</div>`;
   const sevSort = { blocker: 0, critical: 0, high: 1, major: 1, medium: 2, minor: 3, low: 3, nit: 4 };
   return `${head("Checks", "What the code reviews and security checks found, and the actions LFG stopped to keep your work safe.")}
     ${sum}
@@ -1515,7 +2266,7 @@ PAGES.checks = async () => {
       ["review", "Review findings", r.findings.length, () => `<div class="box">${table(r.findings, [
         { k: "severity", label: "How serious", html: x => st(x.severity), sort: x => -(sevSort[String(x.severity).toLowerCase()] ?? 5) },
         { k: "message", label: "Finding", html: x => `${txt(x.title || x.finding || x.message || x.id)}${x.fix ? `<div class="sub clamp">What to do: ${txt(x.fix)}</div>` : ""}${x.file ? `<div class="sub mono">${esc(x.file)}${x.line ? ":" + esc(x.line) : ""}</div>` : ""}<div class="sub">from <a href="#runs/${encodeURIComponent(x.run)}">${esc(runName({ slug: String(x.run || "").slice(14) }))}</a></div>` },
-        { k: "feedback", label: "Your call", html: x => st(x.feedback, "not decided") }], { onRow: x => openDrawer("Review finding", `<div class="readable">${findingCard(x)}</div>`), emptyTitle: "No findings", emptyBody: "Run <code>/lfg:expert</code> on a change." })}</div>${open.length ? `<p class="muted small">Record your call with <code>lfg feedback add &lt;id&gt; accept|reject</code>.</p>` : ""}`],
+        { k: "feedback", label: "Your call", html: x => st(x.feedback, "not decided") }], { onRow: x => openDrawer("Review finding", `<div class="readable">${findingCard(x)}</div>`), emptyTitle: "No findings", emptyBody: "Run <code>/lfg:review-coach</code> on a change." })}</div>${open.length ? `<p class="muted small">Record your call with <code>lfg feedback add &lt;id&gt; accept|reject</code>.</p>` : ""}`],
       ["security", "Security checks", s.secure.length, () => `<div class="box">${table(s.secure, [
         { k: "verdict", label: "Result", html: x => st(x.verdict) },
         { k: "blocking", label: "Problems to fix", num: true },
@@ -1545,7 +2296,6 @@ PAGES.code = async () => {
     summary = `${n(c.nodes.File)} code files, ${n((c.nodes.Function || 0) + (c.nodes.Class || 0))} functions and classes; code-review-graph links ${cov}% of them to a test.`;
   }
   const risky = c.available !== false ? (c.hotspots || []).slice(0, 10) : [];
-  const areas = a.available !== false ? a.community_list.slice(0, 12) : [];
   const notes = a.available !== false ? a.rationale : [];
   return `${head("Code", `LFG keeps a map of this project so agents read only the parts that matter. ${summary}`)}
     ${mapRow}
@@ -1553,9 +2303,7 @@ PAGES.code = async () => {
       { k: "symbol", label: "Code", html: r => `${esc(r.symbol)}<div class="sub">${esc(r.file)}</div>` },
       { k: "callers", label: "Used by", num: true, html: r => plural(r.callers, "place") },
       { k: "coverage", label: "Tested", html: r => (r.coverage === "tested" ? `${dot("ok")} Yes` : `${dot("warn")} No`) }], { filter: false })}</div>`, "used in many places, so a change here reaches far") : ""}
-    ${areas.length ? section("Main parts of the code", `<div class="box"><ul class="list">${areas.map(x => `<li><div class="grow"><div class="title">${esc(x.name)}</div><div class="meta">${esc((x.files || []).slice(0, 3).join(" · "))}</div></div></li>`).join("")}</ul></div>`) : ""}
-    ${notes.length ? section("Why the code is the way it is", `<div class="box">${table(notes, [{ k: "note", label: "Explanation" }, { k: "file", label: "Where", html: r => `<span class="small muted mono nowrap">${esc(r.file + (r.line ? ":" + r.line : ""))}</span>` }])}</div>`, `docstrings and WHY / NOTE / HACK comments${a.rationale_total > notes.length ? `, first ${notes.length} of ${n(a.rationale_total)}` : ""}`) : ""}
-    ${section("Explore", `<div class="row"><button class="btn" data-view="architecture" data-target="explore">Map of the code</button><button class="btn" data-view="callflow" data-target="explore">How calls flow</button><button class="btn" data-view="code" data-target="explore">Detailed code graph</button><button class="btn" data-view="health" data-target="explore">Health report</button></div><div id="explore"></div>`)}`;
+    ${notes.length ? section("Why the code is the way it is", `<div class="box">${table(notes, [{ k: "note", label: "Explanation" }, { k: "file", label: "Where", html: r => `<span class="small muted mono nowrap">${esc(r.file + (r.line ? ":" + r.line : ""))}</span>` }])}</div>`, `docstrings and WHY / NOTE / HACK comments${a.rationale_total > notes.length ? `, first ${notes.length} of ${n(a.rationale_total)}` : ""}`) : ""}`;
 };
 
 /* Docs: a tree. Project docs (LFG's wiki, glossary, decisions, guides you asked for) at the root, then one folder
@@ -1566,34 +2314,77 @@ PAGES.docs = async arg => {
   const parts = (arg || "").split("/");
   let src = parts[0], path = decodeURIComponent(parts.slice(1).join("/"));
   const all = t => t.items.concat(...t.folders.map(f => f.items));
-  const every = all(d.root).concat(...d.branches.map(all));
-  if (!src && every.length) {
-    const cur = d.branches.find(b => b.name === state.branch);
-    const pick = (d.root.folders[0] || {}).items?.[0] || (cur && all(cur)[0]) || every[0];
-    src = pick.src; path = pick.path;
-  }
+  if (!src) { const pick = (d.intro || [])[0] || (d.views || [])[0] || all(d.root)[0]; if (pick) { src = pick.src; path = pick.path; } }
   const on = it => it.src === src && it.path === path;
-  const link = it => `<a href="#docs/${esc(it.src)}/${encodeURIComponent(it.path)}" class="${on(it) ? "on" : ""}" title="${esc(it.title)}">${esc(it.title)}</a>`;
-  const folder = (name, items, tag, open) => `<details class="doc-folder"${open || items.some(on) ? " open" : ""}><summary>${icon("folder")}<span class="grow">${esc(name)}</span>${tag || ""}<span class="count">${items.length}</span></summary>${items.map(link).join("")}</details>`;
-  const fold = (f, openAuto) => folder(f.name, f.items, f.generated ? '<span class="tag" title="Written by LFG from the code map">auto</span>' : "", openAuto && f.generated);
-  const tree = (t, openAuto) => t.folders.filter(f => f.generated).map(f => fold(f, openAuto)).join("") + t.items.map(link).join("") + t.folders.filter(f => !f.generated).map(f => fold(f)).join("");
+  const link = (it, ico) => `<a href="#docs/${esc(it.src)}/${encodeURIComponent(it.path)}" class="${on(it) ? "on" : ""}" title="${esc(it.title)}">${ico ? icon(ico) : ""}${esc(it.title)}</a>`;
+  const folder = (name, items, tag, open) => `<details class="doc-folder"${open || items.some(on) ? " open" : ""}><summary>${icon("folder")}<span class="grow">${esc(name)}</span>${tag || ""}<span class="count">${items.length}</span></summary>${items.map(x => link(x)).join("")}</details>`;
   const STATE = { current: "current", default: "default", merged: "merged", deleted: "deleted" };
-  const rootHtml = tree(d.root, true);
-  const branchHtml = d.branches.map(b => folder(b.name, all(b), b.state ? `<span class="tag${b.state === "current" ? " blue" : ""}">${STATE[b.state]}</span>` : "", b.name === state.branch || b.state === "current")).join("");
-  const nav = `<div class="grp"><span>Project</span></div>${rootHtml || '<p class="meta small pad">Nothing yet.</p>'}
-    <div class="grp"><span>Branches</span></div>${branchHtml || '<p class="meta small pad">No branch docs yet.</p>'}`;
-  const how = `<p>Ask Claude in a repo where LFG is on, for example <i>"write a doc explaining how billing retries work"</i>. Docs about the whole project go to the top; docs about what you're building on a branch (<i>"write up this branch's design"</i>) go in that branch's folder.</p>
-    <p class="meta small">Project: <code>${esc(d.paths.project)}</code><br>Branches: <code>${esc(d.paths.branches)}/&lt;branch&gt;</code></p>`;
-  let body = `<div class="readable">${empty("No docs yet", "LFG's wiki (onboarding tour, landmines, test gaps) appears after the code map is built.")}${how}</div>`;
-  if (src && path) {
+  const mine = all(d.root).length + d.branches.reduce((n, b) => n + all(b).length, 0);
+  const grp = (t, extra) => `<div class="grp"><span>${t}</span>${extra || ""}</div>`;
+  const nav = `${grp("Getting started")}${(d.intro || []).map(x => link(x, "docs")).join("")}
+    ${(d.views || []).length || (d.code || []).length ? grp("Code wiki", '<span class="tag" title="Generated by graphify from the code">graphify</span>') : ""}
+    ${(d.views || []).map(x => link(x, x.path === "callflow" ? "runs" : "code")).join("")}
+    ${(d.code || []).map(x => link(x, "docs")).join("")}
+    ${grp("Your docs")}${mine ? d.root.items.map(x => link(x)).join("") + d.root.folders.map(f => folder(f.name, f.items)).join("") : '<p class="meta small pad">None yet. Write one with <b>New doc</b>.</p>'}
+    ${d.branches.length ? grp("Branches") + d.branches.map(b => folder(b.name, all(b), b.state ? `<span class="tag${b.state === "current" ? " blue" : ""}">${STATE[b.state]}</span>` : "", b.name === state.branch || b.state === "current")).join("") : ""}`;
+  let body;
+  if (src === "new" || src === "edit") body = await docEditor(src === "edit" ? path : "");
+  else if (src === "view") {
+    const v = await api("view", { kind: path });
+    body = v.src ? `<iframe class="viewer tall" src="${esc(v.src)}" title="${esc(path)}" referrerpolicy="no-referrer"></iframe>` : empty("Not built yet", fmtWhy(v.message || ""));
+  } else if (src && path) {
     const doc = await api("doc", { src, path });
-    body = doc.text === "not found" ? empty("Document not found", "") : `<div class="md">${md(doc.text, true)}</div>`;
-  }
-  return `${head("Docs", "LFG's wiki for this project and the docs you asked LFG to write: project-wide at the top, then one folder per branch.")}
-    <div class="docs"><div class="box doc-nav"><div class="table-tools"><input type="search" id="doc-filter" placeholder="Search docs…"></div>${nav}
-    <details class="doc-help"><summary>How to add a doc</summary>${how}</details></div>
+    body = doc.text === "not found" ? empty("Document not found", "") : `${src === "repo" ? `<div class="doc-bar"><span class="tag">${path.startsWith("branches/") ? "Branch doc" : "Project doc"}</span><span class="grow"></span><a class="btn small" href="#docs/edit/${encodeURIComponent(path)}">Edit</a></div>` : src === "gwiki" ? '<div class="doc-bar"><span class="tag">graphify</span><span class="muted small">Written from the code graph; it updates when the code map does.</span></div>' : ""}<div class="md">${md(doc.text, true)}</div>`;
+  } else body = empty("No docs yet", "Write one with New doc.");
+  return `${head("Docs", "Start here, explore the code wiki graphify builds from your code, and keep your own docs in Markdown.")}
+    <div class="docs"><div class="box doc-nav"><div class="doc-tools"><input type="search" id="doc-filter" placeholder="Search docs…"><a class="btn primary small" href="#docs/new">New doc</a></div>${nav}</div>
     <div class="box" id="doc-body" data-src="${esc(src || "")}" data-path="${esc(path || "")}">${body}</div></div>`;
 };
+async function docEditor(path) {
+  let title = "", text = "";
+  if (path) {
+    const doc = await api("doc", { src: "repo", path });
+    text = doc.text === "not found" ? "" : doc.text;
+    const m = /^# (.+)\n+/.exec(text); if (m) { title = m[1]; text = text.slice(m[0].length); }
+  }
+  const br = state.branch && state.branch !== "-" ? state.branch : "";
+  return `<div class="doc-edit"><input type="text" id="de-title" placeholder="Title" value="${esc(title)}" maxlength="140">
+    ${path ? `<p class="muted small">Editing <code>${esc(path)}</code></p>` : `<div class="row"><span class="muted small">Save it to</span><div class="seg" id="de-where"><button class="pill on" data-w="project">Project</button>${br ? `<button class="pill" data-w="branch" title="Docs about the work on this branch">Branch ${esc(br)}</button>` : ""}</div></div>`}
+    <div class="seg de-mode"><button class="pill on" data-m="write">Write</button><button class="pill" data-m="preview">Preview</button></div>
+    <textarea class="editor" id="de-text" placeholder="Write or paste Markdown: # headings, - lists, - [ ] checklists, \`code\`, tables…">${esc(text)}</textarea>
+    <div class="md de-preview" id="de-preview" hidden></div>
+    <div class="set-actions"><button class="btn primary" id="de-save" data-path="${esc(path)}">Save</button><a class="btn" href="#docs${path ? `/repo/${encodeURIComponent(path)}` : ""}">Cancel</a><span class="save-msg" id="de-msg"></span></div></div>`;
+}
+function wireKnowledgeAdd(root) {
+  const b = $("#kn-save", root);
+  if (!b) return;
+  let kind = "note";
+  $$("#kn-kind .pill", root).forEach(p => p.onclick = () => { kind = p.dataset.k; $$("#kn-kind .pill", root).forEach(x => x.classList.toggle("on", x === p)); });
+  b.onclick = async () => {
+    b.disabled = true;
+    const r = await save("knowledge_add", { repo: state.repo, title: $("#kn-title", root).value, text: $("#kn-text", root).value, kind });
+    b.disabled = false;
+    if (r.ok) { sessionStorage.setItem("lfg.tab.know", "mine"); route(); } else saidMsg($("#kn-msg", root), r);
+  };
+}
+function wireDocEditor(root) {
+  const save$ = $("#de-save", root);
+  if (!save$) return;
+  let where = "project";
+  $$("#de-where .pill", root).forEach(b => b.onclick = () => { where = b.dataset.w; $$("#de-where .pill", root).forEach(x => x.classList.toggle("on", x === b)); });
+  $$(".de-mode .pill", root).forEach(b => b.onclick = () => {
+    $$(".de-mode .pill", root).forEach(x => x.classList.toggle("on", x === b));
+    const pv = b.dataset.m === "preview";
+    $("#de-text", root).hidden = pv; $("#de-preview", root).hidden = !pv;
+    if (pv) $("#de-preview", root).innerHTML = md(`# ${$("#de-title", root).value || "Untitled"}\n\n${$("#de-text", root).value}`);
+  });
+  save$.onclick = async () => {
+    save$.disabled = true;
+    const r = await save("doc_save", { repo: state.repo, title: $("#de-title", root).value, text: $("#de-text", root).value, where, branch: state.branch, path: save$.dataset.path });
+    save$.disabled = false;
+    if (r.ok) location.hash = `#docs/repo/${encodeURIComponent(r.path)}`; else saidMsg($("#de-msg", root), r);
+  };
+}
 
 /* Knowledge: what LFG has saved, each item with a repo, a feature and a topic, fuzzy search and Ask. */
 const KINDS = {
@@ -2222,6 +3013,112 @@ function addRows(rs, keys) {
 // small tags and status pills (SonarQube, Checks)
 const tagHtml = (t, tone) => `<span class="tg ${tone || ""}">${esc(t)}</span>`;
 const pill = (t, tone) => `<span class="st"><span class="dot ${tone}"></span>${esc(t)}</span>`;
+const FIX_SAY = { working: ["AI fixing", "on"], fixed: ["Fixed", "ok"], skipped: ["AI skipped it", ""], failed: ["Fix failed", "bad"] };
+/* The Diff tab: the pull request's diff, GitHub style. Drag down the line numbers (or click one, then shift-click
+   another) to select lines, even across removed and added ones, and ask the AI about them; it answers in a thread
+   under them and you go back and forth. All local: nothing goes to GitHub. */
+const DF_ICON = { added: ["+", "add"], deleted: ["−", "del"], renamed: ["→", "ren"], modified: ["•", "mod"] };
+const rowKey = l => l.new != null ? `R${l.new}` : `L${l.old}`;
+const keyLabel = (a, b) => a === b ? `line ${a}` : `lines ${a} to ${b}`;
+let dfPoll = null;
+
+const n_ = v => Number(v || 0).toLocaleString();
+
+/* The file list as folders, single-child folders joined into one path the way GitHub shows them */
+function diffTree(files, byFile) {
+  const root = { dirs: {}, files: [] };
+  files.forEach((f, i) => { let node = root; const parts = f.path.split("/"); parts.slice(0, -1).forEach(p => { node = node.dirs[p] = node.dirs[p] || { dirs: {}, files: [] }; }); node.files.push([parts[parts.length - 1], f, i]); });
+  const shut = new Set(state.dfOpen.shut || []);
+  const walk = (node, depth, prefix) => Object.keys(node.dirs).sort().map(name => {
+    let label = name, cur = node.dirs[name], path = prefix + name;
+    while (!cur.files.length && Object.keys(cur.dirs).length === 1) { const k = Object.keys(cur.dirs)[0]; label += "/" + k; path += "/" + k; cur = cur.dirs[k]; }
+    return `<div class="df-dir${shut.has(path) ? " shut" : ""}" data-dir="${esc(path)}"><a href="#" class="df-row" style="--d:${depth}" data-df-dir><span class="df-chev">${icon("chev")}</span>${icon("folder")}<span class="df-name">${esc(label)}</span></a><div class="df-kids">${walk(cur, depth + 1, path + "/")}${leaves(cur, depth + 1)}</div></div>`;
+  }).join("");
+  const leaves = (node, depth) => node.files.sort((a, b) => a[0].localeCompare(b[0])).map(([name, f, i]) => {
+    const [g, cls] = DF_ICON[f.status] || DF_ICON.modified, th = byFile[f.path] || [];
+    return `<a href="#" class="df-row df-leaf" style="--d:${depth}" data-df-goto="${i}" data-name="${esc(f.path.toLowerCase())}" title="${esc(f.path)}"><span class="df-st ${cls}">${g}</span><span class="df-name">${esc(name)}</span>${th.length ? `<span class="df-cnt" title="${plural(th.length, "thread")}">${icon("review")}${th.length}</span>` : ""}</a>`;
+  }).join("");
+  return walk(root, 0, "") + leaves(root, 0);
+}
+
+/* Light syntax colouring for the Diff tab, like GitHub's: comments in a lighter grey, strings in blue. Comment
+   syntax comes from the file's extension; strings are read so a "//" inside "http://..." isn't taken for a comment.
+   `st` carries an open block comment from one line to the next. */
+const HL_LANG = (() => {
+  const c = { line: ["//"], block: [["/*", "*/"]], q: "\"'`" }, hash = { line: ["#"], block: [], q: "\"'" }, sql = { line: ["--"], block: [["/*", "*/"]], q: "'\"" };
+  const xml = { line: [], block: [["<!--", "-->"]], q: "\"" }, prose = { line: [], block: [["<!--", "-->"]], q: "" };
+  const ps = { line: ["#"], block: [["<#", "#>"]], q: "\"'" }, lua = { line: ["--"], block: [], q: "\"'" };
+  const m = {};
+  "js jsx ts tsx mjs cjs go java kt kts c h cc cpp hpp cs swift rs scala dart php css scss less proto groovy gradle".split(" ").forEach(e => m[e] = c);
+  "py sh bash zsh rb yml yaml toml r pl conf ini env tf hcl dockerfile makefile mk cmake nix".split(" ").forEach(e => m[e] = hash);
+  "sql".split(" ").forEach(e => m[e] = sql); "lua".split(" ").forEach(e => m[e] = lua);
+  "html htm xml wxs wxi svg vue xaml csproj props targets".split(" ").forEach(e => m[e] = xml);
+  "md mdx markdown txt".split(" ").forEach(e => m[e] = prose);  // prose: an apostrophe isn't a string
+  "ps1 psm1 psd1".split(" ").forEach(e => m[e] = ps);
+  return m;
+})();
+const hlLang = path => { const base = path.split("/").pop().toLowerCase(), ext = base.includes(".") ? base.split(".").pop() : base; return HL_LANG[ext] || null; };
+function hlLine(text, lang, st) {
+  if (!lang) return esc(text);
+  let out = "", i = 0, buf = "";
+  const flush = () => { if (buf) { out += esc(buf); buf = ""; } };
+  const span = (cls, s) => { flush(); out += `<span class="${cls}">${esc(s)}</span>`; };
+  while (i < text.length) {
+    if (st.block) {  // inside a comment that started on an earlier line
+      const end = text.indexOf(st.block, i);
+      if (end < 0) { span("tk-c", text.slice(i)); return out; }
+      span("tk-c", text.slice(i, end + st.block.length)); i = end + st.block.length; st.block = null; continue;
+    }
+    const ch = text[i];
+    if (lang.q.includes(ch)) {
+      let j = i + 1;
+      while (j < text.length && text[j] !== ch) j += text[j] === "\\" ? 2 : 1;
+      span("tk-s", text.slice(i, j + 1)); i = j + 1; continue;
+    }
+    const lc = lang.line.find(t => text.startsWith(t, i) && (t !== "#" || !/[\w$]/.test(text[i - 1] || "")));
+    const bc = lang.block.find(([a]) => text.startsWith(a, i));
+    if (bc) { st.block = bc[1]; span("tk-c", bc[0]); i += bc[0].length; continue; }
+    if (lc) { span("tk-c", text.slice(i)); return out; }
+    buf += ch; i++;
+  }
+  flush();
+  return out;
+}
+
+function diffFile(f, i, threads, open) {
+  const [g, cls] = DF_ICON[f.status] || DF_ICON.modified;
+  const keys = new Set(f.hunks.flatMap(h => h.lines.map(rowKey)));
+  const at = {}, loose = [];
+  threads.forEach(t => t.outdated || !keys.has(t.end) ? loose.push(t) : (at[t.end] = at[t.end] || []).push(t));
+  const lang = hlLang(f.path);
+  let st = { block: null };  // block comments carry over within a hunk
+  const row = l => {
+    const k = rowKey(l);
+    return `<tr class="df-l ${l.t === "+" ? "add" : l.t === "-" ? "del" : ""}" data-k="${k}"><td class="df-n" data-df-pick>${l.old ?? ""}</td><td class="df-n" data-df-pick>${l.new ?? ""}<button class="df-plus" data-df-pick tabindex="-1" aria-label="Ask the AI about this line">+</button></td><td class="df-s">${l.t === " " ? "" : l.t}</td><td class="df-c">${hlLine(l.text, lang, st) || " "}</td></tr>${(at[k] || []).map(t => `<tr class="df-trow"><td colspan="4">${diffThread(t)}</td></tr>`).join("")}`;
+  };
+  const body = f.binary ? `<p class="muted small df-pad">Binary file: no lines to show.</p>` : f.too_big ? `<p class="muted small df-pad">This file's diff is too big to show here (${n_(f.additions)} added, ${n_(f.deletions)} removed).</p>`
+    : `<table class="df-t" data-path="${esc(f.path)}"><colgroup><col class="c-n"><col class="c-n"><col class="c-s"><col></colgroup><tbody>${f.hunks.map(h => { st = { block: null }; return `<tr class="df-h"><td colspan="2"></td><td colspan="2">${esc(h.header)}</td></tr>${h.lines.map(row).join("")}`; }).join("")}</tbody></table>`;
+  return `<details class="df-file" id="df-f${i}" data-path="${esc(f.path)}"${open ? " open" : ""}><summary><span class="df-chev">${icon("chev")}</span><span class="df-st ${cls}">${g}</span><span class="df-path">${esc(f.status === "renamed" && f.old_path ? `${f.old_path} → ${f.path}` : f.path)}</span>${threads.length ? `<span class="df-cnt">${icon("review")}${threads.length}</span>` : ""}<span class="grow"></span><span class="small"><span class="add">+${f.additions}</span> <span class="del">−${f.deletions}</span></span></summary>
+    ${loose.length ? `<div class="df-loose">${loose.map(diffThread).join("")}</div>` : ""}${body}</details>`;
+}
+
+/* An AI thread on some diff lines: a review conversation, one row per message (avatar, who and when, then the text) */
+const avMe = () => `<span class="th-av me" aria-hidden="true">You</span>`;
+const avAi = () => `<span class="th-av ai" aria-hidden="true">${logoSvg(28)}</span>`;
+function diffThread(t) {
+  const where = keyLabel(t.start, t.end);
+  if (t.resolved) return `<div class="th resolved" data-th="${esc(t.id)}"><span class="tag ok">Resolved</span><span class="muted small">${esc(where)} · ${plural(t.messages.length, "message")}</span><span class="grow"></span><button class="btn small" data-th-act="reopen">Show</button></div>`;
+  const answers = t.messages.filter(m => m.role === "ai" && !m.error), spent = answers.reduce((a, m) => a + (m.cost || 0), 0);
+  const cost = c => c ? `<span class="th-cost" title="What this answer cost">${c < 0.01 ? "&lt;$0.01" : usd(c)}</span>` : "";
+  const msgs = t.messages.map(m => m.role === "me"
+    ? `<div class="th-m">${avMe()}<div class="th-c"><div class="th-who"><b>You</b>${m.ts ? `<span>${ago(m.ts)}</span>` : ""}</div><div class="th-text">${esc(m.text)}</div></div></div>`
+    : `<div class="th-m${m.error ? " bad" : ""}">${avAi()}<div class="th-c"><div class="th-who"><b>LFG</b><span class="tag blue">AI</span>${m.error ? '<span class="tag bad">didn\'t answer</span>' : ""}${m.ts ? `<span>${ago(m.ts)}</span>` : ""}${VIA_SAY[m.via] ? `<span>${VIA_SAY[m.via]}</span>` : ""}${cost(m.cost)}</div><div class="md th-text">${md(m.text)}</div></div></div>`).join("");
+  return `<div class="th" data-th="${esc(t.id)}"><div class="th-h"><span class="th-lines">${icon("review")}${esc(where.charAt(0).toUpperCase() + where.slice(1))}</span>${t.outdated ? tagHtml("outdated", "warn") : ""}${answers.length ? `<span class="muted small">${plural(answers.length, "answer")}${spent ? ` · ${usd(spent)}` : ""}</span>` : ""}<span class="grow"></span><button class="btn small" data-th-act="resolve"${t.job ? " disabled" : ""}>Resolve</button><button class="icon-btn" data-th-act="delete" title="Delete this thread" aria-label="Delete this thread">&times;</button></div>
+    <div class="th-list">${msgs}${t.job ? `<div class="th-m" data-df-working>${avAi()}<div class="th-c"><div class="th-who"><b>LFG</b><span class="tag blue">AI</span></div><div class="th-text muted"><span class="spin"></span> Reading the diff and its callers…</div></div></div>` : ""}</div>
+    <div class="th-reply df-reply"><textarea rows="1" placeholder="${t.job ? "Wait for the answer…" : "Reply or ask a follow-up"}"${t.job ? " disabled" : ""}></textarea><button class="btn primary small" data-th-reply${t.job ? " disabled" : ""}>Reply</button></div></div>`;
+}
+
+
 /* Did Claude use LFG in this repo's replies? From each reply's **LFG:** line, recorded by the Stop hook. */
 function lfgReplies(r) {
   const c = (r || {}).counts || {}, total = Object.values(c).reduce((a, x) => a + x, 0);
@@ -2232,6 +3129,133 @@ function lfgReplies(r) {
 }
 
 PAGES.integrations = integrationsPage;
+
+/* Todos: one list across every project, each todo to do, in progress, cancelled or done. A todo becomes a Linear
+   ticket only from its Create Linear ticket button, after you confirm the exact text; it is then tagged with the
+   issue's id, linked to Linear. */
+const TD_SAY = { todo: "To do", in_progress: "In progress", cancelled: "Cancelled", done: "Done" };
+let tdPoll = null;
+PAGES.todos = async () => {
+  const d = await api("todos");
+  if (d.available === false) return unavailable(d);
+  state.todos = d;
+  const of = st => d.todos.filter(t => t.status === st);
+  const lin = t => t.linear && t.linear.key ? `<a class="tg on td-lin" href="${esc(t.linear.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(t.linear.key)} in Linear${t.linear.project ? ` · ${esc(t.linear.project)}` : ""}${t.linear.assignee ? ` · ${esc(t.linear.assignee === "me" ? "you" : t.linear.assignee)}` : ""}">${esc(t.linear.key)} ↗</a>`
+    : t.linear_job ? `<span class="tg td-lin" data-td-creating><span class="spin"></span>Creating Linear ticket…</span>`
+    : t.linear_error ? `<span class="td-err small" title="${esc(t.linear_error)}">Linear ticket not created: ${fmtWhy(t.linear_error)}</span>` : "";
+  const row = t => `<div class="td st-${t.status}" data-td="${esc(t.id)}">
+      <select class="td-st" data-td-status aria-label="Status">${d.statuses.map(k => `<option value="${k}"${k === t.status ? " selected" : ""}>${TD_SAY[k]}</option>`).join("")}</select>
+      <div class="grow td-main"><div class="td-text" contenteditable="plaintext-only" spellcheck="true" data-td-text>${esc(t.text)}</div>
+        <div class="td-m">${lin(t)}${t.repo ? `<span class="tag">${icon("folder")}${esc(repoName(t.repo))}</span>` : ""}<span class="td-when">${ago(t.status_at || t.created)}</span>${t.notes ? `<span class="muted small" title="${esc(t.notes)}">· notes</span>` : ""}</div></div>
+      <span class="td-a">${t.linear && t.linear.key || t.linear_job ? "" : `<button class="btn small" data-td-linear>${t.linear_error ? "Try again" : "Create Linear ticket"}</button>`}<button class="icon-btn" data-td-more title="Notes and more" aria-label="Notes and more">⋯</button></span></div>`;
+  const group = (st, open) => { const xs = of(st); if (!xs.length) return ""; const body = `<div class="box td-list">${xs.map(row).join("")}</div>`;
+    return open ? section(TD_SAY[st], body, `<span class="tag">${xs.length}</span>`) : `<details class="td-fold"><summary>${TD_SAY[st]} <span class="tag">${xs.length}</span></summary>${body}</details>`; };
+  const active = d.counts.todo + d.counts.in_progress;
+  return `${head("Todos", "Things to do, across all your projects. Make any of them a Linear ticket when it needs one.")}
+    <form class="td-add" data-td-add><span class="td-add-ico">${icon("plus")}</span><input type="text" id="td-new" placeholder="Add a todo and press Enter" maxlength="300" autocomplete="off"><button class="btn primary">Add</button></form>
+    ${group("in_progress", true)}${group("todo", true)}${active ? "" : `<div class="box">${empty("Nothing to do", "Add one above. It's tagged with the project you're in.")}</div>`}
+    ${group("done", false)}${group("cancelled", false)}`;
+};
+
+function wireTodos(root) {
+  const d = state.todos;
+  clearTimeout(tdPoll);
+  if (!d || !d.todos) return;
+  const byId = Object.fromEntries(d.todos.map(t => [t.id, t]));
+  const act = async (what, body) => { const r = await save(what, body); if (!r.ok) alert(String(r.why || "That didn't work.").replace(/`/g, "")); return r; };
+  const reload = () => route({ soft: true });
+  const form = $("[data-td-add]", root);
+  if (form) form.onsubmit = async e => { e.preventDefault(); const i = $("#td-new", root); if (!i.value.trim()) return; const r = await act("todo_add", { text: i.value, repo: state.repo }); if (r.ok) { i.value = ""; await reload(); const n = $("#td-new"); if (n) n.focus(); } };
+  $$(".td", root).forEach(el => {
+    const t = byId[el.dataset.td];
+    const st = $("[data-td-status]", el); if (st) st.onchange = async () => { await act("todo_update", { id: t.id, status: st.value }); reload(); };
+    const tx = $("[data-td-text]", el);
+    if (tx) {
+      tx.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); tx.blur(); } if (e.key === "Escape") { tx.textContent = t.text; tx.blur(); } };
+      tx.onblur = async () => { const v = tx.textContent.replace(/\s+/g, " ").trim(); if (v === t.text) return; if (!v) { tx.textContent = t.text; return; } const r = await act("todo_update", { id: t.id, text: v }); if (r.ok) t.text = v; else tx.textContent = t.text; };
+    }
+    const ln = $("[data-td-linear]", el); if (ln) ln.onclick = () => todoToLinear(t, d.linear);
+    const more = $("[data-td-more]", el); if (more) more.onclick = () => todoMore(t);
+  });
+  if ($("[data-td-creating]", root)) tdPoll = setTimeout(() => { if ((location.hash.slice(1) || "").split("/")[0] === "todos" && !document.activeElement.closest(".td-main, .td-add, #drawer")) reload(); }, 4000);
+}
+
+function todoMore(t) {
+  openDrawer("Todo", `<div class="readable td-sheet"><label>Todo<input type="text" id="td-t" maxlength="300" value="${esc(t.text)}"></label>
+    <label>Status<select id="td-s">${Object.entries(TD_SAY).map(([k, v]) => `<option value="${k}"${k === t.status ? " selected" : ""}>${v}</option>`).join("")}</select></label>
+    <label>Notes<textarea id="td-n" rows="6" placeholder="Anything worth keeping with it">${esc(t.notes || "")}</textarea></label>
+    <p class="muted small">${t.repo ? `From ${esc(repoName(t.repo))} · ` : ""}added ${ago(t.created)}${t.linear && t.linear.key ? ` · Linear <a href="${esc(t.linear.url)}" target="_blank" rel="noopener noreferrer">${esc(t.linear.key)} ↗</a>` : ""}</p>
+    <p class="row"><button class="btn primary" id="td-save">Save</button><span class="grow"></span><button class="btn small bad" id="td-del">Delete</button></p></div>`);
+  $("#td-save").onclick = async () => { const r = await save("todo_update", { id: t.id, text: $("#td-t").value, notes: $("#td-n").value, status: $("#td-s").value }); if (!r.ok) return alert(String(r.why || "Not saved.")); closeDrawer(); route({ soft: true }); };
+  $("#td-del").onclick = async () => { if (!confirm(`Delete this todo?\n\n${t.text}${t.linear && t.linear.key ? `\n\n(${t.linear.key} stays in Linear.)` : ""}`)) return; const r = await save("todo_delete", { id: t.id }); if (!r.ok) return alert(String(r.why || "Not deleted.")); closeDrawer(); route({ soft: true }); };
+}
+
+/* Create Linear ticket: you check the exact title and description and pick the team, project and assignee from
+   Linear's own lists (fetched read-only, kept a day); only then is one issue created, and the todo is tagged with
+   its id and linked to it. */
+let tlPoll = null;
+async function todoToLinear(t, lin) {
+  const desc = [t.notes || "", t.repo ? `Repo: ${repoName(t.repo)}` : ""].filter(Boolean).join("\n\n");
+  openDrawer("Create Linear ticket", `<div class="readable td-sheet">
+    <p class="row small" id="tl-draft"><span class="spin"></span><span class="grow">Writing the ticket with your <code>/linear-ticket</code> skill… Nothing is sent to Linear.</span></p>
+    <label>Title<input type="text" id="tl-t" maxlength="300" value="${esc(t.text)}" disabled></label>
+    <label>Description<textarea id="tl-d" rows="12" placeholder="Optional" disabled>${esc(desc)}</textarea></label>
+    <div id="tl-opts"><p class="muted small"><span class="spin"></span> Getting your Linear teams, projects and people…</p></div>
+    ${t.linear_error ? `<p class="td-err small">Last try: ${fmtWhy(t.linear_error)}</p>` : ""}
+    <p class="muted small">Creates this one issue in Linear, exactly as written and picked here. Nothing else in Linear changes.</p>
+    <p class="row"><button class="btn primary" id="tl-go" disabled>Create Linear ticket</button><span class="muted small" id="tl-msg"></span></p></div>`);
+  const box = $("#tl-opts"), go = $("#tl-go");
+  const pick = { team: lin.team || "", project: "", assignee: "" };
+  // the preview: your /linear-ticket skill writes the title and description, you change anything, then Create
+  const ready = { draft: false, opts: false }, canGo = () => { go.disabled = !(ready.draft && ready.opts); };
+  const draft = async () => {
+    const note = $("#tl-draft"), ti = $("#tl-t"), de = $("#tl-d");
+    ready.draft = false; canGo(); ti.disabled = de.disabled = true;
+    note.innerHTML = '<span class="spin"></span><span class="grow">Writing the ticket with your <code>/linear-ticket</code> skill… Nothing is sent to Linear.</span>';
+    const r = await save("todo_draft", { id: t.id }).catch(e => ({ ok: false, why: e.message }));
+    if (!document.body.contains(note)) return;
+    if (r.ok) { ti.value = r.title; de.value = r.description; grow(de); }
+    note.innerHTML = r.ok
+      ? `<span class="grow muted">Written by <code>/${esc(r.skill)}</code>. Check it and change anything before you create it.</span><button class="btn small" data-tl-redraft>Write it again</button>`
+      : `<span class="grow td-err">Couldn't write it with the skill: ${fmtWhy(r.why || "no answer")}. Write it here instead.</span><button class="btn small" data-tl-redraft>Try again</button>`;
+    $("[data-tl-redraft]", note).onclick = draft;
+    ti.disabled = de.disabled = false; ready.draft = true; canGo();
+  };
+  draft();
+  const paint = o => {
+    if (!document.body.contains(box)) return;
+    if (!o.teams.length) {
+      box.innerHTML = o.loading ? `<p class="muted small"><span class="spin"></span> Getting your Linear teams, projects and people…</p>`
+        : `<p class="td-err small">${fmtWhy(o.error || o.why || "Couldn't read Linear.")}</p><p><a href="#" class="small" data-tl-refresh>Try again</a></p>`;
+    } else {
+      if (!o.teams.some(x => x.key === pick.team)) pick.team = (o.teams.find(x => x.key === o.default_team) || o.teams.find(x => !x.retired) || o.teams[0]).key;
+      const projects = o.projects.filter(p => !p.teams.length || p.teams.includes(pick.team));
+      if (!projects.some(p => p.name === pick.project)) pick.project = "";
+      const opt = (v, label, cur) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label)}</option>`;
+      box.innerHTML = `<label>Team<select id="tl-team">${o.teams.map(x => opt(x.key, `${x.name} (${x.key})${x.retired ? " · retired" : ""}`, pick.team)).join("")}</select></label>
+        <label>Project<select id="tl-project">${opt("", "No project", pick.project)}${projects.map(p => opt(p.name, p.name, pick.project)).join("")}</select></label>
+        <label>Assignee<select id="tl-who">${opt("", "Unassigned", pick.assignee)}${opt("me", "Me", pick.assignee)}${o.users.map(u => opt(u.name, u.display && u.display !== u.name ? `${u.name} (${u.display})` : u.name, pick.assignee)).join("")}</select></label>
+        <p class="muted small">${o.loading ? '<span class="spin"></span> Updating from Linear… · ' : o.at ? `From Linear ${ago(new Date(o.at * 1000).toISOString())} · ` : ""}<a href="#" data-tl-refresh>Refresh</a></p>`;
+      $("#tl-team").onchange = e => { pick.team = e.target.value; paint(o); };
+      $("#tl-project").onchange = e => { pick.project = e.target.value; };
+      $("#tl-who").onchange = e => { pick.assignee = e.target.value; };
+    }
+    ready.opts = !!o.teams.length; canGo();
+    const r = $("[data-tl-refresh]", box); if (r) r.onclick = e => { e.preventDefault(); load(true); };
+    clearTimeout(tlPoll);
+    if (o.loading) tlPoll = setTimeout(() => load(false), 3000);
+  };
+  const load = async fresh => paint(await api("linear_options", fresh ? { fresh: "1" } : {}).then(o => Object.assign({ teams: [], projects: [], users: [] }, o)));
+  load(false);
+  go.onclick = async () => {
+    const who = pick.assignee === "me" ? "you" : pick.assignee || "nobody";
+    if (!confirm(`Create this ticket in Linear?\n\n${$("#tl-t").value}\n\nTeam ${pick.team}${pick.project ? ` · project ${pick.project}` : ""} · assigned to ${who}`)) return;
+    go.disabled = true; go.textContent = "Starting…";
+    const r = await save("todo_linear", { id: t.id, title: $("#tl-t").value, description: $("#tl-d").value, team: pick.team, project: pick.project, assignee: pick.assignee });
+    if (!r.ok) { go.disabled = false; go.textContent = "Create Linear ticket"; $("#tl-msg").innerHTML = fmtWhy(r.why || "Not started."); return; }
+    clearTimeout(tlPoll); closeDrawer(); route({ soft: true });
+  };
+}
 
 PAGES.usage = async () => {
   const [d, H] = await Promise.all([api("usage", { days: UR.days > 30 ? 90 : 30 }), api("headroom", { days: UR.days > 30 ? 90 : 30 })]);
@@ -2324,7 +3348,7 @@ PAGES.settings = async () => {
   state.settings = { cfg, sk, cm, unlocked };
   return `${head("Settings", unlocked ? "Changes are checked, refused if they look like a password or key, and backed up." : "")}
     ${unlocked ? "" : lockedNote("make changes")}
-    <div class="section">${tabs("settings", [["claudecode", "Claude Code", null, settingsClaudeCode], ["general", "General", null, settingsGeneral], ["tools", "Connections", null, settingsTools], ["storage", "Disk space", null, settingsStorage], ["rules", "Rules", null, settingsRules], ["claudemd", "Your instructions", null, settingsClaude]])}</div>`;
+    <div class="section">${tabs("settings", [["claudecode", "Claude Code", null, settingsClaudeCode], ["general", "General", null, settingsGeneral], ["tools", "Connections", null, settingsTools], ["storage", "Disk space", null, settingsStorage], ["rules", "Rules", null, settingsRules], ["claudemd", "Your instructions", null, settingsClaude], ["appearance", "Appearance", null, settingsAppearance]])}</div>`;
 };
 
 // ------------------------------------------------------------------ skills: every skill Claude Code loads, from every source
@@ -2336,6 +3360,40 @@ PAGES.skills = async () => {
     ${unlocked ? "" : lockedNote("change skills")}
     <div class="section">${tabs("skillspage", [["all", "All skills", null, () => '<div id="skills-box"><div class="loading">Reading skills…</div></div>'], ["mine", "Your skills & references", null, () => '<div id="mylib-box"><div class="loading">Reading ~/.claude…</div></div>'], ["lfgedit", "Edit LFG skills", null, settingsSkills]])}</div>`;
 };
+async function loadFeatures() {
+  const box = $("#features-section");
+  if (!box) return;
+  const d = await api("onboarding");
+  state.onboardData = d;
+  state.pages = d.pages || NAV.map(p => p[0]);
+  const unlocked = state.settings?.unlocked;
+  const showAllCb = $("#show-all-pages");
+  // Wire show-all-pages toggle
+  if (showAllCb) {
+    showAllCb.checked = d.show_all || false;
+    showAllCb.onchange = async () => {
+      showAllCb.disabled = true;
+      const r = await save("pages_show_all", { on: showAllCb.checked });
+      if (r.ok) applyPages(r);
+      showAllCb.disabled = false;
+    };
+  }
+  // Render all 5 feature toggles, none disabled
+  box.innerHTML = (d.features || []).map(f =>
+    `<label class="row"><input type="checkbox" data-feat="${esc(f.id)}" ${f.enabled ? "checked" : ""} ${!unlocked ? "disabled" : ""}> <div><b>${esc(f.name)}</b><div class="muted small">${esc(f.description)}</div></div></label>`
+  ).join("") + '<span class="save-msg ml" id="feat-msg"></span>';
+  // Wire feature toggles: save immediately on change
+  $$("[data-feat]", box).forEach(cb => {
+    cb.onchange = async () => {
+      cb.disabled = true;
+      const r = await save("feature_toggle", { feature: cb.dataset.feat, enabled: cb.checked });
+      saidMsg($("#feat-msg"), r, r.ok ? "Saved." : "");
+      if (r.ok) applyPages(r);
+      cb.disabled = false;
+    };
+  });
+}
+
 async function loadSkills() {
   const box = $("#skills-box");
   if (!box) return;
@@ -2420,14 +3478,39 @@ async function showSkillText(id) {
   openDrawer(d.invoke, `${fm.meta.description ? `<p class="muted">${txt(fm.meta.description)}</p>` : ""}${d.lfg_name ? '<p class="small">Change it under <b>Edit LFG skills</b>.</p>' : ""}<div class="md">${md(fm.body)}</div>`);
 };
 
+/* Help: how LFG works in three steps, every command grouped by what it's for (read from the plugin, so it's
+   always current), and a few answers. */
+const HELP_GROUPS = [["Build something", ["lfg", "plan", "build", "spike", "wizard"]], ["Fix a problem", ["fix", "why", "health"]],
+  ["Understand the code", ["explain", "explain5", "impact", "map", "research"]], ["Review and ship", ["review-coach", "check", "secure", "pentest", "suggest-tests", "grill", "ship"]],
+  ["Remember and hand off", ["note", "learn", "handoff", "inbox"]], ["Not sure", ["which"]]];
 PAGES.help = async () => {
   const d = await api("guide");
-  return `${head("Help", `New here? Type <code>/lfg:wizard</code> in Claude Code for a guided run, or <code>/lfg:which</code> if you're not sure what to do next. LFG ${esc(d.version)}.`)}
-    ${tabs("help", [
-      ["guide", "Guide", null, () => d.has_guide ? `<iframe class="viewer" src="/guide/guide.html" title="LFG guide" referrerpolicy="no-referrer"></iframe>` : empty("The guide isn't installed", "Re-run <code>bootstrap.sh</code>.")],
-      ["skills", "What you can ask for", d.skills.length, () => `<div class="box">${table(d.skills, [{ k: "name", label: "Command", html: r => `<code>/${esc(r.name)}</code>` }, { k: "description", label: "What it does" }])}</div>`],
-    ])}`;
+  const first = t => { const x = String(t || "").replace(/\s+/g, " ").trim(), m = /^(.{20,220}?[.!?])(\s|$)/.exec(x); return m ? m[1] : x.length <= 200 ? x : x.slice(0, x.lastIndexOf(" ", 190)) + "…"; };
+  const all = (d.skills || []).map(x => ({ cmd: x.name, key: x.name.replace(/^\/lfg:/, ""), what: first(x.description) }));
+  const placed = new Set(), groups = HELP_GROUPS.map(([g, ks]) => [g, ks.map(k => all.find(x => x.key === k)).filter(Boolean)]);
+  groups.forEach(([, xs]) => xs.forEach(x => placed.add(x.key)));
+  const rest = all.filter(x => !placed.has(x.key)); if (rest.length) groups.push(["More", rest]);
+  const step = (n, ico, title, body) => `<div class="box hp-step"><span class="hp-n">${n}</span>${icon(ico)}<b>${title}</b><p>${body}</p></div>`;
+  const qa = (q, a) => `<details class="hp-q"><summary>${q}</summary><p>${a}</p></details>`;
+  return `${head("Help", "LFG takes a change from idea to pull request inside Claude Code. You describe it, review what comes back, and ship.")}
+    ${section("Get started", `<div class="hp-steps">
+      ${step(1, "studio", "Describe the change", `Open <a href="#studio">Studio</a> and write what you want, or type <code>/lfg:lfg</code> and a sentence in Claude Code.`)}
+      ${step(2, "review", "Review the result", `LFG plans, builds, tests and reviews it, and stops to ask you at each checkpoint. Follow along in <a href="#runs">Runs</a>.`)}
+      ${step(3, "runs", "Ship it", `<code>/lfg:ship</code> gets the pull request ready. LFG never commits, pushes or merges; you do.`)}</div>`)}
+    ${section("What you can ask for", `<input type="search" id="hp-find" class="hp-find" placeholder="Search commands" autocomplete="off">
+      ${groups.filter(([, xs]) => xs.length).map(([g, xs]) => `<div class="hp-grp"><h3>${esc(g)}</h3><div class="box"><ul class="list">${xs.map(x => `<li class="click hp-sk" tabindex="0" data-copy-cmd="${esc(x.cmd)}" data-find="${esc((x.cmd + " " + x.what).toLowerCase())}" title="Click to copy"><code>${esc(x.cmd)}</code><span class="grow">${esc(x.what)}</span></li>`).join("")}</ul></div></div>`).join("")}`, "click one to copy it")}
+    ${section("Questions", `<div class="box pad">
+      ${qa("Which command should I use?", "Type <code>/lfg:which</code> and describe your situation; it picks one for you. For a guided first run, use <code>/lfg:wizard</code>.")}
+      ${qa("Where does my work go?", "Everything stays on this computer: LFG keeps its notes in <code>~/.lfg</code> and changes files only in your project. It never commits, pushes, merges or deploys.")}
+      ${qa("How much does it cost?", `<a href="#usage">Usage</a> shows what Claude Code spent, by day, model and project, and what Headroom saved.`)}
+      ${qa("Can I hide pages I don't use?", `Yes: <a href="#onboarding">choose which pages you see</a>.`)}
+      ${qa("How do I get updates?", `The bottom of the sidebar shows your LFG version and tells you when a new one is out; <a href="#settings">Settings</a> can check now.`)}</div>`)}`;
 };
+function wireHelp(root) {
+  const f = $("#hp-find", root);
+  if (f) f.oninput = () => { const q = f.value.trim().toLowerCase(); $$(".hp-sk", root).forEach(li => { li.hidden = !!q && !q.split(/\s+/).every(w => li.dataset.find.includes(w)); }); $$(".hp-grp", root).forEach(g => { g.hidden = !$$(".hp-sk", g).some(li => !li.hidden); }); };
+  $$("[data-copy-cmd]", root).forEach(li => li.onclick = async () => { await navigator.clipboard.writeText(li.dataset.copyCmd + " "); const c = $("code", li), t = c.textContent; c.textContent = "Copied"; setTimeout(() => { c.textContent = t; }, 1000); });
+}
 
 // ------------------------------------------------------------------ shell
 // ------------------------------------------------------------------ PR reviews (lfg review)
@@ -2453,6 +3536,9 @@ function tallyLine(r) {
   if (t.pending) return `<span class="st">${dot("warn")}${plural(t.pending, "finding")} to decide</span>`;
   return `<span class="st">${dot("on")}Ready to post</span>`;
 }
+/* The notes a review was started with: shown on it, and one click puts them in the box for the next review. */
+const NOTES_ON = ' <span class="notes-on" title="The review will also look into your notes">· with your notes</span>';
+const usedNotes = (text, pr, label) => `<div class="pr-used-notes"><div class="row"><b class="small">${esc(label)}</b><span class="grow"></span><button class="btn small" data-pr-notes-again="${esc(pr)}" data-text="${esc(text)}" title="Put these notes in the box for the next review, to change or reuse them">Edit for the next review</button></div><p class="pre-wrap small">${txt(text)}</p></div>`;
 async function prStart(pr, btn) {
   const fresh = btn.dataset.fresh === "1";
   btn.style.minWidth = btn.offsetWidth + "px";  // a shorter label must not pull the buttons beside it left
@@ -2893,8 +3979,9 @@ const chatTurn = (x, pr) => {
   const tag = m ? `<a href="#" class="chip c-blue msg-tag" ${x.qid ? `data-goto-q="${esc(x.qid)}"` : ""} title="${esc(m[1])}">Answer to: ${esc(m[1].length > 60 ? m[1].slice(0, 59) + "…" : m[1])}</a>` : "";
   return chatTurnOf({ ...x, q: m ? m[2] : x.q }, pr, tag);
 };
-const chatImgs = q => (String(q || "").match(/\[image: [^\]\s]+\]/g) || []).length;
-const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(/\s*\[image: [^\]\s]+\]/g, "").trim())}${chatImgs(x.q) ? `<div class="msg-imgs">${plural(chatImgs(x.q), "image")} attached</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
+const CHAT_ATT = /\s*\[(?:image|file): ([^\]\s]+)\]/g;
+const chatFiles = q => [...String(q || "").matchAll(CHAT_ATT)].map(m => m[1].split("/").pop());
+const chatTurnOf = (x, pr, tag) => `<div class="msg you${x.queued ? " queued" : ""}">${tag || ""}<div class="bubble">${txt(String(x.q || "").replace(CHAT_ATT, "").trim())}${chatFiles(x.q).length ? `<div class="msg-imgs">Attached: ${chatFiles(x.q).map(esc).join(", ")}</div>` : ""}</div>${x.queued ? '<div class="msg-at">queued: sends when Claude answers the one before</div>' : x.at ? `<div class="msg-at">${ago(x.at)}</div>` : ""}</div>${x.queued ? "" : x.a == null ? typing(x.session) : `<div class="msg claude"><div class="who">${x.session ? `Session: ${esc(x.session)}` : "Claude"}</div><div class="bubble md">${md(x.a)}</div>${changedChips(x.changed, pr)}</div>`}`;
 const typing = who => '<div class="msg claude"><div class="who">' + (who ? "Session: " + esc(who) : "Claude") + '</div><div class="bubble typing" aria-label="Claude is thinking"><i></i><i></i><i></i></div></div>';
 /* What a reply changed in the review, as chips that jump to the finding. */
 function changedChips(changed, pr) {
@@ -3034,8 +4121,8 @@ function talkPane(pr, p, unlocked, byId) {
       <button class="icon-btn" data-chat-mode="hidden" title="Hide the chat">${icon("M18 6 6 18M6 6l12 12")}</button></div>
     <div class="chat-about"><button class="chip ${f ? "" : "on"}" data-chat-about='${esc(JSON.stringify([pr, ""]))}'>Whole review${count ? ` · ${count}` : ""}</button>${f ? `<span class="chip on" title="${esc(f.title || f.issue || "")}">${esc(f.id)} · ${esc((f.title || f.issue || "").slice(0, 40))}${(f.title || f.issue || "").length > 40 ? "…" : ""}<a href="#" data-chat-about='${esc(JSON.stringify([pr, ""]))}' aria-label="Back to the whole review">×</a></span>` : ""}</div>
     <div class="pr-thread">${turns.length ? turns.map(x => chatTurn(x, pr)).join("") : `<div class="chat-empty">${esc(hint)}</div>`}</div>
-    <div class="pr-compose big"><div class="chat-atts" data-chat-atts></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
-      <div class="pr-compose-bar"><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop or paste an image${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
+    <div class="pr-compose big"><div class="ss-att" data-chat-atts hidden></div><textarea data-grow rows="3" data-pr-chat placeholder="${f ? `Say something about ${esc(f.id)}…` : "Ask, push back, or ask for a change. Start with / for a command or skill."}" ${unlocked ? "" : "disabled"}></textarea>
+      <div class="pr-compose-bar"><button type="button" class="icon-btn ss-clip" data-chat-attach title="Attach files or images. You can also drop them here or paste them." ${unlocked ? "" : "disabled"}>${icon("clip")}</button><input type="file" data-chat-file multiple hidden><span class="muted small grow">Enter to send · Shift+Enter for a new line · drop, paste or attach any file${waiting ? " · more messages queue up" : ""}</span><button class="btn small primary" data-pr-chatgo ${unlocked ? "" : "disabled"}>${waiting ? "Queue" : "Send"}</button></div></div></aside>`;
 }
 /* Copy one finding or earlier comment: short for a person, everything an agent needs to act on it. */
 const copyBtns = (person, agent) => `<button class="btn small" data-copy="${esc(person)}" title="What's wrong, where, and the comment: to paste to a person">Copy</button><button class="btn small" data-copy="${esc(agent)}" title="Everything needed to act on it: file and line, issue, fix, the evidence, the comment and its status">Copy for an agent</button>`;
@@ -3114,12 +4201,13 @@ async function prDetail(arg) {
   if (running || fixing) setTimeout(() => { if (location.hash === `#prs/${arg}`) softRoute(); }, 4000);
   const back = '<a class="back" href="#prs">← All reviews</a>';
   const kindOf = j && (j.fresh ? "review from scratch" : j.re_review ? "re-review" : "review");
-  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}${j.method ? `, following <b>${esc(j.method)}</b>` : ""}${j.model ? ` on ${esc(modelName(j.model))}` : ""}. It shows up below as a new tab when it's done; this updates by itself.${unlocked ? ` <button class="btn small" data-pr-cancel="${esc(pr)}" title="Stop this review and its Claude session; nothing is saved">Cancel</button>` : ""}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>`
+  const jobBox = j && j.status === "running" ? `<div class="callout">${dot("on")}<b>${esc(kindOf[0].toUpperCase() + kindOf.slice(1))} running</b>${(j.with || []).length ? `, together with ${j.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")} in one session${j.ticket ? ` for ${esc(ticketName(j.ticket))}` : ""}` : ""}, started ${ago(j.started)}${j.method ? `, following <b>${esc(j.method)}</b>` : ""}${j.model ? ` on ${esc(modelName(j.model))}` : ""}. It shows up below as a new tab when it's done; this updates by itself.${unlocked ? ` <button class="btn small" data-pr-cancel="${esc(pr)}" title="Stop this review and its Claude session; nothing is saved">Cancel</button>` : ""}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}${j.notes ? usedNotes(j.notes, pr, "Your notes for this review") : ""}</div>`
     : j && j.status === "cancelled" && Date.now() - Date.parse(j.ended) < 3600000 ? `<div class="callout">You cancelled the ${esc(kindOf)} started ${ago(j.started)}. Nothing from it was saved.</div>`
     : j && j.status === "failed" ? `<div class="callout bad">${jobLine(j)}${(j.steps || []).length ? `<ul class="mono small pr-steps">${j.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : "";
   const can = unlocked && !running;
   const notes = (state.reviewNotes || {})[pr] || "", notesOpen = !!notes || (state.reviewNotesOpen || {})[pr];
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed">Re-review</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews">Review from scratch</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"}>Review</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><button class="btn" data-pr-notes ${can ? "" : "disabled"} aria-expanded="${notesOpen ? "true" : "false"}" title="Tell the next review what to look into on top of its method: an angle, some context, a worry">${notes ? "Notes added" : "Add notes…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>
+  const withNotes = notes.trim() ? NOTES_ON : "";
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed" data-label="Re-review">Re-review${withNotes}</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews" data-label="Review from scratch">Review from scratch${withNotes}</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} data-label="Review">Review${withNotes}</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><button class="btn" data-pr-notes ${can ? "" : "disabled"} aria-expanded="${notesOpen ? "true" : "false"}" title="Tell the next review what to look into on top of its method: an angle, some context, a worry">${notes ? "Notes added" : "Add notes…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>
     <div class="pr-notes" ${notesOpen ? "" : "hidden"}><textarea data-grow rows="2" data-pr-notes-text="${esc(pr)}" placeholder="What should the next review look into? E.g. &quot;focus on the retry logic and whether a failed fetch can leave a run half-done&quot;. Only for the next review you start." ${can ? "" : "disabled"}>${esc(notes)}</textarea></div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
@@ -3162,6 +4250,7 @@ async function prDetail(arg) {
     <div class="pr-split"><div class="pr-pass-body">
       <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · reviewed at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${d.gh && d.gh.head_sha && d.gh.head_sha !== p.head_sha ? ` · <span class="tag warn" title="Commits were pushed after this review. Is it fixed? checks a finding against the newest code; a re-review reads them all">PR is now at <span class="mono">${esc(d.gh.head_sha.slice(0, 8))}</span></span>` : ""}${p.imported_from ? " · imported from a session" : ""}${(p.run || {}).notes ? ` · <span class="tag" title="${esc(p.run.notes)}">with your notes</span>` : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}
+        ${(p.run || {}).notes ? usedNotes(p.run.notes, pr, `Your notes for review ${p.n}`) : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
         ${p.run ? `<div class="row wrap mt">${p.run.resume ? `<button class="btn small" data-copy="${esc(p.run.resume)}" title="${esc(p.run.resume)}">Copy command to resume it in a terminal</button>` : ""}${(p.run.with || []).length ? `<span class="muted small">Reviewed together with ${p.run.with.map(x => `<a class="mono" href="#prs/${esc(x.replace("#", "/"))}">${esc(x)}</a>`).join(", ")}</span>` : ""}</div>
         ${p.run.used ? `<div class="k mt">What it used</div>${p.run.fresh_eyes ? `<div class="used"><div class="used-k">Mode${info("Fresh eyes: this review didn't see earlier reviews, your Fix/Pass choices, or anyone else's comments. Findings an earlier review raised are tagged.")}</div><div class="used-v"><span class="chip c-green">Fresh eyes</span></div></div>` : ""}${usedTags(p.run.used, p.run.method)}` : ""}
@@ -3308,28 +4397,45 @@ function wireChatPane(root) {
   const key = fid ? `f:${pr}:${fid}` : `r:${pr}:${n}`;
   const atts = (state.chatAtts || (state.chatAtts = {}))[key] || (state.chatAtts[key] = []);
   const attBox = $("[data-chat-atts]", pane);
-  const drawAtts = () => { attBox.innerHTML = atts.map((a, i) => `<span class="chat-att"><img src="${a.url}" alt=""><button class="icon-btn" data-att-x="${i}" aria-label="Remove image">×</button></span>`).join(""); $$("[data-att-x]", attBox).forEach(x => x.onclick = () => { atts.splice(+x.dataset.attX, 1); drawAtts(); }); };
-  drawAtts();
-  const attach = async file => {
-    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return prefToast("Only PNG, JPEG, GIF or WebP images", true);
-    const data = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(",")[1]); fr.readAsDataURL(file); });
-    const d = await save("chat_image", { data, type: file.type });
-    if (!d.ok) return prefToast(d.why || "Couldn't attach the image", true);
-    atts.push({ path: d.path, url: URL.createObjectURL(file) }); drawAtts();
+  const drawAtts = () => {
+    attBox.hidden = !atts.length;
+    attBox.innerHTML = atts.map((a, i) => `<span class="ss-chip${a.path ? "" : " up"}" title="${esc(a.name)}${a.path ? "" : " (adding…)"}">${a.thumb ? `<img src="${a.thumb}" alt="">` : icon("docs")}<span>${esc(a.name)}</span><button type="button" data-att-x="${i}" aria-label="Remove ${esc(a.name)}">&times;</button></span>`).join("");
+    $$("[data-att-x]", attBox).forEach(x => x.onclick = () => { atts.splice(+x.dataset.attX, 1); drawAtts(); });
   };
+  drawAtts();
+  // any file: an image, a CSV, a document, code. Several at once say what went wrong in one message, not one each.
+  const attach = async list => {
+    const bad = [];
+    for (const file of Array.from(list || [])) {
+      if (atts.length >= 10) { bad.push("up to 10 files at a time"); break; }
+      const a = { name: file.name || "pasted-image.png" }; atts.push(a); drawAtts();
+      try {
+        const x = await ssPrepFile(file); a.thumb = x.thumb; drawAtts();
+        const d = await save("chat_file", { data: x.data, type: x.type, name: a.name });
+        if (!d.ok) throw new Error(d.why || "couldn't attach it");
+        Object.assign(a, { path: d.path, image: d.image });
+      } catch (e) { atts.splice(atts.indexOf(a), 1); bad.push(`${a.name}: ${e.message || e}`); }
+      drawAtts();
+    }
+    if (bad.length) prefToast(bad.join(" · "), true);
+  };
+  const fileIn = $("[data-chat-file]", pane);
+  $("[data-chat-attach]", pane).onclick = () => fileIn.click();
+  fileIn.onchange = () => { attach(fileIn.files); fileIn.value = ""; };
   const files = e => [...(e.dataTransfer || {}).types || []].includes("Files");
-  pane.ondragover = e => { if (!files(e) || input.disabled) return; e.preventDefault(); pane.classList.add("drop"); };
+  pane.ondragover = e => { if (!files(e) || input.disabled) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; pane.classList.add("drop"); };
   pane.ondragleave = e => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("drop"); };
   pane.ondrop = e => {
     if (!files(e)) return;
     e.preventDefault(); pane.classList.remove("drop");
-    if (!input.disabled) [...e.dataTransfer.files].forEach(attach);
+    if (!input.disabled) attach(e.dataTransfer.files);
   };
-  input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []].filter(x => x.type.startsWith("image/")); if (fs.length) { e.preventDefault(); fs.forEach(attach); } };
+  input.onpaste = e => { const fs = [...(e.clipboardData || {}).files || []]; if (fs.length) { e.preventDefault(); attach(fs); } };
   const go = async () => {
     const said = input.value.trim();
     if (!said && !atts.length) return input.focus();
-    const text = [said, ...atts.splice(0).map(a => `[image: ${a.path}]`)].join("\n").trim();
+    if (atts.some(a => !a.path)) return prefToast("Wait for the files to finish adding", true);
+    const text = [said, ...atts.splice(0).map(a => `[${a.image ? "image" : "file"}: ${a.path}]`)].join("\n").trim();
     input.value = ""; drawAtts(); grow(input);
     const thread = $(".pr-thread", pane);
     $(".chat-empty", thread)?.remove();
@@ -3419,6 +4525,16 @@ function wirePrs(root) {
     (state.reviewNotes || (state.reviewNotes = {}))[t.dataset.prNotesText] = t.value;
     const b = $("[data-pr-notes]", root);
     if (b) b.textContent = t.value.trim() ? "Notes added" : "Add notes…";
+    $$("[data-pr-start][data-label]", root).forEach(x => { if (!x.disabled) x.innerHTML = esc(x.dataset.label) + (t.value.trim() ? NOTES_ON : ""); });
+  });
+  $$("[data-pr-notes-again]", root).forEach(b => b.onclick = () => {
+    const pr = b.dataset.prNotesAgain;
+    (state.reviewNotes || (state.reviewNotes = {}))[pr] = b.dataset.text;
+    (state.reviewNotesOpen || (state.reviewNotesOpen = {}))[pr] = true;
+    const t = $(`[data-pr-notes-text="${CSS.escape(pr)}"]`, root);
+    if (!t) return softRoute();
+    t.value = b.dataset.text; t.closest(".pr-notes").hidden = false; t.dispatchEvent(new Event("input")); grow(t);
+    t.scrollIntoView({ block: "center", behavior: "smooth" }); t.focus();
   });
   /* on the page, not each box: sorting a table redraws its rows */
   root.onchange = e => { const c = e.target.closest && e.target.closest("[data-pr-pick]"); if (!c) return; c.checked ? state.prPick.add(c.dataset.prPick) : state.prPick.delete(c.dataset.prPick); $$(`[data-pr-pick="${CSS.escape(c.dataset.prPick)}"]`).forEach(x => (x.checked = c.checked)); pickBar(); };
@@ -3657,7 +4773,7 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "insights", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "usage", "skills", "integrations", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "sessions", "todos", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "insights", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "usage", "skills", "integrations", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
@@ -3666,12 +4782,20 @@ const ICON = {
   prefs: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
   talk: "M4 5h16v10H9l-5 4zM8 9h8M8 12h5",
   runs: "M5 4l14 8-14 8z",
+  todos: "M4 6.5l1.5 1.5L8 5.5M4 12.5l1.5 1.5L8 11.5M4 18.5l1.5 1.5L8 17.5M11 7h9M11 13h9M11 19h9",
+  studio: "M4 5h16v14H4zM7.5 10l2.5 2-2.5 2M12 15h4",
   issues: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   checks: "M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6zM9 12l2 2 4-4",
   prs: "M6 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 7v10M6 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 17V9a3 3 0 0 0-3-3h-4M13 3.5 10.5 6 13 8.5",
   code: "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14",
   insights: "M3 17l6-6 4 4 8-8M15 7h6v6",
+  back: "M15 6l-6 6 6 6",
+  diff: "M6 4v10M12 4v4M9 8h6M17 10v10M14 16h6M6 18h.01",
   docs: "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6",
+  plus: "M12 5v14M5 12h14",
+  insights: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1.1 2h5c.1-.8.5-1.5 1.1-2A6 6 0 0 0 12 3z",
+  stack: "M12 3l9 4.5-9 4.5-9-4.5zM3 12l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5",
+  chev: "M6 9l6 6 6-6",
   folder: "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z",
   knowledge: "M4 5.5C6.5 4 9.5 4 12 6c2.5-2 5.5-2 8-.5V19c-2.5-1.5-5.5-1.5-8 .5-2.5-2-5.5-2-8-.5zM12 6v13.5",
   usage: "M4 20V10M10 20V4M16 20v-6M2 20h20",
@@ -3688,6 +4812,14 @@ const ICON = {
   "chevron-up": "M6 15l6-6 6 6",
   settings: "M4 7h9M17 7h3M4 17h3M11 17h9M15 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM9 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
   help: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3M12 17h.01",
+  panel: "M4 4h16v16H4zM9.5 4v16",
+  clip: "M20.5 11.5l-8.3 8.3a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8",
+  rewind: "M3 12a9 9 0 1 0 2.6-6.4M3 4v5h5",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
+  download: "M12 4v11M7 10l5 5 5-5M5 20h14",
+  terminal: "M4 5h16v14H4zM7.5 10l2.5 2-2.5 2M12 15h4",
+  agent: "M12 3v3M7 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM9.5 11.5v1M14.5 11.5v1M9.5 15.5h5",
 };
 const icon = (k, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[k] || ""}"/></svg>`;
 /* Reviews open as tabs inside the dashboard: every PR review you open joins them, above its page and under PR
@@ -3764,7 +4896,55 @@ document.addEventListener("dragend", () => {
 });
 function renderNav(active) {
   const subs = k => k !== "prs" ? "" : openTabs().map(t => `<a class="nav-sub ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" draggable="true" data-prtab="${esc(t.pr)}" title="${esc(t.pr + " · " + t.title)}"><span>${prTabLabel(t)}</span><span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("");
-  $("#nav").innerHTML = NAV_GROUPS.map(([g, ks]) => `<div class="nav-grp">${esc(g)}</div>${ks.map(k => `<a class="${k === active && !(k === "prs" && openTabs().some(t => location.hash === prTabHref(t.pr))) ? "on" : ""}" href="#${k}"${k === active ? ' aria-current="page"' : ""}>${icon(k)}<span>${esc(TITLES[k])}</span></a>${subs(k)}`).join("")}`).join("");
+  // the pages the welcome turned on (always the one you're on)
+  const visible = new Set(state.pages || NAV.map(p => p[0]));
+  visible.add(active);
+  $("#nav").innerHTML = navSessions(active) + NAV_GROUPS.map(([g, ks]) => {
+    const shown = ks.filter(k => visible.has(k));
+    return shown.length ? `<div class="nav-grp">${esc(g)}</div>${shown.map(k => `<a class="${k === active && !(k === "prs" && openTabs().some(t => location.hash === prTabHref(t.pr))) ? "on" : ""}" href="#${k}" title="${esc(TITLES[k])}"${k === active ? ' aria-current="page"' : ""}>${icon(k)}<span>${esc(TITLES[k])}</span></a>${subs(k)}`).join("")}` : "";
+  }).filter(Boolean).join("");
+}
+/* The Sessions accordion at the top of the sidebar: new session, the ones live here (and whether they need you),
+   your recent ones, and the full list. Open or closed is remembered. */
+function navSessions(active) {
+  const open = localStorage.getItem("lfg.nav.sessions") !== "0";
+  const list = (state.navSess || []).filter(x => x.source !== "background");
+  const cur = active === "studio" ? (location.hash.split("/")[1] || "") : "";  // "" = new, "all" = the list
+  const live = list.filter(x => ssLive(x.state)).slice(0, 5), recent = list.filter(x => !ssLive(x.state)).slice(0, Math.max(0, 5 - live.length));
+  const dot = st => st === "needs-you" ? '<span class="ns-dot warn" title="Needs you"></span>' : ssLive(st) ? `<span class="ns-dot${st === "idle" ? "" : " on"}" title="${st === "idle" ? "Waiting for you" : "Working"}"></span>` : "";
+  const when = t => { const m = (Date.now() - new Date(t || 0)) / 6e4; return m < 60 ? `${Math.max(1, Math.round(m))}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+  const row = x => `<a class="ns-item${x.id === cur ? " on" : ""}" href="#studio/${esc(x.id)}" title="${esc(x.title)}">${dot(x.state)}<span class="ns-t">${esc(x.title)}</span><span class="ns-w">${ssLive(x.state) ? "" : when(x.updated)}</span></a>`;
+  return `<div class="ns${open ? " open" : ""}"><div class="ns-head"><a class="${active === "studio" && !cur ? "on" : ""}" href="#studio" title="Studio: Claude Code sessions, here">${icon("studio")}<span>Studio</span>${live.length ? `<span class="ns-n${live.some(x => x.state === "needs-you") ? " warn" : ""}">${live.length}</span>` : ""}</a>
+    <button class="ns-btn" data-ns-new title="New session" aria-label="New session">+</button><button class="ns-btn ns-tog" data-ns-toggle aria-expanded="${open}" aria-label="Show Studio sessions">${icon("chev")}</button></div>
+    <div class="ns-body">${live.map(row).join("")}${recent.map(row).join("")}${list.length ? `<a class="ns-all${cur === "all" ? " on" : ""}" href="#studio/all">All sessions</a>` : '<span class="ns-empty">No sessions yet</span>'}</div></div>`;
+}
+async function loadNavSessions() {
+  if (!state.repo) return;
+  try { const d = await api("studio"); state.navSess = d.sessions || []; } catch (e) { return; }
+  if (state.linearWs === undefined) { try { state.linearWs = ((await api("todos")).linear || {}).workspace || ""; } catch (e) { state.linearWs = ""; } }
+  renderNav((location.hash.slice(1) || "home").split("/")[0]);
+}
+/* the sidebar folds to an icon rail (the button left of the breadcrumb, or Cmd/Ctrl+\\); remembered */
+function setRail(on) {
+  document.body.classList.toggle("rail", on); localStorage.setItem("lfg.side", on ? "rail" : "");
+  const b = $("#side-tog"); if (b) { b.setAttribute("aria-label", on ? "Expand sidebar" : "Collapse sidebar"); b.title = `${on ? "Expand" : "Collapse"} sidebar (${/Mac/.test(navigator.platform) ? "⌘" : "Ctrl+"}\\)`; b.setAttribute("aria-expanded", String(!on)); }
+}
+setRail(localStorage.getItem("lfg.side") === "rail");
+document.addEventListener("click", e => { if (e.target.closest("#side-tog")) setRail(!document.body.classList.contains("rail")); });
+document.addEventListener("keydown", e => { if (e.key === "\\" && (e.metaKey || e.ctrlKey) && !e.altKey) { e.preventDefault(); setRail(!document.body.classList.contains("rail")); } });
+document.addEventListener("click", e => { if (e.target.closest("[data-stop]")) e.stopPropagation(); }, true);  // a link in a clickable row opens only itself
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-ns-toggle], [data-ns-new]");
+  if (!t) return;
+  e.preventDefault();
+  if (t.hasAttribute("data-ns-new")) { state.ssFresh = true; if (location.hash === "#studio") route(); else location.hash = "#studio"; return; }
+  const box = t.closest(".ns"), open = !box.classList.contains("open");
+  box.classList.toggle("open", open); t.setAttribute("aria-expanded", open); localStorage.setItem("lfg.nav.sessions", open ? "1" : "0");
+});
+function applyPages(d) {
+  state.pages = d.pages || NAV.map(p => p[0]);
+  const current = (location.hash.slice(1) || "home").split("/")[0];
+  renderNav(current);
 }
 /* Breadcrumb in the top bar: project / page / item. Pages that open an item call crumbs() again with it. */
 function crumbs(page, item, itemHref) {
@@ -3804,7 +4984,7 @@ async function mapStatus() {
     if (g.status === "syncing") { mapWatching = true; mapTimer = setTimeout(mapStatus, 4000); }
     else if (mapWatching) {
       mapWatching = false;
-      if (["home", "code"].includes((location.hash.slice(1) || "home").split("/")[0])) { state.cache = {}; route(); }
+      if ((location.hash.slice(1) || "").split("/")[0] === "code") { state.cache = {}; route(); }
     }
   } catch (e) { el.innerHTML = ""; }
 }
@@ -3855,15 +5035,19 @@ function uiRestore(view, snap) {
 function softRoute() { return route({ soft: true }); }
 async function route(opts) {
   const soft = !!(opts && opts.soft);
-  let [page, ...rest] = (location.hash.slice(1) || "home").split("/");
-  page = { overview: "home", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
-  const key = PAGES[page] ? page : "home";
+  let [page, ...rest] = (location.hash.slice(1) || "lfg").split("/");
+  page = { home: "sessions", overview: "sessions", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
+  const key = PAGES[page] ? page : "sessions";
+  document.body.classList.toggle("bare", BARE.includes(key));
+  wireTourButton(key);
   const arg = rest.join("/");
   renderNav(key);
   if (!soft) crumbs(key);  // a refresh keeps the page's own crumbs (e.g. the PR) instead of flashing back to the page
   document.title = `${TITLES[key]} · LFG`;
   const seq = ++renderSeq, view = $("#view"), y = window.scrollY;
-  view.classList.toggle("wide", (key === "review" || key === "prs") && !!arg && arg !== "scores");  // the review screens are two panes: use the width
+  view.classList.toggle("wide", ((key === "review" || key === "prs") && !!arg && arg !== "scores") || key === "studio");  // review screens are two panes, Studio fills the window
+  view.classList.toggle("studio", key === "studio");
+  view.classList.toggle("welcome", key === "onboarding");
   const snap = soft ? uiSnapshot(view) : null;
   const seen = !soft && pageCache[location.hash];
   if (seen) { view.innerHTML = seen; view.classList.add("stale"); wireView(key, view); }  // last time's page, at once and usable; updated below
@@ -3904,6 +5088,15 @@ function wireView(key, view) {
   if (key === "talk") wireTalk(view);
   if (key === "environment") wireEnvironment(view);
   if (key === "checks") { $$('[data-tabs="checks"] .tab', view).forEach(t => t.addEventListener("click", () => setTimeout(() => wireSonar(view), 0))); wireSonar(view); }
+  if (key === "onboarding") drawJourney(view);
+  if (state.gh && state.gh.starred) $$("[data-gh-star]", view).forEach(b => (b.textContent = "★ Starred, thank you"));
+  if (state.pendingTour && state.pendingTour.startsWith("page-")) { const t = state.pendingTour; state.pendingTour = null; setTimeout(() => startTour(t), 400); }
+  if (key === "insights") wireInsights(view);
+  if (key === "todos") wireTodos(view);
+  if (key === "lfg") wireLanding(view);
+  if (key === "help") wireHelp(view);
+  if (key === "studio") wireStudio(view);
+  if (key === "runs" && !/^#runs\/./.test(location.hash)) wireRuns(view);
   if (key === "usage") { wireUsage(view); loadHeadroom(); }
   if (key === "insights") wireInsights(view);
 }
@@ -3919,6 +5112,7 @@ function skeletonPage(key, detail) {
 }
 function wireDocs() {
   const body = $("#doc-body");
+  wireDocEditor(body);
   $$("[data-doclink]", body).forEach(a => a.onclick = e => {
     e.preventDefault();
     const base = body.dataset.path.split("/").slice(0, -1);
@@ -3948,23 +5142,952 @@ function histButtons() {
   $("#back").disabled = !n.canGoBack;
   $("#forward").disabled = !n.canGoForward;
 }
+/* Sessions: Claude Code, run from here. Every session for the project, wherever it was started (here, a terminal,
+   the desktop app, LFG's own background runs), read from Claude Code's own transcripts; any of them can be continued
+   here. A live session shows what Claude does as readable cards, and asks for your OK with buttons. */
+const SS_SRC = { lfg: ["LFG", "on"], terminal: ["Terminal", ""], desktop: ["Desktop app", ""], background: ["Background", "faded"] };
+const SS_STATE = { "needs-you": ["Needs you", "warn"], working: ["Working", "ok"], starting: ["Starting", "ok"], idle: ["Waiting for you", "on"], ended: ["Ended", ""], saved: ["", ""] };
+const SS_MODES = [["default", "Ask first", "Asks before edits and commands"], ["acceptEdits", "Accept edits", "Edits files, asks before commands"], ["plan", "Plan only", "Reads and plans, changes nothing"]];
+const ssLive = st => ["working", "needs-you", "starting", "idle"].includes(st);
+const money = v => v == null ? "" : v < 0.01 ? "<$0.01" : usd(v);
+let ssPoll = null;
+
+PAGES.studio = async arg => {
+  if (arg === "all") {  // every session for the project, and the worktrees they work in
+    const [list, where] = await Promise.all([api("studio"), api("studio_where")]);
+    state.sess = { list, d: null, id: null, where };
+    state.navSess = list.sessions || [];
+    crumbs("studio", "All sessions", "#studio/all");
+    return `<div class="ss-page">${ssWorktrees(where)}${ssAll(list)}</div>`;
+  }
+  if (!arg) {  // a new session: the same screen as any session, empty, with the composer at the bottom
+    const [sug, where] = await Promise.all([api("studio_suggest"), api("studio_where")]);
+    state.sess = { d: null, id: null, sug, where };
+    crumbs("studio", "New session", "#studio");
+    return `<div class="ss-one">${ssNew(sug)}</div>`;
+  }
+  const ch = arg.match(/^([0-9a-f-]{36})\/changes$/);
+  if (ch) return ssChanges(ch[1]);
+  const d = await api("studio_session", { id: arg });
+  state.sess = { d, id: arg };
+  crumbs("studio", d && d.available !== false ? d.title : null, `#studio/${arg}`);
+  return d.available === false ? unavailable(d) : `<div class="ss-one${(d.activity || []).length ? " has-act" : ""}">${ssDetail(d)}</div>`;
+};
+
+/* tags: one look tells you what a session is about and where it stands */
+function ssTagList(x, full) {  // full: the session's own header, where tags can be links (a row is already one)
+  const out = [], link = (cls, href, text, title) => full && href ? `<a class="tg ${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer"${title ? ` title="${esc(title)}"` : ""}>${text}</a>` : `<span class="tg ${cls}"${title ? ` title="${esc(title)}"` : ""}>${text}</span>`;
+  const [st, tone] = SS_STATE[x.state] || ["", ""]; if (st) out.push(`<span class="tg ${tone}">${st}</span>`);
+  if (x.pr) out.push(link(x.pr.state === "MERGED" ? "merged" : x.pr.state === "CLOSED" ? "bad" : "on", x.pr.url, `PR #${x.pr.number}${x.pr.state === "MERGED" ? " · merged" : x.pr.state === "CLOSED" ? " · closed" : ""}`, "Pull request for this branch"));
+  (x.issues || []).forEach(k => out.push(link("", state.linearWs ? `https://linear.app/${state.linearWs}/issue/${k}` : "", esc(k), "Linear issue")));
+  if (x.branch && x.branch !== "HEAD") out.push(`<span class="brtag" title="Branch">${esc(x.branch)}</span>`);
+  (x.skills || []).slice(0, full ? 6 : 2).forEach(k => out.push(`<span class="tg sk">/${esc(k.replace(/^\//, ""))}</span>`));
+  const files = Array.isArray(x.files) ? x.files.length : x.files;
+  if (files) out.push(full && x.id ? `<a class="ss-chg" href="#studio/${esc(x.id)}/changes" title="Open every change this session made, as diffs. Select lines there to ask about them or ask for a change.">${icon("diff")}<span>${plural(files, "file")} changed</span>${x.additions || x.deletions ? `<span class="add">+${n_(x.additions)}</span><span class="del">−${n_(x.deletions)}</span>` : ""}<span class="ss-chg-go">View changes${icon("chev")}</span></a>`
+    : `<span class="tg" title="${Array.isArray(x.files) ? esc(x.files.join("\n")) : "Files Claude changed"}">${plural(files, "file")} changed</span>`);
+  if (x.worktree_name) out.push(`<span class="tg wt" title="Works in this worktree">${icon("folder")}${esc(x.worktree_name)}</span>`);
+  const [src, stone] = SS_SRC[x.source] || ["", ""]; if (src) out.push(`<span class="tg ${stone}">${src}</span>`);
+  return out.join("");
+}
+
+function ssNew(sug) {
+  const list = (sug && sug.suggestions || []).slice(0, 4);
+  return `<header class="ss-head"><div class="grow"><h1 class="ss-title">New session</h1>
+      <div class="ss-tags"><span class="tg">${esc(repoName())}</span><span class="brtag" id="ss-branch" title="The branch Claude will work on"></span><span class="tg wt" id="ss-wt-tag" hidden></span></div></div></header>
+    <div class="ss-conv ss-empty">${list.length ? `<div class="ss-quick"><span class="muted small">Suggestions</span>${list.map((x, i) => `<button class="chip ss-sug ${x.tone || ""}" data-sug="${i}" title="${esc(x.title)}"><span class="ss-sug-k">${esc(x.skill)}</span>${esc(x.title.length > 56 ? x.title.slice(0, 54) + "…" : x.title)}</button>`).join("")}</div>` : ""}</div>
+    ${ssComposer({ isNew: true })}`;
+}
+
+function ssAll(list) {
+  const f = state.ssFilter || "mine", all = list.sessions || [];
+  const pick = all.filter(s => f === "all" || (f === "background" ? s.source === "background" : s.source !== "background"));
+  const day = t => { const d = (Date.now() - new Date(t || 0)) / 864e5; return d < 1 ? "Today" : d < 7 ? "This week" : d < 31 ? "This month" : "Earlier"; };
+  const groups = {}; pick.forEach(s => (groups[ssLive(s.state) ? "Live here" : day(s.updated)] = groups[ssLive(s.state) ? "Live here" : day(s.updated)] || []).push(s));
+  const row = s => `<a class="ss-row" href="#studio/${esc(s.id)}" data-title="${esc((s.title + " " + (s.branch || "") + " " + (s.skills || []).join(" ") + " " + (s.issues || []).join(" ")).toLowerCase())}">
+      <span class="grow"><span class="ss-row-t">${esc(s.title)}</span><span class="ss-tags">${ssTagList(s)}</span></span>
+      <span class="ss-row-m"><span>${ago(s.updated)}</span>${s.cost ? `<span class="ss-row-c">${money(s.cost)}</span>` : ""}</span></a>`;
+  const chip = (k, l, n) => `<button class="pill${f === k ? " on" : ""}" data-ss-filter="${k}">${l} <span class="muted">${n}</span></button>`;
+  return `<section class="ss-allbox"><div class="ss-all-h"><h1>All sessions</h1><a class="btn primary small" href="#studio" data-ss-newbtn>New session</a><input type="search" id="ss-find" placeholder="Search by title, branch, skill or issue" autocomplete="off">
+      <span class="seg">${chip("mine", "Yours", all.filter(s => s.source !== "background").length)}${chip("background", "Background", all.filter(s => s.source === "background").length)}${chip("all", "All", all.length)}</span></div>
+    <div class="ss-scrollarea">${["Live here", "Today", "This week", "This month", "Earlier"].filter(g => groups[g]).map(g => `<div class="ss-grp">${g}</div><div class="box ss-list">${groups[g].map(row).join("")}</div>`).join("") || empty("No sessions yet", "Start one from New session. Sessions from your terminal and the desktop app show up here too.")}</div></section>`;
+}
+
+function ssComposer(o) {
+  const mode = o.mode || localStorage.getItem("lfg.ss.mode") || "default";
+  const seg = (name, opts, cur) => `<span class="seg" role="radiogroup" data-seg="${name}">${opts.map(([k, l, tip]) => `<button type="button" role="radio" aria-checked="${k === cur}" class="pill${k === cur ? " on" : ""}" data-v="${k}" title="${esc(tip)}">${l}</button>`).join("")}</span>`;
+  const fork = o.fork ? `<div class="ss-forking">${icon("branch")}<span class="grow">New session from ${o.fork.at ? `before <b>“${esc(o.fork.label)}”</b>` : "this whole conversation"}. This one stays as it is.</span><button class="btn small" data-fork-x>Cancel</button></div>` : "";
+  return `<div class="ss-comp" id="ss-comp">
+    <div class="ss-ac" id="ss-ac" hidden></div>${fork}
+    <div class="ss-att" id="ss-att" hidden></div>
+    <textarea id="ss-text" rows="1" placeholder="${o.fork ? "What should the new session do?" : o.isNew ? "Describe the task. / for skills, @ for files and folders" : o.saved ? "Write to continue this session here" : "Reply to Claude. / for skills, @ for files"}"></textarea>
+    <div class="ss-comp-b"><button type="button" class="icon-btn ss-clip" id="ss-attach" title="Attach files or images. You can also drop them here or paste a screenshot.">${icon("clip")}</button><input type="file" id="ss-file" multiple hidden>
+      ${o.isNew ? ssWherePicker() : ""}${o.isNew || o.live ? seg("mode", SS_MODES, mode) : ""}
+      <span class="grow"></span><button class="btn primary small" id="ss-send">${o.fork ? "Start fork" : o.isNew ? "Start" : o.saved ? "Continue here" : "Send"}</button></div></div>`;
+}
+
+/* Where a new session works: this checkout, a worktree, an existing branch in a worktree of its own, or a new
+   worktree forked from a branch. The dashboard's branch picker chooses the default. */
+function ssWherePicker() {
+  const w = state.sess.where || {}, cur = w.branch || "", picked = state.branch && state.branch !== "-" ? state.branch : "";
+  const wts = (w.worktrees || []).filter(x => x.kind === "lfg" || x.kind === "yours");
+  const opts = [["here", `Here · ${cur}`]];
+  wts.forEach(x => opts.push([`wt:${x.path}`, `Worktree · ${x.branch || x.name}`]));
+  if (picked && picked !== cur && !wts.some(x => x.branch === picked)) opts.push([`br:${picked}`, `New worktree · ${picked}`]);
+  opts.push(["new", "New worktree, new branch…"]);
+  const pw = wts.find(x => x.branch === picked), def = picked && picked !== cur ? (pw ? `wt:${pw.path}` : `br:${picked}`) : "here";
+  const branches = (w.branches || []).slice().sort((a, b) => (b === cur) - (a === cur) || (b === w.default) - (a === w.default) || a.localeCompare(b));
+  return `<select id="ss-where" class="ss-sel" aria-label="Where Claude works" title="Where Claude works: this checkout, a worktree, or a new one">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === def ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>
+    <span class="ss-newwt" hidden><input type="text" id="ss-wt-name" placeholder="lfg/short-name" autocomplete="off" aria-label="New branch name"><select id="ss-wt-base" class="ss-sel" aria-label="Fork it from" title="Fork it from">${branches.map(b => `<option value="${esc(b)}"${b === (picked || cur) ? " selected" : ""}>from ${esc(b)}</option>`).join("")}</select></span>`;
+}
+/* the branch the new session will work on, as the picker and the sidebar's branch say */
+function ssTarget(root) {
+  const w = state.sess.where || {}, v = ($("#ss-where", root) || {}).value || "here";
+  if (v === "here") return [w.branch || "", ""];
+  if (v.startsWith("wt:")) { const x = (w.worktrees || []).find(t => t.path === v.slice(3)); return [x ? x.branch : "", x ? `worktree ${x.name}` : "worktree"]; }
+  if (v.startsWith("br:")) return [v.slice(3), "new worktree"];
+  const n = ($("#ss-wt-name", root) || {}).value || "";
+  return [n.trim() || "new branch", `new worktree, from ${($("#ss-wt-base", root) || {}).value || ""}`];
+}
+function ssWhereValue(root) {
+  const v = ($("#ss-where", root) || {}).value || "here";
+  if (v === "here") return { kind: "here" };
+  if (v.startsWith("wt:")) return { kind: "worktree", path: v.slice(3) };
+  if (v.startsWith("br:")) return { kind: "branch", branch: v.slice(3) };
+  return { kind: "new", branch: $("#ss-wt-name", root).value.trim(), base: $("#ss-wt-base", root).value };
+}
+
+/* Worktrees: where each stands against the branch it was forked from, and merging it back (committed work only) */
+function ssWorktrees(w) {
+  const rows = (w && w.worktrees || []).filter(x => x.kind === "lfg" || x.kind === "yours");
+  if (!rows.length) return "";
+  const byBase = {}; rows.forEach(x => { if (x.base) (byBase[x.base] = byBase[x.base] || []).push(x); });
+  const row = x => {
+    const can = !x.dirty && x.ahead > 0, why = x.dirty ? `${plural(x.dirty, "uncommitted change")}: commit them in the worktree first` : !x.ahead ? `Nothing to merge into ${x.base}` : `Merge ${plural(x.ahead, "commit")} into ${x.base}`;
+    return `<div class="wt-row" data-wt="${esc(x.name)}"><span class="wt-ic">${icon("folder")}</span><span class="grow"><span class="wt-t"><b>${esc(x.name)}</b>${x.kind === "lfg" ? '<span class="tg on">LFG</span>' : '<span class="tg">yours</span>'}</span>
+      <span class="ss-tags"><span class="brtag">${esc(x.branch || "detached")}</span>${x.base ? `<span class="muted small">→ ${esc(x.base)}</span>` : ""}${x.ahead ? `<span class="tg ok">${x.ahead} ahead</span>` : ""}${x.behind ? `<span class="tg">${x.behind} behind</span>` : ""}${x.dirty ? `<span class="tg warn">${x.dirty} uncommitted</span>` : ""}${x.sessions ? `<span class="tg">${plural(x.sessions, "session")}</span>` : ""}</span></span>
+      <span class="wt-a"><button class="btn small" data-wt-session="${esc(x.path)}">New session here</button>${x.base ? `<button class="btn small" data-wt-merge${can ? "" : " disabled"} title="${esc(why)}">Merge into ${esc(x.base)}</button>` : ""}${x.kind === "lfg" && x.base ? `<button class="btn small" data-wt-merge data-remove${can || (!x.dirty && !x.ahead) ? "" : " disabled"} title="${esc(can ? `Merge into ${x.base}, then remove the worktree and its branch` : !x.dirty ? "Nothing to merge: remove the worktree and its branch" : why)}">${can ? "Merge and remove" : "Remove"}</button>` : ""}</span></div>`;
+  };
+  const bulk = Object.entries(byBase).filter(([, xs]) => xs.filter(x => x.kind === "lfg").length > 1).map(([b, xs]) => `<div class="wt-bulk"><span class="grow">${plural(xs.filter(x => x.kind === "lfg").length, "LFG worktree")} forked from <b>${esc(b)}</b>. Merge them all back and remove them, here or in a terminal: <code>lfg worktree merge --all --into ${esc(b)} --remove</code></span><button class="btn small" data-wt-all="${esc(b)}">Merge all into ${esc(b)}</button></div>`).join("");
+  return `<section class="wt-box"><div class="ss-all-h"><h1>Worktrees</h1><span class="muted small">Branches checked out in their own folders. Only committed work is merged; LFG never commits for you.</span></div>
+    <div class="wt-scroll"><div class="box wt-list">${rows.map(row).join("")}</div>${bulk}</div></section>`;
+}
+
+/* tools as one readable line each; the input and output open on click */
+const TOOL_ICON = { Bash: "code", Read: "docs", Edit: "docs", MultiEdit: "docs", Write: "docs", Grep: "code", Glob: "code", Skill: "skills", Agent: "runs", Task: "runs", WebFetch: "issues", WebSearch: "issues", TodoWrite: "todos", AskUserQuestion: "review" };
+const base = p => String(p || "").split("/").pop();
+const mcpName = n => { const [, srv, tool] = String(n).split("__"); return [String(srv || "").replace(/^plugin_[^_]+_/, ""), String(tool || "").replace(/_tool$/, "").replace(/_/g, " ")]; };
+function toolLine(t) {
+  const i = t.input || {}, n = t.name || "?";
+  if (n === "Bash") return [`Ran`, `<code>${esc(String(i.command || "").split("\n")[0].slice(0, 140))}</code>`, i.description];
+  if (n === "Read") return ["Read", `<code>${esc(base(i.file_path))}</code>`, i.offset ? `from line ${i.offset}` : ""];
+  if (n === "Edit" || n === "MultiEdit") return ["Edited", `<code>${esc(base(i.file_path))}</code>`, ""];
+  if (n === "Write") return ["Wrote", `<code>${esc(base(i.file_path))}</code>`, `${String(i.content || "").split("\n").length} lines`];
+  if (n === "Grep") return ["Searched for", `<code>${esc(i.pattern || "")}</code>`, i.path ? `in ${base(i.path)}` : ""];
+  if (n === "Glob") return ["Listed", `<code>${esc(i.pattern || "")}</code>`, ""];
+  if (n === "Skill") return ["Used skill", `<b>${esc(i.skill || i.name || "")}</b>`, ""];
+  if (n === "Agent" || n === "Task") return ["Sent a subagent", esc(i.description || i.subagent_type || ""), ""];
+  if (n === "WebFetch") return ["Fetched", `<code>${esc(i.url || "")}</code>`, ""];
+  if (n === "WebSearch") return ["Searched the web for", esc(i.query || ""), ""];
+  if (n === "TodoWrite") return ["Updated its to-do list", "", `${(i.todos || []).length} items`];
+  if (n === "AskUserQuestion") { const qs = i.questions || []; return ["Asked you", esc(((qs[0] || {}).header || (qs[0] || {}).question || "").slice(0, 120)), qs.length > 1 ? `${qs.length} questions` : ""]; }
+  if (n === "ExitPlanMode") return ["Presented a plan", "", t.error ? "you asked for changes" : t.result != null ? "approved" : ""];
+  if (/^mcp__/.test(n)) { const [srv, tool] = mcpName(n); return ["Asked", `<b>${esc(srv)}</b>: ${esc(tool)}`, ""]; }
+  return [esc(n), "", ""];
+}
+function toolBody(t) {
+  const i = t.input || {};
+  let inp = "";
+  if ((t.name === "Edit" || t.name === "MultiEdit") && (i.old_string != null || i.edits)) {
+    const edits = i.edits || [{ old_string: i.old_string, new_string: i.new_string }];
+    inp = `<div class="muted small">${esc(i.file_path || "")}</div>` + edits.slice(0, 4).map(e => `<div class="ss-diff">${String(e.old_string || "").split("\n").slice(0, 12).map(l => `<div class="d-del">- ${esc(l)}</div>`).join("")}${String(e.new_string || "").split("\n").slice(0, 12).map(l => `<div class="d-add">+ ${esc(l)}</div>`).join("")}</div>`).join("");
+  } else if (t.name === "Bash") inp = `<pre class="ss-pre">$ ${esc(i.command || "")}</pre>`;
+  else if (t.name === "AskUserQuestion") {  // each question with what you picked (Claude Code's result: "Q"="A")
+    const got = {}; String(t.result || "").replace(/"([^"]+)"="([^"]*)"/g, (_m, q, a) => { got[q] = a; return ""; });
+    return `<div class="ss-qa">${(i.questions || []).map(q => `<div><span class="muted small">${esc(q.header || "")}</span><b>${esc(q.question || "")}</b><span>${got[q.question] != null ? `→ ${esc(got[q.question])}` : t.error ? '<span class="muted">skipped</span>' : '<span class="muted">waiting for you</span>'}</span></div>`).join("")}</div>`;
+  } else if (t.name === "ExitPlanMode") return `<div class="md">${md(String(i.plan || ""))}</div>${t.error && t.result ? `<pre class="ss-pre bad">${esc(String(t.result).slice(0, 2000))}</pre>` : ""}`;
+  else if (Object.keys(i).length) inp = `<pre class="ss-pre">${esc(JSON.stringify(i, null, 2).slice(0, 4000))}</pre>`;
+  const out = t.result != null && t.result !== "" ? `<pre class="ss-pre${t.error ? " bad" : ""}">${esc(String(t.result).slice(0, 6000))}${String(t.result).length > 6000 ? "\n…" : ""}</pre>` : "";
+  return inp + out;
+}
+function ssItems(items, live) {
+  let html = "", group = [];
+  const flush = last => {
+    if (!group.length) return;
+    const names = {}; group.forEach(t => { const k = /^mcp__/.test(t.name) ? mcpName(t.name)[0] : t.name; names[k] = (names[k] || 0) + 1; });
+    const running = live && last && group.some(t => t.result == null);
+    const one = t => { const [verb, what, note] = toolLine(t); return `<details class="ss-tool${t.error ? " bad" : ""}"><summary>${icon(TOOL_ICON[t.name] || (/^mcp__/.test(t.name) ? "integrations" : "code"))}<span class="grow"><span class="ss-verb">${verb}</span> ${what}${note ? ` <span class="muted small">${esc(note)}</span>` : ""}</span>${t.result == null ? (running ? '<span class="spin"></span>' : "") : t.error ? '<span class="tg bad">error</span>' : ""}</summary><div class="ss-tool-b">${toolBody(t)}</div></details>`; };
+    html += group.length <= 3 ? `<div class="ss-tools">${group.map(one).join("")}</div>`
+      : `<details class="ss-steps"${running ? " open" : ""}><summary><span class="grow">${plural(group.length, "step")} · ${Object.entries(names).map(([k, v]) => `${esc(k)}${v > 1 ? ` ×${v}` : ""}`).join(", ")}</span>${running ? '<span class="spin"></span>' : ""}</summary><div class="ss-tools">${group.map(one).join("")}</div></details>`;
+    group = [];
+  };
+  items.forEach((it, i) => {
+    if (it.k === "tool") { group.push(it); return; }
+    flush(false);
+    if (it.k === "me") html += `<div class="ss-me" data-i="${i}">${(it.images || []).length ? `<div class="ss-imgs">${it.images.map(m => `<button class="ss-img" data-img="${esc(m.u)}:${m.i}" title="Show larger"></button>`).join("")}</div>` : ""}${ssMeText(it) ? `<div class="ss-bub">${ssMeText(it)}</div>` : ""}${ssMsgActions(it, i)}</div>`;
+    else if (it.k === "skill") html += `<div class="ss-me" data-i="${i}"><div class="ss-bub skill">${icon("skills")}/${esc(it.name.replace(/^\//, ""))}${it.args ? ` <span>${esc(it.args)}</span>` : ""}</div>${ssMsgActions(it, i)}</div>`;
+    else if (it.k === "ai") html += `<div class="ss-ai" data-i="${i}"><span class="ss-ai-av">${icon("studio")}</span><div class="md">${md(it.text)}</div><div class="ss-msg-a"><button class="ss-ma" data-ss-copy="${i}" title="Copy this answer">${icon("copy")}Copy</button></div></div>`;
+    else if (it.k === "note") html += `<div class="ss-note">${esc(it.text)}</div>`;
+  });
+  flush(true);
+  return html;
+}
+/* what you sent: uploaded files show as chips, the [Image #n] markers as the images themselves */
+/* Lines you pointed at from a session's changes: <lfg-lines file lines>…</lfg-lines> becomes a small diff card, and the
+   <lfg-note> (the instruction meant for Claude) is hidden. Messages sent before the tags existed read the same way. */
+const SS_OLD_REF = /^About `([^`]+)`, (?:lines? )?([\d-]+|removed lines) \(as this session changed them; the file may have moved on since\):\n\n```diff\n([\s\S]*?)\n```\n\n([\s\S]*?)\n\n(?:This is a question: answer it, don't edit any files\.|Make this change to those lines \(read the file first, it may differ from the snippet\)\.)\s*$/;
+function ssRefCard(file, lines, body) {
+  const lang = hlLang(file), st = { block: null };
+  const rows = body.split("\n").map(l => { const t = l[0] === "+" || l[0] === "-" ? l[0] : " "; return `<div class="ss-ref-l ${t === "+" ? "add" : t === "-" ? "del" : ""}"><span class="ss-ref-s">${t === " " ? "" : t}</span><code>${hlLine(t === " " && l[0] !== " " ? l : l.slice(1), lang, st) || " "}</code></div>`; }).join("");
+  return `<div class="ss-ref"><div class="ss-ref-h">${icon("diff")}<b title="${esc(file)}">${esc(file.split("/").pop())}</b><span>${/^\d/.test(lines) ? `${lines.includes("-") ? "lines" : "line"} ${esc(lines)}` : esc(lines)}</span></div><div class="ss-ref-b">${rows}</div></div>`;
+}
+function ssMeText(it) {
+  let raw = it.text || "";
+  const old = raw.match(SS_OLD_REF);
+  if (old) raw = `<lfg-lines file="${old[1]}" lines="${old[2]}">\n${old[3]}\n</lfg-lines>\n\n${old[4]}`;
+  const cards = [];
+  raw = raw.replace(/<lfg-lines file="([^"]*)" lines="([^"]*)">\n?([\s\S]*?)\n?<\/lfg-lines>\s*/g, (_m, f, l, b) => { cards.push(ssRefCard(f, l, b)); return `\u0000${cards.length - 1}\u0000`; })
+    .replace(/\s*<lfg-note>[\s\S]*?<\/lfg-note>\s*/g, "");
+  let t = esc(raw).replace(/\u0000(\d+)\u0000/g, (_m, k) => cards[+k]);
+  if ((it.images || []).length) t = t.replace(/\[Image #\d+\]\s?/g, "");
+  t = t.replace(/@(\/\S*?\/\.lfg\/uploads\/\d{8}\/[0-9a-f]{8}-(\S+))/g, (_m, path, name) => `<span class="ss-file" title="${path}">${icon("docs")}${name}</span>`);
+  return t.trim();
+}
+/* each of your messages: Rewind to before it, Fork from before it (a new session), Copy (as in Claude Code) */
+function ssMsgActions(it, i) {
+  const rw = it.u ? `<button class="ss-ma" data-rw="${esc(it.u)}" title="Undo the conversation from here, the code Claude changed since, or both">${icon("rewind")}Rewind</button>` : "";
+  const fk = it.u && it.p ? `<button class="ss-ma" data-fork="${i}" title="A new session with the conversation up to here; this one stays as it is">${icon("branch")}Fork</button>` : "";
+  return `<div class="ss-msg-a">${rw}${fk}<button class="ss-ma" data-ss-copy="${i}" title="Copy">${icon("copy")}Copy</button></div>`;
+}
+const ssItemText = it => it.k === "skill" ? `/${it.name.replace(/^\//, "")}${it.args ? " " + it.args : ""}` : it.k === "tool" ? `${it.name} ${JSON.stringify(it.input || {})}` : (it.text || "").replace(/\[Image #\d+\]\s?/g, "");
+function ssMarkdown(d) {  // Export: the conversation as Markdown, like /export
+  const out = [`# ${d.title}`, "", [d.branch && `Branch: ${d.branch}`, d.updated && `Updated: ${new Date(d.updated).toLocaleString()}`, `Session: ${d.id}`].filter(Boolean).join(" · "), ""];
+  (d.items || []).forEach(it => {
+    if (it.k === "me" || it.k === "skill") out.push(`## You`, "", ssItemText(it), "");
+    else if (it.k === "ai") out.push(`## Claude`, "", it.text, "");
+    else if (it.k === "tool") { const [verb, what] = toolLine(it); out.push(`- ${verb} ${what.replace(/<[^>]+>/g, "")}${it.error ? " (error)" : ""}`); }
+    else if (it.k === "note") out.push("", `*${it.text}*`, "");
+  });
+  return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+function ssDownload(name, text) {
+  const a = document.createElement("a"), url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+  a.href = url; a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+async function ssImages(root) {  // images in messages come from the transcript, one request each, kept for the page
+  state.ssImg = state.ssImg || {};
+  for (const b of $$(".ss-img[data-img]", root)) {
+    if (b.firstChild) continue;
+    const key = b.dataset.img, [u, i] = key.split(":");
+    if (!state.ssImg[key]) { const r = await api("studio_image", { id: state.sess.id, u, i }).catch(() => null); if (!r || !r.src) continue; state.ssImg[key] = r.src; }
+    const img = new Image(); img.alt = "Image you sent"; img.src = state.ssImg[key]; b.append(img);
+  }
+}
+/* how full the context window is (live sessions; from Claude Code, no API call) */
+function ssCtxHtml(c) {
+  if (!c || c.percent == null) return "";
+  const tip = [`${(c.used || 0).toLocaleString()} of ${(c.max || 0).toLocaleString()} tokens`, ...(c.parts || []).map(p => `${p.name}: ${p.tokens.toLocaleString()}`), c.auto_compact_at ? `Compacts by itself near ${c.auto_compact_at.toLocaleString()}` : "", "Compact it from the ⋯ menu"].filter(Boolean).join("\n");
+  return `<span class="ss-ctx${c.percent >= 70 ? " warn" : ""}" title="${esc(tip)}"><i style="--p:${Math.min(100, c.percent)}%"></i>${c.percent}% context</span>`;
+}
+/* Claude's questions (AskUserQuestion): pick an option per question (or several, for multi-select), or write your
+   own answer; it goes back as Claude Code's own picker sends it. Picks survive the page redrawing. */
+function ssQuestion(p) {
+  const qs = (p.input && p.input.questions) || [], picked = ((state.ssAns = state.ssAns || {})[p.id] = state.ssAns[p.id] || {});
+  const one = (q, qi) => {
+    const multi = !!q.multiSelect, cur = picked[qi] || { labels: [], other: "" }, name = `q-${p.id}-${qi}`;
+    const opt = (o, oi) => `<label class="ss-q-o${cur.labels.includes(o.label) ? " on" : ""}"><input type="${multi ? "checkbox" : "radio"}" name="${esc(name)}" data-q="${qi}" data-opt="${esc(o.label)}"${cur.labels.includes(o.label) ? " checked" : ""}>
+      <span class="ss-q-k">${multi ? "" : oi + 1}</span><span class="grow"><b>${esc(o.label)}</b>${o.description ? `<span>${esc(o.description)}</span>` : ""}</span></label>`;
+    return `<fieldset class="ss-q" data-qi="${qi}"><legend>${q.header ? `<span class="tg">${esc(q.header)}</span>` : ""}<span class="ss-q-t">${esc(q.question)}</span>${multi ? '<span class="muted small">Pick any</span>' : ""}</legend>
+      <div class="ss-q-os">${(q.options || []).map(opt).join("")}
+        <label class="ss-q-o ss-q-other${cur.other ? " on" : ""}"><input type="${multi ? "checkbox" : "radio"}" name="${esc(name)}" data-q="${qi}" data-opt="__other"${cur.other ? " checked" : ""}><span class="ss-q-k">${multi ? "" : "✎"}</span><span class="grow"><b>Something else</b><input type="text" class="ss-q-in" data-q-other="${qi}" placeholder="Type your own answer" value="${esc(cur.other)}"></span></label></div></fieldset>`;
+  };
+  // several questions: one tab each, Next moves on, so the card stays one question tall
+  const many = qs.length > 1, tab = Math.min(((state.ssQTab = state.ssQTab || {})[p.id]) || 0, qs.length - 1);
+  const tabs = many ? `<div class="ss-q-tabs" role="tablist">${qs.map((q, qi) => `<button type="button" role="tab" class="ss-q-tab${qi === tab ? " on" : ""}" data-q-tab="${qi}" aria-selected="${qi === tab}"><span class="ss-q-done" aria-hidden="true"></span>${esc(q.header || `Question ${qi + 1}`)}</button>`).join("")}</div>` : "";
+  return `<div class="ss-ask ss-ask-q${many ? " many" : ""}" data-req="${esc(p.id)}" data-kind="question"><div class="ss-ask-h">${icon("review")}<span class="grow">Claude has ${many ? `${qs.length} questions` : "a question"} for you</span></div>
+    ${tabs}${qs.map((q, qi) => one(q, qi).replace("<fieldset ", `<fieldset${many && qi !== tab ? " hidden" : ""} `)).join("")}
+    <div class="ss-ask-a">${many ? '<button class="btn small" data-q-back>Back</button><button class="btn primary small" data-q-next>Next</button>' : ""}<button class="btn primary small" data-q-send disabled${many && tab < qs.length - 1 ? " hidden" : ""}>${many ? "Send answers" : "Send answer"}</button><button class="btn small" data-decide="skip" title="Claude carries on with its best guess and says what it assumed">Skip</button><span class="muted small" data-q-left></span></div></div>`;
+}
+/* Claude's plan (ExitPlanMode): read it, then approve it or say what to change */
+function ssPlan(p) {
+  return `<div class="ss-ask ss-ask-plan" data-req="${esc(p.id)}" data-kind="plan"><div class="ss-ask-h">${icon("runs")}<span class="grow"><b>Claude's plan</b>, ready for you</span></div>
+    <div class="md ss-plan">${md(String((p.input || {}).plan || ""))}</div>
+    <textarea class="ss-plan-fb" rows="2" placeholder="What should change? (only needed for Keep planning)"></textarea>
+    <div class="ss-ask-a"><button class="btn primary small" data-decide="approve">Approve plan</button><button class="btn small" data-plan-revise>Keep planning</button></div></div>`;
+}
+function ssPending(d) {
+  return (d.pending || []).map(p => {
+    if (p.kind === "question") return ssQuestion(p);
+    if (p.kind === "plan") return ssPlan(p);
+    const t = { name: p.tool, input: p.input }, [verb, what] = toolLine(t), label = /^mcp__/.test(p.tool) ? mcpName(p.tool).join(": ") : p.tool;
+    return `<div class="ss-ask" data-req="${esc(p.id)}"><div class="ss-ask-h">${icon("checks")}<span class="grow">Claude wants to <b>${verb.toLowerCase()}</b> ${what}</span></div>
+      ${p.description ? `<div class="muted small">${esc(p.description)}</div>` : ""}<div class="ss-tool-b">${toolBody(t)}</div>
+      <div class="ss-ask-a"><button class="btn primary small" data-decide="once">Allow once</button>${p.can_remember ? `<button class="btn small" data-decide="always" title="Saved in your Claude Code settings, like choosing it in a terminal">Always allow ${esc(label)}</button>` : ""}<button class="btn small" data-decide="session">Allow for this session</button><button class="btn small bad" data-decide="deny">Deny</button></div></div>`;
+  }).join("");
+}
+function ssFollowups(d) {
+  if (d.state !== "idle" || d.pending && d.pending.length) return "";
+  const out = [];
+  if ((d.files || []).length) { out.push(["/lfg:check", "Check these changes", "/lfg:check the changes from this session"]); out.push(["/lfg:review-coach", "Review the changes", "/lfg:review-coach review the changes from this session"]); }
+  if (d.pr && d.pr.state === "OPEN" && (d.files || []).length) out.push(["/lfg:ship", `Get PR #${d.pr.number} ready`, `/lfg:ship PR #${d.pr.number}`]);
+  out.push(["", "Summarize what changed", "Summarize what you changed in this session and anything left to do, in a few bullets."]);
+  return `<div class="ss-follow"><span class="muted small">Next</span>${out.map(([k, l, p]) => `<button class="chip" data-follow="${esc(p)}">${k ? `<span class="ss-sug-k">${esc(k)}</span>` : ""}${esc(l)}</button>`).join("")}</div>`;
+}
+function ssConv(d) {
+  const live = ssLive(d.state);
+  return `${ssItems(d.items || [], live)}${(d.queued || []).map(q => `<div class="ss-me"><div class="ss-bub queued">${esc(q)}<span class="muted small"> · goes in when Claude is ready</span></div></div>`).join("")}
+    ${ssPending(d)}${d.state === "working" || d.state === "starting" ? `<div class="ss-working"><span class="ss-pulse"></span> Claude is working… <button class="btn small" data-ss-interrupt>Stop</button></div>` : ""}
+    ${d.error ? `<div class="callout bad small">${fmtWhy(d.error)}</div>` : ""}${ssFollowups(d)}${!(d.items || []).length && !live ? empty("Nothing to show", "This session has no messages yet.") : ""}`;
+}
+function ssHead(d) {
+  const model = String(d.model || "").replace(/^claude-/, "").replace(/-(\d)-(\d)$/, " $1.$2").replace(/^./, c => c.toUpperCase());
+  return `<div class="grow"><h1 class="ss-title" title="Click to rename" data-ss-rename>${esc(d.title)}</h1>
+      <div class="ss-tags">${ssTagList(d, true)}${model ? `<span class="tg">${esc(model)}</span>` : ""}${d.via === "headroom" ? '<span class="tg on">via Headroom</span>' : ""}</div></div>
+    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}
+      <button class="icon-btn ss-more" data-ss-more aria-haspopup="menu" aria-expanded="false" title="More">${icon("more")}</button>
+      <div class="ss-menu" role="menu" hidden>
+        <button role="menuitem" data-menu="fork">${icon("branch")}Fork session</button>
+        <button role="menuitem" data-menu="compact">${icon("compress")}Compact conversation</button>
+        <hr><button role="menuitem" data-menu="export">${icon("download")}Export as Markdown</button>
+        <button role="menuitem" data-menu="resume">${icon("terminal")}Copy terminal command</button>
+        <button role="menuitem" data-menu="rename">${icon("docs")}Rename</button></div></div>`;
+}
+function ssDetail(d) {
+  const live = ssLive(d.state), fork = state.ssFork && state.ssFork.sid === d.id ? state.ssFork : null;
+  return `<header class="ss-head" id="ss-head">${ssHead(d)}</header>
+    <div class="ss-conv${d.state === "working" || d.state === "starting" || (d.pending || []).length ? " ss-busy" : ""}" id="ss-conv">${ssConv(d)}</div>
+    ${ssComposer({ live, saved: !live, mode: d.mode, fork })}
+    <aside class="ss-act" id="ss-act" aria-label="Running in the background" aria-live="polite">${ssAct(d)}</aside>`;
+}
+
+/* Beside the conversation: the subagents and background commands this session has going, so you can see Claude
+   isn't idle (or that something is still running after it went quiet). Running first, then what just finished. */
+const SS_ACT = { running: ["Running", "run"], quiet: ["No news for 15 min", "quiet"], done: ["Done", "ok"], failed: ["Failed", "bad"], stopped: ["Stopped", "off"] };
+function ssAct(d) {
+  const xs = (d.activity || []).slice().sort((a, b) => (a.status === "running" ? 0 : a.status === "quiet" ? 1 : 2) - (b.status === "running" ? 0 : b.status === "quiet" ? 1 : 2));
+  if (!xs.length) return "";
+  // an accordion: the panel folds to its header line, and each item folds to one line (its details on open).
+  // What's open is kept across the page's refreshes, and the panel's fold in this browser.
+  const open = state.ssActOpen = state.ssActOpen || new Set();
+  let shut = false; try { shut = localStorage.getItem("lfg.ssAct.shut") === "1"; } catch (e) { /* private window */ }
+  const n = xs.filter(a => a.status === "running").length, done = xs.length - n;
+  const row = a => {
+    const [word, cls] = SS_ACT[a.status] || [a.status, "off"];
+    const kind = a.kind === "agent" ? `${a.type ? esc(a.type) : "Subagent"}${a.background ? " · background" : ""}` : a.kind === "command" ? "Background command" : `Background ${esc(a.tool || "task")}`;
+    const when = a.status === "running" || a.status === "quiet" ? `started ${ago(a.started)}` : ago(a.ended);
+    return `<details class="ss-act-i ${cls}" data-act="${esc(a.id)}"${open.has(a.id) ? " open" : ""}><summary><span class="ss-act-dot" aria-hidden="true"></span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="ss-act-st">${word === "Running" ? (a.steps ? plural(a.steps, "step") : "") : word}</span><span class="ss-act-chev">${icon("chev")}</span></summary>
+      <div class="ss-act-d"><div class="ss-act-k">${icon(a.kind === "agent" ? "agent" : "terminal")}<span>${kind}</span></div>
+      ${a.now && (a.status === "running" || a.status === "quiet") ? `<span class="ss-act-now" title="${esc(a.now)}">${esc(a.now)}</span>` : ""}
+      ${a.summary && a.status !== "running" ? `<span class="ss-act-now" title="${esc(a.summary)}">${esc(a.summary)}</span>` : ""}
+      <span class="ss-act-m">${a.steps ? `${plural(a.steps, "step")} · ` : ""}${when}</span></div></details>`;
+  };
+  return `<button type="button" class="ss-act-h" data-act-fold aria-expanded="${!shut}"><span class="ss-act-chev">${icon("chev")}</span><b>${n ? `${n} running` : "Background work"}</b><span class="muted small">${[n ? "" : "nothing running", done ? `${done} finished` : ""].filter(Boolean).join(" · ")}</span></button>
+    <div class="ss-act-list"${shut ? " hidden" : ""}>${xs.map(row).join("")}</div>`;
+}
+/* the accordion's clicks: delegated, so they keep working after each refresh redraws the panel */
+function wireAct(box) {
+  if (!box || box.dataset.wired) return;
+  box.dataset.wired = "1";
+  box.addEventListener("click", e => {
+    const h = e.target.closest("[data-act-fold]");
+    if (!h) return;
+    const list = $(".ss-act-list", box), shut = !list.hidden;
+    list.hidden = shut; h.setAttribute("aria-expanded", String(!shut));
+    try { localStorage.setItem("lfg.ssAct.shut", shut ? "1" : "0"); } catch (err) { /* private window */ }
+  });
+  box.addEventListener("toggle", e => {
+    const it = e.target.closest && e.target.closest("[data-act]");
+    if (!it) return;
+    const open = state.ssActOpen = state.ssActOpen || new Set();
+    it.open ? open.add(it.dataset.act) : open.delete(it.dataset.act);
+  }, true);
+}
+
+/* a file for a message: big images are scaled down first (to 2000px and under ~3.5 MB, as Claude Code does) */
+async function ssPrepFile(f) {
+  let blob = f, type = f.type || "";
+  if (/^image\/(png|jpeg|webp)$/.test(type)) {
+    const img = await createImageBitmap(f).catch(() => null);
+    if (img && (Math.max(img.width, img.height) > 2000 || f.size > 3.5e6)) {
+      const k = Math.min(1, 2000 / Math.max(img.width, img.height)), c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.88)); type = "image/jpeg";
+    }
+  }
+  if (blob.size > 20 * 1024 * 1024) throw new Error("files can be up to 20 MB");
+  const url = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(new Error("couldn't read it")); r.readAsDataURL(blob); });
+  return { type, data: url.slice(url.indexOf(",") + 1), thumb: /^image\/(png|jpeg|gif|webp)$/.test(type) ? url : "" };
+}
+
+/* the composer: / for skills, @ for files and folders, ↑↓ to pick, Enter or Tab to take, Escape to close */
+const SK_GROUP = { plugin: "LFG and plugins", project: "This project", personal: "Your skills", builtin: "Claude Code" };
+async function ssSkills() {
+  if (!state.ssSkillList) {
+    const d = await api("allskills");
+    state.ssSkillList = (d.skills || []).filter(x => x.invoke).map(x => ({ v: x.invoke, d: x.description || "", g: SK_GROUP[x.source] || "Other", lfg: /^\/lfg:/.test(x.invoke) }))
+      .sort((a, b) => (b.lfg - a.lfg) || a.g.localeCompare(b.g) || a.v.localeCompare(b.v));
+  }
+  return state.ssSkillList;
+}
+function ssAutocomplete(ta, box) {
+  let items = [], at = 0, tok = null, timer = null, total = 0;
+  const close = () => { box.hidden = true; items = []; tok = null; };
+  const paint = () => {
+    if (!tok) return close();
+    box.hidden = false;
+    const head = tok.kind === "/" ? `<b>Skills</b><span>${items.length}${items.length === 1 ? " skill" : " skills"} · type to filter</span>` : `<b>Files and folders</b><span>${total > items.length ? `${items.length} of ${total} · keep typing to narrow` : `${items.length} found`}</span>`;
+    let group = "";
+    box.innerHTML = `<div class="ss-ac-h">${head}<span class="grow"></span><span class="ss-keys"><kbd>↑</kbd><kbd>↓</kbd> choose <kbd>↵</kbd> add <kbd>esc</kbd> close</span></div><div class="ss-ac-l">${items.length ? items.map((x, i) => {
+      const g = x.g && x.g !== group ? (group = x.g, `<div class="ss-ac-g">${esc(x.g)}</div>`) : "";
+      const isDir = tok.kind === "@" && x.v.endsWith("/"), name = tok.kind === "@" ? x.v.replace(/\/$/, "").split("/").pop() + (isDir ? "/" : "") : x.v, dir = tok.kind === "@" ? x.v.replace(/\/$/, "").split("/").slice(0, -1).join("/") : "";
+      return `${g}<button type="button" class="ss-ac-i${i === at ? " on" : ""}" data-i="${i}">${tok.kind === "@" ? `<span class="ss-ac-ic">${icon(isDir ? "folder" : "docs")}</span>` : ""}<span class="ss-ac-t"><b>${esc(name)}</b>${tok.kind === "@" ? (dir ? `<span>${esc(dir)}</span>` : "") : x.d ? `<span>${esc(x.d.slice(0, 110))}</span>` : ""}</span></button>`;
+    }).join("") : `<div class="ss-ac-none">${tok.kind === "/" ? "No skill matches that." : "No file or folder matches that."}</div>`}</div>`;
+    $$(".ss-ac-i", box).forEach(b => b.onmousedown = e => { e.preventDefault(); take(+b.dataset.i); });
+    const on = $(".ss-ac-i.on", box); if (on) on.scrollIntoView({ block: "nearest" });
+  };
+  const take = i => {
+    const x = items[i]; if (!x || !tok) return;
+    const before = ta.value.slice(0, tok.start), after = ta.value.slice(ta.selectionStart);
+    const ins = (tok.kind === "@" ? "@" + x.v : x.v) + (tok.kind === "@" && x.v.endsWith("/") ? "" : " ");
+    ta.value = before + ins + after; ta.selectionStart = ta.selectionEnd = before.length + ins.length; ta.focus();
+    if (tok.kind === "@" && x.v.endsWith("/")) { update(); return; }  // a folder: keep going inside it, or press space
+    close(); ta.dispatchEvent(new Event("input"));
+  };
+  const update = async () => {
+    const upto = ta.value.slice(0, ta.selectionStart), m = /(^|\s)([/@])([^\s]*)$/.exec(upto);
+    if (!m) return close();
+    const mine = tok = { kind: m[2], start: upto.length - m[3].length - 1, q: m[3].toLowerCase() };
+    if (mine.kind === "/") {
+      if (mine.q.includes("/")) return close();  // a path like /tmp/x, not a skill
+      const found = (await ssSkills()).filter(x => (x.v + " " + x.d).toLowerCase().includes(mine.q));
+      if (tok !== mine) return;  // the text moved on while the list loaded
+      items = found; total = found.length; at = 0; return paint();
+    }
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const r = await api("studio_files", { q: mine.q });
+      if (tok !== mine) return;
+      items = (r.files || []).map(f => ({ v: f })); total = r.total || items.length; at = 0; paint();
+    }, 120);
+  };
+  ta.addEventListener("input", update);
+  ta.addEventListener("click", update);
+  ta.addEventListener("keydown", e => {
+    if (box.hidden || !items.length) { if (!box.hidden && e.key === "Escape") { e.preventDefault(); close(); } return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); at = (at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; $$(".ss-ac-i", box).forEach((b, i) => b.classList.toggle("on", i === at)); $(".ss-ac-i.on", box).scrollIntoView({ block: "nearest" }); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopImmediatePropagation(); take(at); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  }, true);
+  box.addEventListener("mousedown", e => e.preventDefault());  // scrolling or clicking the list keeps the cursor in the text
+  ta.addEventListener("blur", () => setTimeout(close, 150));
+}
+
+/* Studio screens fill the window exactly: the page never scrolls, their own parts do */
+function ssFit(root) {
+  const box = $(".ss-one, .ss-page", root), view = $("#view");
+  if (!box) return;
+  window.scrollTo(0, 0);
+  // Text size zooms #view: the box's position is measured on screen, but --ss-h is set in the zoomed CSS pixels
+  const zoom = parseFloat(getComputedStyle(view).zoom) || 1, pad = (parseFloat(getComputedStyle(view).paddingBottom) || 0) * zoom;
+  box.style.setProperty("--ss-h", Math.max(360, Math.floor((window.innerHeight - box.getBoundingClientRect().top - pad - 2) / zoom)) + "px");
+}
+window.addEventListener("resize", () => { if ((location.hash.slice(1) || "").split("/")[0] === "studio") ssFit(document); });
+
+/* What one session changed: every file it edited or created, as diffs, from its own transcript. The same diff view as
+   Reviews (file tree, folding, filter), read-only. Shell commands that may also have changed files are listed. */
+async function ssChanges(id) {
+  const [c, d] = await Promise.all([api("studio_changes", { id }), api("studio_session", { id }).catch(() => ({}))]);
+  state.sess = { d: null, id: null, changes: true };
+  crumbs("studio", d && d.title ? d.title : "Session", `#studio/${id}`);
+  const back = `<a class="btn small" href="#studio/${esc(id)}">${icon("back")}Back to the session</a>`;
+  if (!c || c.available === false) return `<div class="ssc">${back}${unavailable(c || {})}</div>`;
+  // files outside the project (scratch notes, another repo) go under their own folder in the tree
+  const files = c.files.map(f => f.outside ? Object.assign({}, f, { path: "Outside this project/" + f.path.split("/").pop(), full: f.path }) : f);
+  state.sscFiles = Object.fromEntries(files.map(f => [f.path, f.full || f.path]));  // shown path -> the real one
+  state.dfOpen = { n: "ss-" + id, paths: [], shut: [], filter: "" };
+  const total = files.reduce((a, f) => a + f.hunks.reduce((b, h) => b + h.lines.length, 0), 0);
+  const body = files.map((f, i) => diffFile(f, i, [], total <= 3000 || i < 4)).join("");
+  const shell = c.shell.length ? `<details class="box ssc-sh"><summary><b>${plural(c.shell.length, "shell command")}</b> that can also change files <span class="muted small">(sed, scripts, installs, formatters: these aren't recorded as edits, so check git for what they did)</span></summary>
+    <ul>${c.shell.slice().reverse().map(x => `<li><code>${esc(x.command)}</code><span class="muted small">${ago(x.ts)}</span></li>`).join("")}</ul></details>` : "";
+  return `<div class="ssc"><div class="ssc-h">${back}<div class="grow"><h1>What this session changed</h1>
+      <p class="muted">${esc(d && d.title || "")}${d && d.title ? " · " : ""}${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span> · from the session's own record, so it shows exactly what Claude edited here, even after commits</p></div></div>
+    ${shell}
+    ${files.length ? `<p class="muted small df-note">Drag down the line numbers, or click one and shift-click another, to ask about those lines or ask for a change. It goes into this same session, with the file and lines pointed out.</p>` : ""}
+    ${files.length ? `<div class="df"><aside class="df-side"><div class="df-filter"><input type="search" id="df-filter" placeholder="Filter files…" aria-label="Filter files"></div>
+      <div class="df-sum">${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span></div>
+      <div class="df-tree" id="df-tree">${diffTree(files, {})}</div></aside><div class="df-main">${body}</div></div>` : empty("No file edits in this session", "Claude didn't edit or create files here. Shell commands, if any, are listed above.")}</div>`;
+}
+function wireSessChanges(root) {
+  const id = (location.hash.match(/^#studio\/([0-9a-f-]{36})\/changes/) || [])[1];
+  // select lines (drag down the numbers, or click then shift-click), then ask about them or ask for an edit: it goes
+  // into this same session as the next message, with the file, the lines and what they say, so Claude knows exactly
+  // what you mean
+  let sel = null, dragging = false;
+  const rowsOf = table => $$(".df-l", table);
+  const range = () => { const rows = rowsOf(sel.table), i = rows.indexOf(sel.a), j = rows.indexOf(sel.b); return rows.slice(Math.min(i, j), Math.max(i, j) + 1); };
+  const clear = () => $$(".df-l.sel", root).forEach(r => r.classList.remove("sel"));
+  const mark = () => { clear(); if (sel) range().forEach(r => r.classList.add("sel")); };
+  const compose = () => {
+    $$(".df-compose", root).forEach(r => r.remove());
+    if (!sel || !id) return;
+    const rows = range(), path = state.sscFiles[sel.table.dataset.path] || sel.table.dataset.path;
+    const nums = rows.map(r => +(r.dataset.k.startsWith("R") ? r.dataset.k.slice(1) : NaN)).filter(n => !isNaN(n));
+    const where = nums.length ? (nums[0] === nums[nums.length - 1] ? `line ${nums[0]}` : `lines ${nums[0]}-${nums[nums.length - 1]}`) : "removed lines";
+    const tr = document.createElement("tr");
+    tr.className = "df-compose";
+    tr.innerHTML = `<td colspan="4"><div class="th th-ask"><div class="th-h"><span class="th-lines">${icon("review")}${esc(path.split("/").pop())}, ${esc(where)} · goes to this session</span></div>
+      <textarea rows="3" placeholder="Ask about these lines, or say what to change: rename this, handle the empty case, why a sliding window?"></textarea>
+      <div class="df-reply"><span class="muted small">⌘ Enter asks · Claude gets the file, the lines and this text</span><span class="grow"></span><button class="btn small" data-ssc-cancel>Cancel</button><button class="btn small" data-ssc-send="ask">Ask</button><button class="btn small primary" data-ssc-send="edit">Make this change</button></div></div></td>`;
+    rows[rows.length - 1].after(tr);
+    const ta = $("textarea", tr); ta.focus();
+    const cancel = () => { sel = null; clear(); tr.remove(); };
+    ta.onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $('[data-ssc-send="ask"]', tr).click(); if (e.key === "Escape") cancel(); };
+    $("[data-ssc-cancel]", tr).onclick = cancel;
+    $$("[data-ssc-send]", tr).forEach(b => b.onclick = async () => {
+      if (!ta.value.trim()) return ta.focus();
+      const snippet = rows.slice(0, 80).map(r => { const t = r.classList.contains("add") ? "+" : r.classList.contains("del") ? "-" : " "; return t + ($(".df-c", r) || r.lastElementChild).textContent; }).join("\n");
+      const edit = b.dataset.sscSend === "edit";
+      // Claude gets the file, the lines and an instruction; the chat shows only the lines (as a diff) and your words
+      const span = where.replace(/^lines? /, "");
+      const text = `<lfg-lines file="${path.replace(/"/g, "")}" lines="${span}">\n${snippet}${rows.length > 80 ? "\n… (" + (rows.length - 80) + " more lines selected)" : ""}\n</lfg-lines>\n\n${ta.value.trim()}\n\n<lfg-note>${edit ? `Make this change to ${where} of ${path} (read the file first: the lines above are as this session changed them, and it may differ now).` : `This is a question about ${where} of ${path}, as this session changed them (the file may differ now): answer it, don't edit any files.`}</lfg-note>`;
+      $$("[data-ssc-send]", tr).forEach(x => (x.disabled = true)); b.textContent = "Sending…";
+      const st = await api("studio_session", { id }).catch(() => null);
+      if (!st || !ssLive(st.state)) { const r = await save("sess_resume", { repo: state.repo, id }); if (!r.ok) { b.disabled = false; b.textContent = edit ? "Make this change" : "Ask"; return alert(String(r.why || "Couldn't start the session.")); } }
+      const r = await save("sess_say", { repo: state.repo, id, text });
+      if (!r.ok) { $$("[data-ssc-send]", tr).forEach(x => (x.disabled = false)); b.textContent = edit ? "Make this change" : "Ask"; return alert(String(r.why || "Couldn't send it.")); }
+      location.hash = `#studio/${id}`;  // watch the answer in the conversation
+    });
+  };
+  $$("[data-df-pick]", root).forEach(el => el.addEventListener("mousedown", e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const tr = el.closest(".df-l"), table = el.closest(".df-t");
+    if (e.shiftKey && sel && sel.table === table) sel.b = tr; else sel = { table, a: tr, b: tr };
+    dragging = true; mark();
+  }));
+  $$(".df-t", root).forEach(table => table.addEventListener("mouseover", e => {
+    if (!dragging || !sel || sel.table !== table) return;
+    const tr = e.target.closest(".df-l");
+    if (tr && tr !== sel.b) { sel.b = tr; mark(); }
+  }));
+  const up = () => { if (!dragging) return; dragging = false; compose(); };
+  document.removeEventListener("mouseup", state.dfUp || (() => {}));
+  state.dfUp = up; document.addEventListener("mouseup", up);
+
+  $$("[data-df-dir]", root).forEach(a => a.onclick = e => { e.preventDefault(); a.parentNode.classList.toggle("shut"); });
+  $$("[data-df-goto]", root).forEach(a => a.onclick = e => { e.preventDefault(); $$(".df-leaf.on", root).forEach(x => x.classList.remove("on")); a.classList.add("on"); const f = $(`#df-f${a.dataset.dfGoto}`, root); f.open = true; f.scrollIntoView({ block: "start", behavior: "smooth" }); });
+  const filt = $("#df-filter", root);
+  if (filt) filt.oninput = () => {
+    const q = filt.value.trim().toLowerCase();
+    $$(".df-leaf", root).forEach(a => { a.hidden = !!q && !a.dataset.name.includes(q); });
+    $$(".df-dir", root).slice().reverse().forEach(dir => { dir.hidden = !!q && !$$(".df-leaf", dir).some(a => !a.hidden); if (q) dir.classList.remove("shut"); });
+  };
+}
+
+function wireStudio(root) {
+  clearTimeout(ssPoll);
+  if ($(".ssc", root)) return wireSessChanges(root);
+  ssFit(root);
+  const S = state.sess || {}, d = S.d;
+  const go = async (what, body, btn, busy) => { const was = btn && btn.textContent; if (btn) { btn.disabled = true; if (busy) btn.textContent = busy; } const r = await save(what, Object.assign({ repo: state.repo }, body)); if (!r.ok) { if (btn) { btn.disabled = false; btn.textContent = was; } alert(String(r.why || "That didn't work.").replace(/`/g, "")); } return r; };
+  // the list: filter and search
+  $$("[data-ss-filter]", root).forEach(b => b.onclick = () => { state.ssFilter = b.dataset.ssFilter; route({ soft: true }); });
+  const find = $("#ss-find", root);
+  if (find) find.oninput = () => { const q = find.value.trim().toLowerCase(); $$(".ss-row", root).forEach(a => { a.hidden = !!q && !q.split(/\s+/).every(w => a.dataset.title.includes(w)); }); };
+  // the composer
+  const ta = $("#ss-text", root), send = $("#ss-send", root), ac = $("#ss-ac", root);
+  $$("[data-seg]", root).forEach(seg => $$("button", seg).forEach(b => b.onclick = () => {
+    $$("button", seg).forEach(x => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+    localStorage.setItem("lfg.ss." + seg.dataset.seg, b.dataset.v);
+    if (seg.dataset.seg === "mode" && S.id && d && ssLive(d.state)) go("sess_mode", { id: S.id, mode: b.dataset.v });
+  }));
+  const segVal = k => { const b = $(`[data-seg="${k}"] button.on`, root); return b ? b.dataset.v : undefined; };
+  if (ta) {
+    ssAutocomplete(ta, ac);
+    ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && ac.hidden) { e.preventDefault(); send.click(); } });
+    ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 280) + "px"; });
+    if (state.ssPrefill) { ta.value = state.ssPrefill; state.ssPrefill = ""; ta.dispatchEvent(new Event("input")); state.ssFresh = true; }
+    if (!S.id || ssLive(d && d.state) || state.ssFresh) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    state.ssFresh = false;
+  }
+  // attachments: the paperclip, drag and drop onto the composer, or a pasted screenshot
+  const att = [], attBox = $("#ss-att", root), comp = $("#ss-comp", root), fileIn = $("#ss-file", root);
+  const paintAtt = () => {
+    attBox.hidden = !att.length;
+    attBox.innerHTML = att.map((a, i) => `<span class="ss-chip${a.path ? "" : " up"}" title="${esc(a.name)}${a.path ? "" : " (adding…)"}">${a.thumb ? `<img src="${a.thumb}" alt="">` : icon("docs")}<span>${esc(a.name)}</span><button type="button" data-att-x="${i}" aria-label="Remove ${esc(a.name)}">&times;</button></span>`).join("");
+    $$("[data-att-x]", attBox).forEach(b => b.onclick = () => { att.splice(+b.dataset.attX, 1); paintAtt(); });
+  };
+  const addFiles = async files => {
+    for (const f of Array.from(files || [])) {
+      if (att.length >= 10) { alert("Attach up to 10 files at a time."); break; }
+      const a = { name: f.name || "pasted-image.png" }; att.push(a); paintAtt();
+      try {
+        const x = await ssPrepFile(f); a.thumb = x.thumb;  paintAtt();
+        const r = await save("sess_upload", { repo: state.repo, name: a.name, type: x.type, data: x.data });
+        if (!r.ok) throw new Error(r.why || "couldn't attach it");
+        Object.assign(a, { path: r.path, type: r.type, image: r.image });
+      } catch (e) { att.splice(att.indexOf(a), 1); alert(`${a.name}: ${String(e.message || e).replace(/`/g, "")}`); }
+      paintAtt();
+    }
+  };
+  if (comp && ta) {
+    $("#ss-attach", root).onclick = () => fileIn.click();
+    fileIn.onchange = () => { addFiles(fileIn.files); fileIn.value = ""; };
+    let depth = 0;
+    const hasFiles = e => Array.from((e.dataTransfer || {}).types || []).includes("Files");
+    comp.addEventListener("dragenter", e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; comp.classList.add("drop"); });
+    comp.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+    comp.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; comp.classList.remove("drop"); } });
+    comp.addEventListener("drop", e => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; comp.classList.remove("drop"); addFiles(e.dataTransfer.files); });
+    ta.addEventListener("paste", e => { const fs = Array.from((e.clipboardData || {}).files || []); if (fs.length) { e.preventDefault(); addFiles(fs); } });
+  }
+  const attached = () => att.filter(a => a.path).map(a => ({ path: a.path, type: a.type || "" }));
+  $$("[data-sug]", root).forEach(b => b.onclick = () => { const x = S.sug.suggestions[+b.dataset.sug]; ta.value = x.prompt; ta.dispatchEvent(new Event("input")); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+  const clearComposer = () => { ta.value = ""; ta.style.height = "auto"; att.length = 0; paintAtt(); };
+  if (send) send.onclick = async () => {
+    const text = ta.value.trim(), files = attached();
+    if (att.some(a => !a.path)) return;  // still uploading
+    if (!text && !files.length) return ta.focus();
+    const fork = S.id && state.ssFork && state.ssFork.sid === S.id ? state.ssFork : null;
+    if (fork) {
+      const r = await go("sess_fork", { id: S.id, at: fork.at || "", text, attachments: files }, send, "Forking…");
+      if (r.ok) { state.ssFork = null; clearComposer(); loadNavSessions(); location.hash = "#studio/" + r.id; }
+      return;
+    }
+    if (!S.id) {
+      const where = ssWhereValue(root);
+      if (where.kind === "new" && !where.branch) { const n = $("#ss-wt-name", root); n.focus(); n.placeholder = "Name the new branch"; n.classList.add("need"); return; }
+      const r = await go("sess_start", { text, mode: segVal("mode"), where, attachments: files }, send, where.kind === "here" || where.kind === "worktree" ? "Starting…" : "Making the worktree…");
+      if (r.ok) { clearComposer(); loadNavSessions(); location.hash = "#studio/" + r.id; }
+      return;
+    }
+    if (!ssLive(d.state)) { const r = await go("sess_resume", { id: S.id }, send, "Starting…"); if (!r.ok) return; }
+    const r = await go("sess_say", { id: S.id, text, attachments: files }, send, "Sending…");
+    if (r.ok) { clearComposer(); send.disabled = false; send.textContent = "Send"; refresh(); }
+  };
+  const fx = $("[data-fork-x]", root); if (fx) fx.onclick = () => { state.ssFork = null; route({ soft: true }); };
+  const wsel = $("#ss-where", root);
+  const tag = () => { const [b, wt] = ssTarget(root), t = $("#ss-branch", root), w = $("#ss-wt-tag", root); if (t) t.textContent = b; if (w) { w.hidden = !wt; w.innerHTML = wt ? `${icon("folder")}${esc(wt)}` : ""; } };
+  if (wsel) {
+    const show = () => { $(".ss-newwt", root).hidden = wsel.value !== "new"; tag(); };
+    wsel.onchange = () => { show(); if (wsel.value === "new") $("#ss-wt-name", root).focus(); };
+    $("#ss-wt-name", root).oninput = tag; $("#ss-wt-base", root).onchange = tag;
+    show();
+  }
+  if (!S.id && $("#ss-branch", root)) {  // the checked-out branch can change under us: keep it current
+    const tick = async () => {
+      if (location.hash !== "#studio") return;
+      const w = await api("studio_where").catch(() => null);
+      if (w && w.branch !== (state.sess.where || {}).branch) { state.sess.where = w; const o = $('#ss-where option[value="here"]'); if (o) o.textContent = `Here · ${w.branch}`; tag(); }
+      ssPoll = setTimeout(tick, 5000);
+    };
+    ssPoll = setTimeout(tick, 5000);
+  }
+  // worktrees: new session there, merge back, merge all
+  $$("[data-wt-session]", root).forEach(b => b.onclick = () => { state.ssStartIn = b.dataset.wtSession; location.hash = "#studio"; });
+  if (state.ssStartIn && wsel) { const o = $(`#ss-where option[value="wt:${CSS.escape(state.ssStartIn)}"]`, root); if (o) { wsel.value = o.value; wsel.onchange(); } state.ssStartIn = null; }
+  const merge = async (body, btn, label) => {
+    let r = await go(body.into ? "wt_merge_all" : "wt_merge", body, btn, "Merging…");
+    if (r.ok && r.needs_merge_commit) {
+      if (!confirm(r.why + "\n\nThis creates a merge commit on the base branch.")) { route({ soft: true }); return; }
+      r = await go(body.into ? "wt_merge_all" : "wt_merge", Object.assign({ merge_commit: true }, body), btn, "Merging…");
+    }
+    if (r.ok) { const done = r.done || [r]; alert(done.length ? done.map(x => `${x.name}: ${x.commits ? `${x.commits} commit${x.commits === 1 ? "" : "s"} into ${x.into} (${x.how})` : "nothing to merge"}${x.removed ? ", removed" : ""}`).join("\n") : "Nothing to merge."); }
+    route({ soft: true });
+  };
+  $$("[data-wt-merge]", root).forEach(b => b.onclick = () => {
+    const row = b.closest("[data-wt]"), name = row.dataset.wt, rm = b.hasAttribute("data-remove");
+    if (!confirm(rm ? `${b.textContent} ${name}?\n\nOnly committed work is merged. The worktree folder and its branch (once merged) are removed.` : `Merge ${name} into its base branch?\n\nOnly committed work is merged.`)) return;
+    merge({ name, remove: rm }, b);
+  });
+  $$("[data-wt-all]", root).forEach(b => b.onclick = () => { if (confirm(`Merge every LFG worktree forked from ${b.dataset.wtAll} into it, then remove them?\n\nIt stops at the first one that can't merge (uncommitted changes or conflicts).`)) merge({ into: b.dataset.wtAll }, b); });
+  if (!d || d.available === false) return;
+  // one session: answers, follow-ups, stop, end, rename, live updates
+  const conv = $("#ss-conv", root), head = $("#ss-head", root);
+  const wireConv = () => {
+    $$(".ss-ask", conv).forEach(card => $$("[data-decide]", card).forEach(b => b.onclick = async () => { const r = await go("sess_decide", { id: S.id, request: card.dataset.req, decision: b.dataset.decide }, b); if (r.ok) refresh(); }));
+    $$(".ss-ask-q", conv).forEach(card => {  // questions: pick, type, send
+      const rid = card.dataset.req, picked = (state.ssAns = state.ssAns || {})[rid] = state.ssAns[rid] || {};
+      const qs = $$(".ss-q", card), send = $("[data-q-send]", card), left = $("[data-q-left]", card);
+      const answerOf = qi => { const c = picked[qi] || { labels: [], other: "" }; return [...c.labels, ...(c.other.trim() ? [c.other.trim()] : [])]; };
+      const next = $("[data-q-next]", card), back = $("[data-q-back]", card), tabs = $$("[data-q-tab]", card);
+      const tabNow = () => Math.min((state.ssQTab = state.ssQTab || {})[rid] || 0, qs.length - 1);
+      const show = k => {  // one question at a time when there are several
+        state.ssQTab[rid] = k;
+        qs.forEach((f, i) => { f.hidden = i !== k; });
+        tabs.forEach((t, i) => { t.classList.toggle("on", i === k); t.setAttribute("aria-selected", String(i === k)); });
+        sync();
+        const first = $("input[data-opt]:checked", qs[k]) || $("input[data-opt]", qs[k]); if (first && tabs.length) first.focus({ preventScroll: true });
+      };
+      const sync = () => {
+        qs.forEach(f => { const qi = f.dataset.qi; $$(".ss-q-o", f).forEach(l => { const i = $("input[data-opt]", l); l.classList.toggle("on", i.checked); }); picked[qi] = picked[qi] || { labels: [], other: "" }; });
+        const missing = qs.filter(f => !answerOf(f.dataset.qi).length).length, k = tabNow(), last = k >= qs.length - 1;
+        tabs.forEach((t, i) => t.classList.toggle("done", !!answerOf(qs[i].dataset.qi).length));
+        if (next) { next.hidden = last; next.disabled = !answerOf(qs[k].dataset.qi).length; back.hidden = k === 0; send.hidden = !last; }
+        send.disabled = !!missing; left.textContent = missing && qs.length > 1 && last ? `${missing} left to answer` : "";
+      };
+      if (next) { next.onclick = () => show(Math.min(tabNow() + 1, qs.length - 1)); back.onclick = () => show(Math.max(tabNow() - 1, 0)); }
+      tabs.forEach((t, i) => t.onclick = () => show(i));
+      qs.forEach(f => {
+        const qi = f.dataset.qi, multi = !!$('input[type="checkbox"]', f);
+        $$("input[data-opt]", f).forEach(i => i.onchange = () => {
+          const c = picked[qi] = picked[qi] || { labels: [], other: "" };
+          if (i.dataset.opt === "__other") { if (!i.checked) c.other = ""; else $(".ss-q-in", f).focus(); if (!multi) c.labels = []; }
+          else if (multi) c.labels = i.checked ? [...new Set([...c.labels, i.dataset.opt])] : c.labels.filter(x => x !== i.dataset.opt);
+          else { c.labels = [i.dataset.opt]; c.other = ""; const o = $(".ss-q-in", f); if (o) o.value = ""; }
+          sync();
+        });
+        const other = $(".ss-q-in", f);
+        other.oninput = () => {
+          const c = picked[qi] = picked[qi] || { labels: [], other: "" };
+          c.other = other.value;
+          const box = $('input[data-opt="__other"]', f); box.checked = !!other.value.trim();
+          if (!multi && other.value.trim()) { c.labels = []; $$("input[data-opt]", f).forEach(x => { if (x !== box) x.checked = false; }); }
+          sync();
+        };
+        other.onclick = () => { const box = $('input[data-opt="__other"]', f); if (!box.checked && !multi) { box.checked = true; c0(qi); sync(); } };
+        other.onkeydown = e => { if (e.key !== "Enter") return; if (next && !next.hidden && !next.disabled) next.click(); else if (!send.disabled) send.click(); };
+      });
+      const c0 = qi => { const c = picked[qi] = picked[qi] || { labels: [], other: "" }; if (!multi0(qi)) c.labels = []; };
+      const multi0 = qi => !!$(`.ss-q[data-qi="${qi}"] input[type="checkbox"]`, card);
+      card.onkeydown = e => {  // 1-9 picks an option in the first unanswered single-choice question, as in the terminal
+        if (e.target.matches("input[type=text], textarea") || !/^[1-9]$/.test(e.key)) return;
+        const f = tabs.length ? qs[tabNow()] : qs.find(x => !multi0(x.dataset.qi) && !answerOf(x.dataset.qi).length) || qs[0];
+        if (multi0(f.dataset.qi)) { const i = $$("input[data-opt]", f)[+e.key - 1]; if (i && i.dataset.opt !== "__other") { i.checked = !i.checked; i.onchange(); } return; }
+        const i = $$("input[data-opt]", f)[+e.key - 1]; if (i && i.dataset.opt !== "__other") { i.checked = true; i.onchange(); }
+      };
+      sync();
+      send.onclick = async () => {
+        const answers = {};
+        const list = (d.pending || []).find(x => x.id === rid);
+        ((list && list.input && list.input.questions) || []).forEach((q, qi) => { answers[q.question] = answerOf(qi).join(", "); });
+        const r = await go("sess_decide", { id: S.id, request: rid, decision: "answer", answers }, send, "Sending…");
+        if (r.ok) { delete state.ssAns[rid]; delete (state.ssQTab || {})[rid]; refresh(); }
+      };
+    });
+    $$(".ss-ask-plan", conv).forEach(card => {
+      const fb = $(".ss-plan-fb", card), rv = $("[data-plan-revise]", card);
+      rv.onclick = async () => {
+        if (!fb.value.trim()) { fb.focus(); fb.placeholder = "Say what to change, then Keep planning"; return; }
+        const r = await go("sess_decide", { id: S.id, request: card.dataset.req, decision: "revise", message: fb.value }, rv, "Sending…");
+        if (r.ok) refresh();
+      };
+    });
+    const stop = $("[data-ss-interrupt]", conv); if (stop) stop.onclick = () => go("sess_interrupt", { id: S.id }, stop, "Stopping…");
+    $$("[data-follow]", conv).forEach(b => b.onclick = () => { ta.value = b.dataset.follow; send.click(); });
+    $$("[data-ss-copy]", conv).forEach(b => b.onclick = async () => { await navigator.clipboard.writeText(ssItemText(d.items[+b.dataset.ssCopy])); const t = b.innerHTML; b.textContent = "Copied"; setTimeout(() => { b.innerHTML = t; }, 1200); });
+    $$("[data-fork]", conv).forEach(b => b.onclick = () => {
+      const it = d.items[+b.dataset.fork];
+      state.ssFork = { sid: S.id, at: it.p || "", label: ssItemText(it).slice(0, 60) };
+      state.ssPrefill = ssItemText(it); route({ soft: true });
+    });
+    $$("[data-rw]", conv).forEach(b => b.onclick = () => ssRewind(b));
+    $$(".ss-img", conv).forEach(b => b.onclick = () => b.classList.toggle("big"));
+    ssImages(conv);
+  };
+  // Rewind: like Claude Code's, to before one of your messages: the conversation, the code, or both
+  const ssRewind = async b => {
+    $$(".ss-rw", conv).forEach(x => x.remove());
+    const msg = b.closest(".ss-me"), u = b.dataset.rw;
+    const box = document.createElement("div"); box.className = "ss-rw";
+    box.innerHTML = `<div class="ss-rw-h"><b>Rewind to before this message</b><span class="muted small" data-rw-prev>Checking which files would change…</span></div><div class="ss-rw-files" hidden></div>
+      <div class="ss-rw-a"><button class="btn small primary" data-rw-go="both">Code and conversation</button><button class="btn small" data-rw-go="chat">Conversation only</button><button class="btn small" data-rw-go="code">Code only</button><button class="btn small" data-rw-x>Cancel</button></div>`;
+    msg.append(box); box.scrollIntoView({ block: "nearest" });
+    $("[data-rw-x]", box).onclick = () => box.remove();
+    const codeBtns = $$('[data-rw-go="both"], [data-rw-go="code"]', box);
+    const p = await save("sess_rewind_preview", { repo: state.repo, id: S.id, message: u }), prev = $("[data-rw-prev]", box);
+    if (!p.ok || !p.can) { prev.textContent = p.ok ? `The code can't be rewound: ${p.why || "no saved copy of the files from then"}.` : String(p.why || "Couldn't check the files.").replace(/`/g, ""); codeBtns.forEach(x => x.disabled = true); $('[data-rw-go="chat"]', box).classList.add("primary"); }
+    else if (!p.files.length) { prev.textContent = "No file changes since then; only the conversation goes back."; codeBtns.forEach(x => x.disabled = true); $('[data-rw-go="chat"]', box).classList.add("primary"); }
+    else { prev.textContent = `Puts back ${plural(p.files.length, "file")} (+${p.insertions} −${p.deletions}).`; const fl = $(".ss-rw-files", box); fl.hidden = false; fl.textContent = p.files.join("\n"); }
+    $$("[data-rw-go]", box).forEach(x => x.onclick = async () => {
+      const what = x.dataset.rwGo;
+      if (what !== "chat" && !confirm(`Put ${plural(p.files.length, "file")} back to how they were before this message? Changes made since, by Claude or by you, are lost.`)) return;
+      const r = await go("sess_rewind", { id: S.id, message: u, what }, x, "Rewinding…");
+      if (!r.ok) return;
+      if (r.prefill) state.ssPrefill = r.prefill;
+      loadNavSessions(); route({ soft: true });
+    });
+  };
+  const wireHead = () => {
+    const end = $("[data-ss-end]", head); if (end) end.onclick = async () => { if (confirm("End this session? Claude Code stops; you can continue the session later.")) { await go("sess_end", { id: S.id }, end); loadNavSessions(); route({ soft: true }); } };
+    const rename = async () => { const t = prompt("Name this session", d.title); if (t && t.trim()) { await go("sess_rename", { id: S.id, title: t }); loadNavSessions(); route({ soft: true }); } };
+    const ttl = $("[data-ss-rename]", head); if (ttl) ttl.onclick = rename;
+    const more = $("[data-ss-more]", head), menu = $(".ss-menu", head);
+    const close = () => { menu.hidden = true; more.setAttribute("aria-expanded", "false"); document.removeEventListener("click", outside, true); };
+    const outside = e => { if (!e.target.closest(".ss-menu, [data-ss-more]")) close(); };
+    more.onclick = () => { const open = menu.hidden; menu.hidden = !open; more.setAttribute("aria-expanded", open); if (open) document.addEventListener("click", outside, true); else close(); };
+    $$("[data-menu]", menu).forEach(b => b.onclick = async () => {
+      close();
+      const k = b.dataset.menu;
+      if (k === "rename") return rename();
+      if (k === "export") return ssDownload(`${(d.title || "session").replace(/[^\w.-]+/g, "-").slice(0, 60)}.md`, ssMarkdown(d));
+      if (k === "resume") { await navigator.clipboard.writeText(`claude --resume ${S.id}`); return alert(`Copied: claude --resume ${S.id}\n\nRun it in this project's folder to carry on in a terminal.`); }
+      if (k === "fork") { state.ssFork = { sid: S.id, at: "", label: "" }; route({ soft: true }); return; }
+      if (k === "compact") {
+        if (!confirm("Compact this conversation? Claude Code summarizes it to free up context, as /compact does in a terminal.")) return;
+        if (!ssLive(d.state)) { const r = await go("sess_resume", { id: S.id }); if (!r.ok) return; }
+        const r = await go("sess_compact", { id: S.id }); if (r.ok) refresh();
+      }
+    });
+  };
+  const loadCtx = async () => {  // how full the context is, once Claude is idle
+    if (!ssLive(d.state) || d.state === "working") return;
+    const c = await api("studio_context", { id: S.id }).catch(() => null);
+    if (!c || c.percent == null) return;
+    (state.ssCtx = state.ssCtx || {})[S.id] = c;
+    const a = $(".ss-head-a", head), old = $(".ss-ctx", a);
+    if (old) old.outerHTML = ssCtxHtml(c); else a.insertAdjacentHTML("afterbegin", ssCtxHtml(c));
+  };
+  wireConv(); wireHead(); loadCtx();
+  const atBottom = () => conv.scrollTop + conv.clientHeight >= conv.scrollHeight - 120;
+  conv.scrollTop = conv.scrollHeight;
+  let sig = "";
+  const sigOf = n => JSON.stringify([n.items.length, n.state, (n.pending || []).length, (n.queued || []).length, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null]);
+  const busyBg = n => (n.activity || []).some(a => a.status === "running");
+  wireAct($("#ss-act", root));
+  const drawAct = n => { const box = $("#ss-act", root); if (box) { const html = ssAct(n); if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; } } const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };
+  sig = sigOf(d);
+  async function refresh() {
+    clearTimeout(ssPoll);
+    if (!/^#studio\//.test(location.hash) || state.sess.id !== S.id) return;
+    const n = await api("studio_session", { id: S.id });
+    if (!n || n.available === false) return;
+    drawAct(n);  // steps and times change without the conversation changing
+    const nsig = sigOf(n);
+    if (nsig !== sig) {
+      const stick = atBottom(), was = d.state;
+      sig = nsig; state.sess.d = n; Object.assign(d, n);
+      conv.innerHTML = ssConv(n); head.innerHTML = ssHead(n); wireConv(); wireHead();
+      conv.classList.toggle("ss-busy", n.state === "working" || n.state === "starting" || !!(n.pending || []).length);
+      if (n.state === "idle" && was !== "idle") loadCtx();
+      if (send) { const want = ssLive(n.state) ? "Send" : "Continue here"; if (!send.disabled && send.textContent !== want) send.textContent = want; }
+      if (stick) conv.scrollTop = conv.scrollHeight;
+    }
+    if (ssLive(n.state)) ssPoll = setTimeout(refresh, n.state === "idle" ? 4000 : 1200);
+    else if (busyBg(n)) ssPoll = setTimeout(refresh, 5000);  // a terminal session's agents: keep watching
+  }
+  if (ssLive(d.state)) ssPoll = setTimeout(refresh, 1200);
+  else if (busyBg(d)) ssPoll = setTimeout(refresh, 5000);
+}
+
+/* Notifications: every long job (an AI review or answer, a fix run, a Linear ticket, a scan, the checks) is announced
+   when it finishes, by `lfg ui` itself, even with its page closed. They show as toasts, in the bell's list and, when
+   this tab is in the background and you allowed it, as system notifications. A click opens the page. */
+const NOTES = { last: "", seen: localStorage.getItem("lfg.notes.seen") || "", events: [] };
+const NOTE_ICON = { review: "review", diff: "review", fix: "runs", linear: "todos", checks: "checks", sonar: "checks" };
+async function openNote(ev) {
+  closeBell();
+  if (ev.repo && ev.repo !== state.repo && state.repos.some(r => r.id === ev.repo)) {
+    state.repo = ev.repo; localStorage.setItem("lfg.repo", ev.repo);
+    const sel = $("#repo"); if (sel) sel.value = ev.repo;
+    await loadBranches();
+  }
+  if (ev.href && location.hash !== ev.href) location.hash = ev.href; else route();
+}
+function noteHtml(ev, cls) {
+  const proj = ev.repo && ev.repo !== state.repo ? `<span class="brtag">${esc(repoName(ev.repo))}</span>` : "";
+  return `<a href="${esc(ev.href || "#")}" class="${cls}${ev.ok ? "" : " bad"}${ev.id > NOTES.seen ? " new" : ""}" data-note="${esc(ev.id)}"><span class="note-ico">${icon(NOTE_ICON[ev.kind] || "home")}</span><span class="grow"><b>${esc(ev.title)}</b>${ev.body ? `<span class="note-b">${esc(ev.body)}</span>` : ""}<span class="note-m">${proj}${ago(ev.ts)}</span></span></a>`;
+}
+function paintBell() {
+  const unread = NOTES.events.filter(e => e.id > NOTES.seen).length, n = $("#bell-n");
+  n.hidden = !unread; n.textContent = unread > 9 ? "9+" : unread;
+  const pop = $("#bell-pop");
+  if (pop.hidden) return;
+  const perm = NOTES.desktop === "terminal-notifier" ? `<span class="muted small">When this tab isn't in front, you also get a macOS notification; click it to come back here.</span>`
+    : NOTES.desktop === "osascript" ? `<span class="muted small">When this tab isn't in front, you also get a macOS notification. Install terminal-notifier (<code>brew install terminal-notifier</code>) to make it open the page on click.</span>`
+    : !("Notification" in window) ? "" : Notification.permission === "granted" ? `<span class="muted small">System notifications are on when this tab is in the background.</span>`
+    : Notification.permission === "denied" ? `<span class="muted small">System notifications are blocked for this page in your browser's settings.</span>`
+    : `<button class="btn small" id="note-perm">Notify me when this tab is in the background</button>`;
+  pop.innerHTML = `<div class="bell-h"><b>Notifications</b><span class="grow"></span>${unread ? `<a href="#" class="small" id="note-read">Mark all read</a>` : ""}</div>
+    <div class="bell-list">${NOTES.events.slice(0, 30).map(e => noteHtml(e, "note")).join("") || '<p class="muted small bell-empty">Nothing yet. When the AI finishes a review, an answer or a fix run, or a scan or check is done, it shows up here.</p>'}</div>
+    <div class="bell-f">${perm}</div>`;
+  $$("[data-note]", pop).forEach(a => a.onclick = e => { e.preventDefault(); openNote(NOTES.events.find(x => x.id === a.dataset.note)); });
+  const rd = $("#note-read", pop); if (rd) rd.onclick = e => { e.preventDefault(); markSeen(); };
+  const pm = $("#note-perm", pop); if (pm) pm.onclick = async () => { await Notification.requestPermission(); paintBell(); };
+}
+function markSeen() { NOTES.seen = NOTES.events[0] ? NOTES.events[0].id : NOTES.seen; localStorage.setItem("lfg.notes.seen", NOTES.seen); paintBell(); }
+function closeBell() { const pop = $("#bell-pop"); if (!pop.hidden) { pop.hidden = true; $("#bell").setAttribute("aria-expanded", "false"); markSeen(); } }
+function toast(ev) {
+  const box = $("#toasts"), el = document.createElement("div");
+  // a toast is one quiet line in the accent colour: what happened, click to go there; the details stay in the bell
+  el.innerHTML = `<a href="${esc(ev.href || "#")}" class="toast${ev.ok ? "" : " bad"}" title="${esc([ev.title, ev.body].filter(Boolean).join("\n"))}"><span class="toast-dot" aria-hidden="true"></span><span class="toast-t">${esc(ev.title)}</span></a><button class="toast-x" aria-label="Dismiss">&times;</button>`;
+  const t = el.firstChild, x = el.lastChild;
+  const wrap = document.createElement("div"); wrap.className = "toast-wrap"; wrap.append(t, x); box.prepend(wrap);
+  t.onclick = e => { e.preventDefault(); wrap.remove(); openNote(ev); };
+  x.onclick = () => wrap.remove();
+  setTimeout(() => wrap.remove(), 6000);
+  while (box.children.length > 3) box.lastChild.remove();
+}
+function systemNote(ev) {  // the browser's own notification, only when `lfg ui` can't post macOS ones itself
+  if (NOTES.desktop || !document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
+  const n = new Notification(`LFG · ${ev.title}`, { body: [ev.body, ev.repo && repoName(ev.repo)].filter(Boolean).join("\n"), tag: ev.id });
+  n.onclick = () => { window.focus(); n.close(); openNote(ev); };
+}
+const inFront = () => document.visibilityState === "visible" && document.hasFocus();
+async function pollNotes(first) {
+  let d;
+  try { d = await api("notifications", Object.assign({ visible: inFront() ? "1" : "0" }, NOTES.last ? { since: NOTES.last } : {})); } catch (e) { return; }
+  if (!d || !d.events) return;
+  NOTES.desktop = d.desktop || "";
+  const sb = $("#top-sess-n"), ss = d.sessions || {};
+  const sk = JSON.stringify(ss); if (sk !== NOTES.sessKey || Date.now() - (NOTES.sessAt || 0) > 30000) { NOTES.sessKey = sk; NOTES.sessAt = Date.now(); loadNavSessions(); }
+  if (sb) { sb.hidden = !ss.live; sb.textContent = ss.needs_you ? `${ss.needs_you} need you` : `${ss.live} live`; sb.classList.toggle("warn", !!ss.needs_you); }
+  if (!first) d.events.slice().reverse().forEach(ev => { toast(ev); systemNote(ev); });
+  NOTES.events = d.events.concat(NOTES.events).slice(0, 50);
+  NOTES.last = d.latest || NOTES.last;
+  paintBell();
+}
+function mountBell() {
+  const b = $("#bell"), pop = $("#bell-pop");
+  b.onclick = e => { e.stopPropagation(); if (pop.hidden) { pop.hidden = false; b.setAttribute("aria-expanded", "true"); paintBell(); } else closeBell(); };
+  document.addEventListener("click", e => { if (!pop.hidden && !e.target.closest(".bell")) closeBell(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeBell(); });
+  pollNotes(true);
+  setInterval(() => pollNotes(false), 5000);
+  // tell `lfg ui` at once when this tab goes to the back (or comes forward), so macOS notifications start right away
+  ["visibilitychange", "blur", "focus"].forEach(ev => (ev === "visibilitychange" ? document : window).addEventListener(ev, () => pollNotes(false)));
+}
+
+/* Bottom of the sidebar: the LFG version, a tag when a newer one is out, and a button to check now */
 async function init() {
+  const brand = $(".brand"); if (brand) brand.innerHTML = logoSvg(20);
+  api("github").then(g => { state.gh = g; if (g && g.starred) $$("[data-gh-star]").forEach(b => (b.textContent = "★ Starred, thank you")); }).catch(() => {});
   if (location.hash.startsWith("#unlock=")) {  // from `lfg ui`: keep the edit key, drop it from the URL
     localStorage.setItem("lfg.editKey", decodeURIComponent(location.hash.slice(8)));
     history.replaceState(null, "", location.pathname);
   }
   $("#drawer-close").onclick = closeDrawer;
+  const linked = new URLSearchParams(location.search).get("repo");  // opened from a macOS notification
+  if (linked) { state.repo = linked; localStorage.setItem("lfg.repo", linked); history.replaceState(null, "", location.pathname + location.hash); }
+  mountBell();
+  setTimeout(loadNavSessions, 300);
   $("#drawer").onclick = e => { if (e.target.id === "drawer") closeDrawer(); };
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
   try { state.rules = await api("rules"); } catch (e) { state.rules = null; }
   mountRuleTips();
+  // Fetch features BEFORE first route, set pages
+  let d = null;
+  try { d = await api("features"); } catch (e) { d = null; }
+  if (d) {
+    state.pages = d.pages || NAV.map(p => p[0]);
+    if (d.show_all) state.pages = NAV.map(p => p[0]);
+  }
+  // Redirect to onboarding only when: !complete AND hash empty AND no welcomeShown
+  let welcomeShown = null;
+  try { welcomeShown = sessionStorage.getItem("lfg.welcomeShown"); } catch (e) { /* ignore */ }
+  const hashEmpty = !location.hash || location.hash === "#";
+  if (d && !d.complete && hashEmpty && !welcomeShown) {
+    try { sessionStorage.setItem("lfg.welcomeShown", "1"); } catch (e) { /* ignore */ }
+    location.hash = "#onboarding";
+  }
   const r = await api("repos");
   state.repos = r.repos || [];
   if (!state.repos.some(x => x.id === state.repo)) state.repo = state.repos[0] ? state.repos[0].id : "";
   $("#repo").innerHTML = state.repos.map(x => `<option value="${esc(x.id)}" title="${esc(x.root || x.id)}" ${x.id === state.repo ? "selected" : ""}>${esc(x.name || x.id)}</option>`).join("") || "<option>no projects yet</option>";
   $("#repo").onchange = async () => {
-    state.repo = $("#repo").value; localStorage.setItem("lfg.repo", state.repo);
+    state.repo = $("#repo").value; localStorage.setItem("lfg.repo", state.repo); state.navSess = [];
     await loadBranches();
+    loadNavSessions();
     // a page about one thing in the old repo (a PR, a run, a doc) goes to that section's list in the new one
     const [page, ...rest] = location.hash.slice(1).split("/");
     if (rest.length && rest.join("")) location.hash = "#" + page; else refresh();

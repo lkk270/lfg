@@ -1409,40 +1409,42 @@ def _reply_text(text):
     return shown or "Done.", found
 
 
-IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
-IMAGE_MAX = 5_000_000
-IMAGE_RX = re.compile(r"\[image: ([^\]\s]+)\]")
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+IMAGE_MAX, FILE_MAX = 5_000_000, 20_000_000
+ATTACH_RX = re.compile(r"\[(?:image|file): ([^\]\s]+)\]")
 
 
-def chat_images_dir():
+def chat_files_dir():
     return C.lfg_path("tmp", "chat")
 
 
-def save_image(data, kind):
-    """An image pasted or attached in a review chat: kept under ~/.lfg/tmp/chat for Claude to read. Returns its path,
-    which the message carries as [image: <path>]."""
+def save_attachment(data, kind, name):
+    """A file dropped, pasted or attached in a review chat (an image, a CSV, a document, code, anything): kept under
+    ~/.lfg/tmp/chat for Claude to read, under its own name. The message carries it as [image: <path>] or
+    [file: <path>]."""
     import base64
     import uuid
-    if kind not in IMAGE_TYPES:
-        raise ReviewError("only PNG, JPEG, GIF or WebP images")
+    image = kind in IMAGE_TYPES
     try:
         raw = base64.b64decode(str(data or ""), validate=True)
     except ValueError:
-        raise ReviewError("that image didn't come through") from None
-    if not raw or len(raw) > IMAGE_MAX:
-        raise ReviewError("images up to 5 MB")
-    path = os.path.join(C.ensure_dir(chat_images_dir()), "%s.%s" % (uuid.uuid4().hex, IMAGE_TYPES[kind]))
+        raise ReviewError("that file didn't come through") from None
+    if not raw or len(raw) > (IMAGE_MAX if image else FILE_MAX):
+        raise ReviewError("images up to 5 MB, other files up to 20 MB")
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", os.path.basename(str(name or "file"))).strip(".-")[:80] or "file"
+    folder = os.path.join(C.ensure_dir(chat_files_dir()), uuid.uuid4().hex[:12])
+    path = os.path.join(C.ensure_dir(folder), base)
     with open(path, "wb") as fh:
         fh.write(raw)
-    return {"path": path}
+    return {"path": path, "name": base, "image": image}
 
 
 def _chat_prompt(context_prompt, q):
     """What a chat message sends: a message starting with / runs that command or skill in the session as typed (the
-    review is added after it); images the message carries are named for the Read tool. Returns (prompt, images)."""
-    base = os.path.realpath(chat_images_dir()) + os.sep
-    images = [x for x in IMAGE_RX.findall(q) if os.path.realpath(x).startswith(base) and os.path.isfile(x)]
-    seen = ("\n\nOpen each attached image with the Read tool before answering: %s" % ", ".join(images)
+    review is added after it); files the message carries are named for the Read tool. Returns (prompt, files)."""
+    base = os.path.realpath(chat_files_dir()) + os.sep
+    images = [x for x in ATTACH_RX.findall(q) if os.path.realpath(x).startswith(base) and os.path.isfile(x)]
+    seen = ("\n\nOpen each attached file with the Read tool before answering: %s" % ", ".join(images)
             if images else "")
     if q.lstrip().startswith("/"):
         about = context_prompt.split("\n\n", 1)[0]

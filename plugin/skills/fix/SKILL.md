@@ -4,7 +4,7 @@ description: >
   Diagnoses and fixes a bug or regression: builds a tight pass/fail loop first, then
   reproduces, hypothesises, finds the cause, adds a regression test and fixes it. Runs
   the Hotfix lane when linked to an incident, and records a Learning. Also fixes failures
-  handed over by /check, /secure, /pentest, /expert or the ship check. Use when the user
+  handed over by /check, /secure, /pentest, /review-coach or the ship check. Use when the user
   says "it's broken", "debug this", "why is X failing?", "this got slow", "fix this error",
   or reports something throwing, failing or slow.
 author: Varun Singh
@@ -36,7 +36,7 @@ adapted-from: mattpocock/skills/diagnosing-bugs (MIT, © 2026 Matt Pocock)
 8. **Verify.** Affected tests (`tests_for` on changed nodes) green; type-check; for security findings, re-run `lfg secure diff`; for ship-check failures, re-run the failing step only if cheap (the caller re-runs from `/check`).
 9. **Cleanup.** Grep and remove every `[DEBUG-` tag; delete throwaway harnesses (keep the loop command in the report).
 10. **Learning.** Create a dev-graph `Learning` node linked to the `Component` (and the `Incident` for Hotfix): cause, symptom, guard added. Hotfix: also mark it as the postmortem Learning.
-11. **Next.** Standalone: suggest `/check` → `/secure` (+ quick `/pentest` on the diff for Hotfix) → `/expert` → `/ship`. In a fix loop: return to the caller.
+11. **Next.** Standalone: suggest `/check` → `/secure` (+ quick `/pentest` on the diff for Hotfix) → `/review-coach` → `/ship`. In a fix loop: return to the caller.
 
 ## Output
 

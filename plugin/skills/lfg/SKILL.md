@@ -2,7 +2,7 @@
 name: lfg
 description: >
   Runs the whole LFG pipeline on an idea or a Linear issue: grill → plan → build →
-  check ∥ secure ∥ pentest → expert → ship packet. Picks the lane (express / standard /
+  check ∥ secure ∥ pentest → review → ship packet. Picks the lane (express / standard /
   full / hotfix) itself, delegates each stage to a role subagent through run-folder files,
   and stops only at the human checkpoints. Use when the user types "/lfg <what you want>",
   "/lfg LIN-123", "lfg this", "run the whole pipeline", "take this from idea to PR".
@@ -39,7 +39,7 @@ The user's global `~/.claude/CLAUDE.md` has higher priority than this skill and 
 | 2 | `/plan` | `architecture-designer` (+ `product-manager` for the spec) → `02-design.md`, `tasks.json` | skip | ✓ | ✓ | skip |
 | 3 | `/build` | Inline (it dispatches `software-engineer` / `ai-engineer` per ticket `owner_role`) | quick | ✓ | ✓ | `/fix` |
 | 4 | `/check` ∥ `/secure` ∥ `/pentest` | `qa` ∥ `security-analyst` ∥ `security-analyst`, in parallel | check (affected) + secure | + pentest `quick` diff | + pentest `standard` | + pentest `quick` diff |
-| 5 | `/expert` | `expert-review` → `06-review.json` | Sonnet, diff-only | ✓ | ✓ | Opus |
+| 5 | `/review-coach` | `expert-review` → `06-review.json` | Sonnet, diff-only | ✓ | ✓ | Opus |
 | 6 | `/ship` | Inline → `lfg gate`, `lfg shipcheck`, ship packet | ✓ | ✓ | ✓ | ✓ |
 
 1. **Talk.** If the input is a bug or an incident, go to the Hotfix path: run `/fix` inline with the input, then continue at stage 4. Otherwise run `/grill` inline; it writes `RUN/01-brief.md`. **Checkpoint 1:** show the brief, wait for approval.
@@ -59,7 +59,7 @@ The user's global `~/.claude/CLAUDE.md` has higher priority than this skill and 
 
 ```
 Run: RUN        Lane: <lane> (<reasons>)        Input: <idea | LIN-123>
-Stage results: grill ✓ · plan ✓/skip · build ✓ · check ✓ · secure ✓ · pentest ✓/skip · expert <verdict> · ship ✓
+Stage results: grill ✓ · plan ✓/skip · build ✓ · check ✓ · secure ✓ · pentest ✓/skip · review <verdict> · ship ✓
 Gates 1–8 (from ready.json + 07-shipcheck.json): 1 ✓ 2 ✓ … 8 ✓
 Stopped at: <checkpoint N + what you must decide>   |   Ready: commit and push yourself
 Files: RUN/01-brief.md … RUN/PR_BODY.md

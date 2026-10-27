@@ -312,6 +312,8 @@ def _run_summary(d):
             "title": title, "about": about, "ticket": ticket,
             # the run starts on one branch and its work moves to the worktree `lfg worktree new` gives it
             "branch": (_own_worktree(meta, ticket) or {}).get("branch") or meta.get("branch") or "",
+            "kind": meta.get("kind"), "pr": meta.get("pr"), "pr_url": meta.get("pr_url"),
+            "archived": meta.get("archived"),
             "lane": meta.get("lane"), "stage": meta.get("stage"), "issue": meta.get("issue"),
             "stages": stages, "progress": sum(stages.values()) + bool(ahead),
             "skipped": skipped, "doing": doing, "outside": {"build": ahead} if ahead else {},
@@ -421,13 +423,124 @@ def _run_dir(rid, run):
     return next((d for _, d, _ in shared_runs(rid) if os.path.basename(d) == run), None)
 
 
+def refresh_pr_states(rid, max_age=600):
+    """Fetch every pull request GitHub knows for this repo (open, merged, closed) into pr-states.json, when the saved
+    list is older than `max_age`. One `gh pr list` for the whole repo; run by `lfg ui`'s watcher, never by a page."""
+    p = C.lfg_path("repos", rid, "pr-states.json")
+    hit = C.read_json(p, None)
+    if isinstance(hit, dict) and time.time() - hit.get("at", 0) < max_age:
+        return False
+    root = repo_root(rid)
+    if not root or not os.path.isdir(root) or not C.which("gh"):
+        return False
+    cp = C.run(["gh", "pr", "list", "--state", "all", "--limit", "300", "--json",
+                "number,headRefName,state,mergedAt,closedAt,title,url"], cwd=root, timeout=60)
+    try:
+        prs = json.loads(cp.stdout or "[]") if cp.returncode == 0 else None
+    except ValueError:
+        prs = None
+    if not isinstance(prs, list):
+        return False
+    C.ensure_dir(os.path.dirname(p))
+    C.write_json(p, {"at": time.time(), "prs": prs})
+    return True
+
+
+def pr_states(rid):
+    """The saved list of this repo's pull requests, as ({number: pr}, {branch: newest pr}). Pages only read it, so a
+    page never waits on GitHub; until `lfg ui` has fetched it once, runs simply show no PR tags."""
+    hit = C.read_json(C.lfg_path("repos", rid, "pr-states.json"), None)
+    prs = [x for x in (hit or {}).get("prs") or [] if isinstance(x, dict) and x.get("number")]
+    by_branch = {}
+    for x in sorted(prs, key=lambda x: x["number"]):  # a branch reused for a later PR: the newest one counts
+        by_branch[x.get("headRefName")] = x
+    return {x["number"]: x for x in prs}, by_branch
+
+
+def _lazy_branches(rid):
+    """git_branches(), asked at most once and only when a run needs it."""
+    memo = []
+
+    def get():
+        if not memo:
+            memo.append(git_branches(repo_root(rid)))
+        return memo[0]
+    return get
+
+
+def run_life(r, by_n, by_branch, branches):
+    """A run's tags and whether it still needs anything: its PR (and that PR's state), its issue, what kind of run it
+    is, and active / done / not needed (its PR was merged or closed, its branch merged, or the user said so).
+    `branches` gives git_branches() when called (or is it, or None)."""
+    branch = r.get("branch") or ""
+    gb = (branches() if callable(branches) else branches) if branch and not r.get("pr") else None
+    pr = by_n.get(r["pr"]) if r.get("pr") else \
+        by_branch.get(branch) if branch and gb is not None and branch != gb.get("default") else None
+    tags = []
+    if r.get("kind") == "pr-fix":
+        tags.append({"text": "Fix run", "tone": "on"})
+    if pr:
+        tags.append({"text": "PR #%d" % pr["number"], "tone": {"MERGED": "merged", "CLOSED": "bad"}.get(pr.get("state"),
+                                                                                                    "on"),
+                     "href": pr.get("url"), "state": pr.get("state")})
+    if r.get("issue"):
+        iss = str(r["issue"])
+        if re.match(r"^[a-z]+-\d+$", iss, re.I):  # a Linear key: ATO-123
+            tags.append({"text": iss.upper(), "tone": ""})
+        else:  # a dev-graph slug: iss-rollout-devices-onboarding-gap -> "Issue: rollout devices onboarding…"
+            words = re.sub(r"^iss-", "", iss).replace("-", " ")
+            tags.append({"text": "Issue: " + (words[:28].rsplit(" ", 1)[0] + "…" if len(words) > 30 else words),
+                         "tone": "", "title": iss})
+    stages = r.get("stages") or {}
+    fix = r.get("fix") or {}
+    finished = (fix.get("ok") and not (fix.get("done") or {}).get("failed")) if r.get("kind") == "pr-fix" \
+        else bool(stages) and all(stages.values())
+    if r.get("archived"):
+        life = ("not-needed", "Marked not needed")
+    elif pr and pr.get("state") == "MERGED":
+        life = ("not-needed", "PR #%d merged" % pr["number"])
+    elif pr and pr.get("state") == "CLOSED":
+        life = ("not-needed", "PR #%d closed" % pr["number"])
+    elif gb and branch and branch in gb.get("merged", ()):
+        life = ("not-needed", "Branch merged")
+    elif finished:
+        life = ("done", "All steps done")
+    else:
+        life = ("active", "")
+    return {"tags": tags, "life": life[0], "life_why": life[1]}
+
+
+def set_needed(rid, run, needed):
+    """The user's own call on a run: not needed any more (hidden from Active), or needed again."""
+    d = C.lfg_path("runs", rid, os.path.basename(str(run or "")))
+    p = os.path.join(d, "run.json")
+    if not os.path.isfile(p):
+        raise ValueError("run not found")
+    meta = C.read_json(p, {}) or {}
+    if needed:
+        meta.pop("archived", None)
+    else:
+        meta["archived"] = C.now_iso()
+    C.write_json(p, meta)
+    return {"saved": True}
+
+
+def search_runs(rid, q):
+    from . import runsearch as RS
+    dirs = [d for d in _run_files(rid, "")[:300] if os.path.isdir(d)]
+    return dict(RS.search(rid, q, dirs), available=True)
+
+
 def runs(rid, branch=None):
     cur = _current_runs(rid) - {""}
     out = []
+    by_n, by_branch = pr_states(rid)
+    gb = _lazy_branches(rid)
     for d in _run_files(rid, "", branch)[:100]:
         if os.path.isdir(d):
             r = _run_summary(d)
             r["current"] = r["run"] in cur
+            r.update(run_life(r, by_n, by_branch, gb))
             out.append(r)
     if not branch:  # a shared run's branch is the other repo's, so it only shows under all branches
         for owner, d, mine in shared_runs(rid):
@@ -456,6 +569,8 @@ def run_detail(rid, run):
     # when it is one of this repo's, else the repo whose shared run it is
     owner = rid if _run_dirs(rid).get(run) == d else next((o for o, x, _ in shared_runs(rid) if x == d), rid)
     summary = _run_summary(d)
+    by_n, by_branch = pr_states(rid)
+    summary.update(run_life(summary, by_n, by_branch, _lazy_branches(rid)))
     if owner != rid:  # opened from another repo it has tasks for: that repo's part of it
         tl = [t for t in _tasks(d) if repo_matches(rid, t.get("repo"))]
         summary = _for_repo(summary, tl, d, rid)
@@ -588,6 +703,7 @@ def architecture(rid, full=True):
 # ---------------------------------------------------------------- docs + playbooks
 
 DOC_SOURCES = [  # (id, title, base dir: relative to ~/.lfg, or {graphify}/{crg} = the repo's graph data, description)
+    ("intro", "Getting started", "{intro}", "what LFG is and how to use it"),
     ("playbooks", "Start here", "playbooks/{rid}", "onboarding tour, landmines, test gaps, incident runbooks"),
     ("guides", "From your docs", "{graphify}/wiki", "what your team's own docs and runbooks say"),
     ("gwiki", "Parts of the code", "{graphify}/wiki", "one page per area of the code, largest first"),
@@ -601,11 +717,14 @@ def _repo_docs(rid):
     root = repo_root(rid)
     d = os.path.join(root, ".lfg", "docs") if root else ""
     return d if d and os.path.isdir(d) else C.lfg_path("repos", rid, "docs")
+INTRO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_assets", "intro")
 
 
 def _doc_base(rid, base):
     if base == "{docs}":
         return _repo_docs(rid)
+    if base == "{intro}":
+        return INTRO_DIR
     for kind in ("graphify", "crg"):
         tag = "{%s}" % kind
         if base.startswith(tag):
@@ -666,15 +785,15 @@ def docs_index(rid):
     pages aren't listed: the first is in the repo already, the second isn't written for people."""
     base = _repo_docs(rid)
     root = _doc_files(base)
-    pb = C.lfg_path("playbooks", rid)
-    wiki, known = [], dict(WIKI)
-    if os.path.isdir(pb):
-        for name in [w[0] for w in WIKI] + sorted(n for n in os.listdir(pb) if n.endswith(".md") and n not in known):
-            p = os.path.join(pb, name)
-            if os.path.isfile(p):
-                wiki.append({"src": "playbooks", "path": name, "title": known.get(name) or _title(p)})
-    if wiki:
-        root["folders"].insert(0, {"name": "Wiki", "items": wiki, "generated": True})
+    intro = [{"src": "intro", "path": n, "title": _title(os.path.join(INTRO_DIR, n))}
+             for n in sorted(os.listdir(INTRO_DIR)) if n.endswith(".md")] if os.path.isdir(INTRO_DIR) else []
+    code = []  # graphify's wiki: its overview
+    gw = _doc_base(rid, "{graphify}/wiki")
+    if gw and os.path.isfile(os.path.join(gw, "index.md")):
+        code.append({"src": "gwiki", "path": "index.md", "title": "Overview"})
+    gout = _doc_base(rid, "{graphify}")
+    views = [{"src": "view", "path": "callflow", "title": "How calls flow"}] \
+        if gout and os.path.isfile(os.path.join(gout, "callflow.html")) else []
     gb = git_branches(repo_root(rid))
     out = []
     bdir = os.path.join(base, "branches")
@@ -691,8 +810,95 @@ def docs_index(rid):
                                        else "deleted")
         out.append(dict(tree, name=name, state=state))
     out.sort(key=lambda b: (b["state"] != "current", b["state"] != "default", b["name"].lower()))
-    return {"root": root, "branches": out, "state": D.docs_state(rid), "due": D.due(rid),
-            "paths": {"project": base, "branches": bdir}}
+    return {"intro": intro, "code": code, "views": views, "root": root, "branches": out, "state": D.docs_state(rid),
+            "due": D.due(rid), "paths": {"project": base, "branches": bdir}}
+
+
+def _slug(title):
+    return re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")[:60] or "untitled"
+
+
+def _check_md(title, text, limit=200_000):
+    from . import settings as S
+    title, text = (title or "").strip(), (text or "").replace("\r\n", "\n")
+    if not title:
+        raise S.Invalid("give it a title")
+    if len(text) > limit:
+        raise S.Invalid("that's over %d KB; split it into smaller docs" % (limit // 1000))
+    if S._secret_kinds(text):
+        raise S.Invalid("it looks like it contains a password or key; secrets never go in docs")
+    return title, text
+
+
+def doc_save(rid, body):
+    """A doc the user wrote or edited in the dashboard: about the whole project, or about one branch's work.
+    Editing keeps the file; a new doc gets a file named after its title (never overwriting another)."""
+    from . import settings as S
+    title, text = _check_md(body.get("title"), body.get("text"))
+    base = _repo_docs(rid)
+    if not text.lstrip().startswith("# "):
+        text = "# %s\n\n%s" % (title, text.lstrip())
+    path = (body.get("path") or "").strip()
+    if path:  # an edit
+        full = os.path.realpath(os.path.join(base, path))
+        if not path.endswith(".md") or not full.startswith(os.path.realpath(base) + os.sep) or not os.path.isfile(full):
+            raise S.Invalid("that doc can't be edited here")
+    else:
+        if body.get("where") == "branch":
+            root = repo_root(rid)
+            branch = (body.get("branch") or C.git_branch(root) or "").strip()
+            if not root or not branch or branch.startswith("detached@"):
+                raise S.Invalid("pick a branch, or save it to the project instead")
+            d = C.branch_docs_dir(root, branch)
+        else:
+            d = C.ensure_dir(base)
+        full, n = os.path.join(d, _slug(title) + ".md"), 2
+        while os.path.exists(full):
+            full, n = os.path.join(d, "%s-%d.md" % (_slug(title), n)), n + 1
+        path = os.path.relpath(full, base)
+    C.write_text(full, text.rstrip() + "\n")
+    C.audit("doc_saved", {"repo": rid, "path": path})
+    return {"src": "repo", "path": path}
+
+
+# ---------------------------------------------------------------- knowledge the user pastes in (Markdown files)
+
+KNOWLEDGE_KINDS = ("note", "decision", "lesson", "rule")
+
+
+def knowledge_dir(rid):
+    return C.lfg_path("repos", rid, "knowledge")
+
+
+def knowledge_list(rid):
+    d = knowledge_dir(rid)
+    out = []
+    for n in sorted(os.listdir(d), reverse=True) if os.path.isdir(d) else []:
+        if not n.endswith(".md"):
+            continue
+        text = C.read_text(os.path.join(d, n))
+        m = re.match(r"^# (.+)\n(?:\n?> (\w+) · (\S+)\n)?", text)
+        out.append({"file": n, "title": m.group(1) if m else n[:-3],
+                    "kind": m.group(2) if m and m.group(2) else "note",
+                    "date": m.group(3) if m and m.group(3) else n[:10], "text": text})
+    return out
+
+
+def knowledge_add(rid, body):
+    from . import settings as S
+    title, text = _check_md(body.get("title"), body.get("text"), limit=100_000)
+    if not text.strip():
+        raise S.Invalid("write or paste something first")
+    kind = body.get("kind") if body.get("kind") in KNOWLEDGE_KINDS else "note"
+    day = time.strftime("%Y-%m-%d")
+    d = C.ensure_dir(knowledge_dir(rid))
+    full, n = os.path.join(d, "%s-%s.md" % (day, _slug(title))), 2
+    while os.path.exists(full):
+        full, n = os.path.join(d, "%s-%s-%d.md" % (day, _slug(title), n)), n + 1
+    body_md = re.sub(r"^# .*\n+", "", text.lstrip(), count=1)
+    C.write_text(full, "# %s\n\n> %s · %s\n\n%s\n" % (title, kind, day, body_md.rstrip()))
+    C.audit("knowledge_added", {"repo": rid, "kind": kind})
+    return {"file": os.path.basename(full)}
 
 
 def doc(rid, src, path):
@@ -1042,6 +1248,17 @@ def reviews(rid, branch=None):
     return {"findings": findings, "verdicts": verdicts, "blocked": blocked[:200], "blocked_by_rule": rules}
 
 
+def _pentest_summary(v):
+    """A pentest report's summary as one sentence. Agents write it as text, or as counts plus a recommendation:
+    {"critical": 1, "high": 2, ..., "recommendation": "..."} reads as "1 critical, 2 high. <recommendation>"."""
+    if not isinstance(v, dict):
+        return v
+    sev = ", ".join("%d %s" % (v[k], k) for k in ("critical", "high", "medium", "low") if isinstance(v.get(k), int) and v[k])
+    rest = v.get("recommendation") or v.get("verdict") or v.get("text") or ""
+    out = ". ".join(x for x in (("Found " + sev) if sev else "", str(rest).strip()) if x)
+    return out or None
+
+
 def security(rid, branch=None):
     sec, pen = [], []
     for p in stage_files(rid, "05-secure.json", branch):
@@ -1062,8 +1279,10 @@ def security(rid, branch=None):
     for p in stage_files(rid, "05-pentest.json", branch):
         s = C.read_json(p, {}) or {}
         keep = ("mode", "model", "status", "next_steps", "preflight_failures")
-        pen.append({"run": os.path.basename(os.path.dirname(p)), **{k: s.get(k) for k in keep},
-                    "summary": s.get("summary") or s.get("conclusion")})
+        row = {"run": os.path.basename(os.path.dirname(p)), **{k: s.get(k) for k in keep},
+               "summary": _pentest_summary(s.get("summary") or s.get("conclusion"))}
+        row["status"] = row["status"] or s.get("tool_status")
+        pen.append(row)
     ships = []
     for p in stage_files(rid, "07-shipcheck.json", branch)[:10]:
         s = C.read_json(p, {}) or {}
@@ -1421,17 +1640,6 @@ def tools():
     return cached("tools", 300, get)
 
 
-def tools_quick():
-    """Cheap status for the overview (no subprocess-heavy checks)."""
-    hit = _CACHE.get("tools")
-    if hit:
-        return hit[1]["integrations"]
-    from . import setup as SU
-    off = not SU.pack_on("knowledge")
-    return [{"name": n, "ok": _og_ready(n), "optional": off, "problem": "%s isn't running: run `lfg omnigraph restart "
-             "%s`" % (n, n)} for n in ("dev-graph", "second-brain")] + [_headroom_row(True, False)]
-
-
 # ---------------------------------------------------------------- overview
 
 def _audit(n):
@@ -1462,6 +1670,17 @@ def graph_state(rid):
     return {"status": fresh or ("error" if st.get("last_error") else "unknown"), "synced_at": st.get("synced_at"),
             "mode": st.get("mode"), "seconds": st.get("last_sync_s"), "error": st.get("last_error"), "root": root,
             "docs": D.docs_state(rid)}
+
+
+def tools_quick():
+    """Cheap status for the overview (no subprocess-heavy checks)."""
+    hit = _CACHE.get("tools")
+    if hit:
+        return hit[1]["integrations"]
+    from . import setup as SU
+    off = not SU.pack_on("knowledge")
+    return [{"name": n, "ok": _og_ready(n), "optional": off, "problem": "%s isn't running: run `lfg omnigraph restart "
+             "%s`" % (n, n)} for n in ("dev-graph", "second-brain")] + [_headroom_row(True, False)]
 
 
 def overview(rid, branch=None):

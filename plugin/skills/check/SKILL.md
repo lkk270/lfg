@@ -4,7 +4,7 @@ description: >
   The green gate: fixes lint (never suppresses), type-checks, runs affected tests then the full
   suite, builds like CI, replays CI locally and reads the branch's GitHub CI status read-only.
   Use when the user says "is it green?", "run the checks", "fix the lint", "will CI pass?", or
-  after /build or /fix finishes and before /expert or /ship.
+  after /build or /fix finishes and before /review-coach or /ship.
 author: Varun Singh
 phase: prove
 lanes: [express, standard, full, hotfix]
@@ -59,7 +59,7 @@ Lane: <lane> · Gate: green|red (ready.json) · CI replay: green|red · Remote C
 ## Still red (with output excerpt)
 ```
 
-Reply to the user with: gate status per check, what you fixed, anything still red, untested nodes, and the next skill (`/secure` or `/expert`; `/fix` if stuck).
+Reply to the user with: gate status per check, what you fixed, anything still red, untested nodes, and the next skill (`/secure` or `/review-coach`; `/fix` if stuck).
 
 ## Rules
 
