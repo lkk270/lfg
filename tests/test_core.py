@@ -587,6 +587,17 @@ class DocsTest(unittest.TestCase):
 
 
 class UiTest(unittest.TestCase):
+    def test_every_element_the_page_wires_at_start_is_in_the_page(self):
+        # init() sets $("#x").onclick on the shell's own elements; one missing threw and left only skeletons
+        import re
+        assets = os.path.join(os.path.dirname(ui.__file__), "ui_assets")
+        js, html = (C.read_text(os.path.join(assets, n)) for n in ("app.js", "index.html"))
+        init = js[js.index("async function init() {"):]
+        init = init[:init.index("\n}\n")]
+        used = set(re.findall(r'\$\("#([\w-]+)"\)\.(?:on\w+|value|innerHTML|textContent)\s*=', init))
+        self.assertTrue(used)
+        self.assertEqual(sorted(x for x in used if 'id="%s"' % x not in html), [])
+
     def test_a_new_dashboard_takes_the_port_from_one_left_running_and_names_anything_else(self):
         import socket
         lfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "bin", "lfg")

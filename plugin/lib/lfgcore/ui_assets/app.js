@@ -5035,9 +5035,9 @@ function uiRestore(view, snap) {
 function softRoute() { return route({ soft: true }); }
 async function route(opts) {
   const soft = !!(opts && opts.soft);
-  let [page, ...rest] = (location.hash.slice(1) || "lfg").split("/");
-  page = { home: "sessions", overview: "sessions", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
-  const key = PAGES[page] ? page : "sessions";
+  let [page, ...rest] = (location.hash.slice(1) || "home").split("/");
+  page = { overview: "home", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
+  const key = PAGES[page] ? page : "home";
   document.body.classList.toggle("bare", BARE.includes(key));
   wireTourButton(key);
   const arg = rest.join("/");
