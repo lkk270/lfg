@@ -1026,9 +1026,9 @@ def method_label(srcs):
     return ", ".join(os.path.basename(x.rstrip("/")) or x for x in srcs)
 
 
-def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False):
+def start(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False, notes=None):
     """Start `lfg review run` detached (the dashboard's Review / Re-review / Review together buttons). together: more
-    (repo, number) PRs to review in the same session."""
+    (repo, number) PRs to review in the same session. notes: what you want this one review to look into."""
     import subprocess
     import sys
     prs = [(repo, number)] + [tuple(x) for x in together if tuple(x) != (repo, number)]
@@ -1047,6 +1047,8 @@ def start(repo, number, ticket=None, fresh=False, together=(), model=None, metho
         if not m:
             raise ReviewError("no review method %r" % method)
         args += ["--method", json.dumps(m["sources"])]
+    notes = str(notes or "").strip()
+    args += ["--notes", _text(notes, "notes", 4000)] if notes else []
     with open(os.devnull, "wb") as dn:
         subprocess.Popen(args, stdout=dn, stderr=dn, stdin=subprocess.DEVNULL, start_new_session=True,
                          close_fds=True)
@@ -1084,7 +1086,11 @@ def _passes(repo, number):
     return len((load(repo, number) or {}).get("passes") or [])
 
 
-def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False):
+REVIEW_NOTES = (" Lee's notes for this review, on top of the method: look into these as well, and say in the summary "
+                "what you found about each: %s")
+
+
+def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=None, fresh_eyes=False, notes=None):
     """Review one PR with Claude Code in print mode, on your own login, and wait for it. together: more PRs reviewed
     in the same session as one change (a backend and the frontend that calls it): each gets its own review, and the
     session also checks they agree with each other. Every review it saves remembers the session, so you can resume it,
@@ -1104,7 +1110,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
             "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model(),
-            "method": label, "fresh_eyes": bool(fresh_eyes)})
+            "method": label, "fresh_eyes": bool(fresh_eyes), "notes": notes or ""})
     skill = os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")
     if len(prs) == 1:
         what = "to review %s" % refs[0]
@@ -1130,6 +1136,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
                  "context` says re_review false; skip the Re-review and Other reviewers steps, leave `prior` and "
                  "`echoes` empty, and never look for earlier reviews or other people's comments. Every finding has "
                  "since \"first\"." if fresh_eyes else ""))
+    prompt += REVIEW_NOTES % notes if notes else ""
     allow, deny = run_tools(fresh_eyes)
     cmd = ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose",
            "--allowedTools", ",".join(allow), "--disallowedTools", ",".join(deny)] + _model(model)
@@ -1158,7 +1165,8 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             kept = record_path(*x)[:-5] + ".pass%d.log" % p["n"]
             shutil.copyfile(log, kept)
             p["run"] = {"session_id": sid, "cwd": cwd, "log": kept, "with": [r for r in refs if r != ref(*x)],
-                        "used": used(log), "method": label, "fresh_eyes": bool(fresh_eyes)}
+                        "used": used(log), "method": label, "fresh_eyes": bool(fresh_eyes),
+                        **({"notes": notes} if notes else {})}
             if fresh and p["n"] > 1:
                 p["kind"] = "full"  # New full review: the whole PR again, not a re-review
             store(rec)

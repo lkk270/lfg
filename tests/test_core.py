@@ -3530,6 +3530,32 @@ class ReviewTest(unittest.TestCase):
         with self.assertRaises(R.ReviewError):
             R.start("o/r", 7, method="no-such-skill")
 
+    def test_notes_tell_one_review_what_to_look_into(self):
+        events = [{"type": "system", "subtype": "init", "session_id": "s1"},
+                  {"type": "result", "session_id": "s1",
+                   "result": "```json\n%s\n```" % json.dumps({"summary": "s", "findings": []})}]
+        prompts = []
+
+        def run(cmd, cwd=None, stdout=None, env=None, **kw):
+            if cmd[0] == "claude":
+                prompts.append(cmd[cmd.index("-p") + 1])
+            return self.fake_claude(events)(cmd, cwd=cwd, stdout=stdout, **kw)
+        with mock.patch.object(R, "pr_meta", return_value=self.META), mock.patch.object(R, "me", return_value="me"), \
+                mock.patch.object(R.C, "which", return_value="/bin/claude"), \
+                mock.patch.object(R, "local_checkout", return_value=None), \
+                mock.patch("subprocess.run", side_effect=run):
+            R.run("o/r", 7, notes="check the retry logic")
+            R.run("o/r", 7)
+        self.assertIn("Lee's notes for this review", prompts[0])
+        self.assertIn("check the retry logic", prompts[0])
+        self.assertNotIn("Lee's notes", prompts[1])
+        passes = R.load("o/r", 7)["passes"]
+        self.assertEqual((passes[0]["run"]["notes"], "notes" in passes[1]["run"]), ("check the retry logic", False))
+        started = []
+        with mock.patch("subprocess.Popen", side_effect=lambda args, **kw: started.append(args)):
+            R.start("o/r", 7, notes="  look at auth  ")
+        self.assertEqual(started[0][started[0].index("--notes") + 1], "look at auth")
+
     def test_a_question_says_what_it_costs_and_steps_repeat_once(self):
         with mock.patch.object(R, "pr_meta", return_value=self.META):
             R.save("o/r", 7, {"summary": "s", "score": 71, "findings": [],

@@ -524,6 +524,9 @@ input.wide { width: 100%; }
 .tag + .tag { margin-left: 6px; }
 .pr-status .tags .tag + .tag { margin-left: 0; }
 .pr-actions { margin: 0 0 18px; gap: 8px; }
+.pr-notes { margin: -8px 0 18px; }
+.pr-notes textarea { width: 100%; resize: none; font: inherit; font-size: 13.5px; line-height: 1.5; padding: 8px 10px;
+  border: 1px solid var(--line-2); border-radius: 8px; background: var(--page); color: var(--text); }
 .cols { margin-bottom: 14px; }
 .cols .box.stat { min-height: 92px; }
 .filters { margin: 6px 0 4px; gap: 14px; }
