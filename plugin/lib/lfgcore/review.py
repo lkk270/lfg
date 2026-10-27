@@ -75,10 +75,11 @@ def pr_meta(repo, number):
 _STATUS, _REFRESHING = {}, set()
 
 
-def gh_status(repo, number, max_age=300):
+def gh_status(repo, number, max_age=300, wait=True):
     """Where the PR stands on GitHub: open/merged, approved or changes asked for, each reviewer's latest verdict,
     who still has to review, and checks. An answer older than max_age is still returned at once and asked again in
-    the background, so a page waits on GitHub only for a PR it has never asked about, or on Refresh (max_age=0)."""
+    the background, so a page waits on GitHub only for a PR it has never asked about, or on Refresh (max_age=0).
+    wait=False never waits: a PR never asked about is asked in the background and {"pending": True} comes back."""
     import threading
     key = (repo, number)
     if not _STATUS:  # a restarted dashboard starts from what the last one knew
@@ -87,11 +88,11 @@ def gh_status(repo, number, max_age=300):
     hit = _STATUS.get(key)
     if hit and time.time() - hit[0] < max_age:
         return hit[1]
-    if hit and max_age > 0:
+    if (hit and max_age > 0) or not wait:
         if key not in _REFRESHING:
             _REFRESHING.add(key)
             threading.Thread(target=_refresh_status, args=key, daemon=True).start()
-        return hit[1]
+        return hit[1] if hit else {"available": False, "pending": True}
     return _ask_status(repo, number)
 
 
@@ -961,20 +962,23 @@ def local_checkout(repo):
     return None
 
 
-# Unattended runs may read anything and run only these. Writes to GitHub are denied on top of the guard, which only
-# runs in repos where LFG is on.
-RUN_ALLOW = ["Read", "Grep", "Glob", "Bash(lfg review context *)", "Bash(lfg review save *)",
-             "Bash(lfg review others *)",
-             "Bash(lfg review show *)", "Bash(lfg review threads *)", "Bash(lfg graphs *)", "Bash(lfg rule *)",
-             "Bash(gh pr view *)", "Bash(gh pr diff *)", "Bash(gh search prs *)", "Bash(gh api repos/*)",
-             "Bash(git fetch *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git blame *)",
-             "Bash(git grep *)", "mcp__linear__get_issue", "mcp__linear__list_comments",
+# Unattended runs may read anything and run any command: a review that can't run the tests, query a database or try
+# the code isn't much of a review. What they must not do is change anything: GitHub writes, git writes, posting the
+# review and editing files are denied here, and the guard blocks git and GitHub writes in them too (LFG_REVIEWER).
+RUN_ALLOW = ["Read", "Grep", "Glob", "Bash", "mcp__linear__get_issue", "mcp__linear__list_comments",
              "mcp__plugin_lfg_code-review-graph",
              # Headroom shortens long tool output (the review skill itself); this reads it back in full
              "mcp__plugin_lfg_headroom__headroom_retrieve", "mcp__headroom__headroom_retrieve"]
-RUN_DENY = ["Bash(gh api * -X *)", "Bash(gh api * --method *)", "Bash(gh api * -f *)", "Bash(gh api * -F *)",
-            "Bash(gh api * --field *)", "Bash(gh api * --raw-field *)", "Bash(gh api * --input *)",
-            "Bash(gh api -X *)", "Bash(gh api --method *)", "Bash(lfg review post *)", "Edit", "Write", "NotebookEdit"]
+GH_WRITE_DENY = ["Bash(gh api * -X *)", "Bash(gh api * --method *)", "Bash(gh api * -f *)", "Bash(gh api * -F *)",
+                 "Bash(gh api * --field *)", "Bash(gh api * --raw-field *)", "Bash(gh api * --input *)",
+                 "Bash(gh api -X *)", "Bash(gh api --method *)", "Bash(lfg review post *)"]
+RUN_DENY = GH_WRITE_DENY + [
+    "Bash(gh pr create*)", "Bash(gh pr merge*)", "Bash(gh pr comment*)", "Bash(gh pr review*)", "Bash(gh pr edit*)",
+    "Bash(gh pr close*)", "Bash(gh pr ready*)", "Bash(gh issue create*)", "Bash(gh issue comment*)",
+    "Bash(gh issue edit*)", "Bash(gh issue close*)", "Bash(git push*)", "Bash(git commit*)", "Bash(git merge*)",
+    "Bash(git rebase*)", "Bash(git reset*)", "Bash(git checkout*)", "Bash(git switch*)", "Bash(git stash*)",
+    "Bash(git restore*)", "Bash(git clean*)", "Bash(git tag*)", "Bash(git branch -*)",
+    "Edit", "Write", "NotebookEdit"]
 # Fresh eyes: nothing that shows earlier reviews or what anyone else said on the PR
 FRESH_DENY = ["Read(~/.lfg/reviews/**)", "Grep(~/.lfg/reviews/**)", "Bash(gh pr view *comments*)",
               "Bash(gh pr view *reviews*)", "Bash(gh api repos/*/pulls/*/comments*)",
@@ -1208,6 +1212,7 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
             env["LFG_REVIEW_SOURCES"] = method  # `lfg review context` in that session reads this run's method
         if fresh_eyes:
             env["LFG_REVIEW_FRESH_EYES"] = "1"  # its `lfg review` commands hide earlier reviews and others' comments
+        env["LFG_REVIEWER"] = "1"  # the guard blocks every git and GitHub write in it, whatever your Preferences
         cp = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
     sid = session_id(log)
     first = None
@@ -1596,7 +1601,7 @@ def ask(repo, number, n, question):
         + _chat_tools(run_, q.lstrip().startswith("/"), images)
     cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model() + _direct(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
-                        stdin=subprocess.DEVNULL)
+                        stdin=subprocess.DEVNULL, env=dict(os.environ, LFG_REVIEWER="1"))
     try:
         text = (json.loads(cp.stdout).get("result") or "").strip()
     except ValueError:
@@ -1734,7 +1739,7 @@ def discuss(repo, number, fid, question):
         cmd = ["claude", "-p", prompt] + _chat_tools(run_, slash, images)
     cp = subprocess.run(cmd + ["--output-format", "json", "--permission-mode", "dontAsk"] + _model() + _direct(),
                         cwd=run_.get("cwd") or None, capture_output=True, text=True, timeout=600,
-                        stdin=subprocess.DEVNULL)
+                        stdin=subprocess.DEVNULL, env=dict(os.environ, LFG_REVIEWER="1"))
     try:
         text = (json.loads(cp.stdout).get("result") or "").strip()
     except ValueError:
@@ -1955,7 +1960,7 @@ def file_rows(text, line, around=SNIP_AROUND):
 # ---------------------------------------------------------------- fixing your own PR
 
 FIX_ALLOW = ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
-FIX_DENY = RUN_DENY[:-3] + ["Bash(gh pr merge *)", "Bash(git push --force*)", "Bash(git push -f*)",
+FIX_DENY = GH_WRITE_DENY + ["Bash(gh pr merge *)", "Bash(git push --force*)", "Bash(git push -f*)",
                             "Bash(git commit --amend*)", "Bash(git rebase *)", "Bash(git reset --hard*)"]
 FIX = ("You are fixing findings from a review of %s (%s), Lee's own PR, in this checkout of its branch %s. Lee read "
        "each finding and chose these to fix:\n\n%s\n\nFix every one. Read AGENTS.md and CLAUDE.md first and follow "
@@ -2309,6 +2314,26 @@ def session_index(days=30):
     return _SESS_INDEX
 
 
+_SESS_LAST, _SESS_LOOKING = {}, set()  # (repo, number) -> the last sessions_for answer; being looked for now
+
+
+def sessions_soon(repo, number):
+    """sessions_for without waiting: the last answer for this PR (None if there is none yet), looked for again in
+    the background, so a PR page opens at once and picks up new sessions on its next refresh."""
+    import threading
+    key = (repo, int(number))
+
+    def look():
+        try:
+            _SESS_LAST[key] = sessions_for(repo, number)
+        finally:
+            _SESS_LOOKING.discard(key)
+    if key not in _SESS_LOOKING:
+        _SESS_LOOKING.add(key)
+        threading.Thread(target=look, daemon=True).start()
+    return _SESS_LAST.get(key)
+
+
 def sessions_for(repo, number, days=30):
     """Your Claude Code sessions from the last `days` that mention this PR, newest first. Only transcripts the index
     says name this PR's number are read, and each only again once it changes."""
@@ -2321,7 +2346,9 @@ def sessions_for(repo, number, days=30):
             _SESS_SEEN[key] = _session_row(p, repo, number)
         if _SESS_SEEN[key]:
             out.append(_SESS_SEEN[key])
-    return sorted(out, key=lambda s: s["modified"], reverse=True)
+    out = sorted(out, key=lambda s: s["modified"], reverse=True)
+    _SESS_LAST[(repo, int(number))] = out
+    return out
 
 
 def _session_row(p, repo, number):

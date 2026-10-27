@@ -3531,7 +3531,8 @@ class PrefsTest(unittest.TestCase):
             self.assertIsNone(P.check_command("git commit --amend --no-edit", v, cwd=repo))
         with mock.patch.object(P, "_my_open_pr", return_value=False):
             self.assertIn("own open PR", P.check_command("git commit --amend --no-edit", v, cwd=repo))
-        self.assertIn("off", P.check_command("git commit --amend", dict(v, rewrite="never"), cwd=repo))
+        self.assertIn('"Amend and force-push" (Git) is "Never"',
+                      P.check_command("git commit --amend", dict(v, rewrite="never"), cwd=repo))
 
     def test_amend_and_force_push_read_the_branch_of_the_folder_git_runs_in(self):
         """A session opened in the main checkout (on main) that amends in a feature worktree, via `cd` or `git -C`."""
@@ -3731,15 +3732,77 @@ class GuardPrefsTest(unittest.TestCase):
         self.assertIsNotNone(guard.check("Write", {"file_path": "~/.lfg/state/prefs.json"}, prefs=self.P.effective()))
         self.assertIsNone(self.check("echo hi >> ~/.zshrc"))  # what you did lift
 
+    def acts(self):
+        """Your Preferences switched on, so the Git and GitHub action rows decide."""
+        m = mock.patch.object(guard, "_prefs_on", return_value=True)
+        m.start()
+        self.addCleanup(m.stop)
+
+    def verdict(self, cmd, cwd=None):
+        v = guard.check_full("Bash", {"command": cmd}, prefs=self.P.effective(self.SID), cwd=cwd)
+        return v[0] if v else "allow"
+
     def test_catch_up_with_the_remote(self):
-        self.assertIsNotNone(self.check("git merge --ff-only origin/main"))
-        with self.assertRaises(PermissionError):
-            self.P.set_pref("git_ff_sync", True, by_agent=True)
-        self.P.set_pref("git_ff_sync", True)
-        for cmd in ("git merge --ff-only origin/main", "git pull --ff-only", "git checkout main && git pull --ff-only"):
+        self.assertIsNotNone(self.check("git merge --ff-only origin/main"))  # Preferences off: rule 1
+        self.acts()
+        for cmd in ("git merge --ff-only origin/main", "git pull --ff-only", "git switch main && git pull --ff-only"):
             self.assertIsNone(self.check(cmd), cmd)
-        for cmd in ("git merge origin/main", "git pull", "git pull --ff-only --rebase", "git reset --hard origin/main"):
-            self.assertIsNotNone(self.check(cmd), cmd)
+        for cmd in ("git merge origin/main", "git pull", "git pull --ff-only --rebase"):
+            self.assertEqual(self.verdict(cmd), "block", cmd)
+        self.P.set_pref("act_ff_sync", "block", session=self.SID, by_agent=True)  # stricter is fine
+        self.assertEqual(self.check("git pull --ff-only")[0], "act_ff_sync")
+
+    def test_old_switches_become_action_rows(self):
+        C.write_json(self.P._state_path(), {"defaults": {"edit_pr": True, "git_ff_sync": False},
+                                            "sessions": {self.SID: {"edit_pr": False}}})
+        self.assertEqual(self.P.effective()["act_edit_pr"], "allow")
+        self.assertEqual(self.P.effective()["act_ff_sync"], "block")
+        self.assertEqual(self.P.effective(self.SID)["act_edit_pr"], "block")
+        self.assertNotIn("edit_pr", self.P.effective())
+
+    def test_an_agent_cannot_loosen_an_action_row(self):
+        with self.assertRaises(PermissionError):
+            self.P.set_pref("act_push_main", "allow", by_agent=True)
+        self.P.set_pref("act_push", "ask", session=self.SID, by_agent=True)
+        self.P.set_pref("act_push_main", "allow")  # you, in lfg ui or your own terminal
+        self.assertEqual(self.P.effective()["act_push_main"], "allow")
+
+    def test_work_that_would_be_lost_is_asked_about(self):
+        self.acts()
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        repo = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, repo, True)
+        git = lambda *a: subprocess.run(["git", *a], cwd=repo, env=env, check=True, capture_output=True)  # noqa: E731
+        git("init", "-q", "-b", "feat")
+        for name in ("a.txt", "b.txt"):
+            with open(os.path.join(repo, name), "w") as f:
+                f.write("x\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "one")
+        git("branch", "other")
+        self.assertEqual(self.verdict("git restore a.txt", repo), "allow")
+        self.assertEqual(self.verdict("git checkout -- a.txt", repo), "allow")
+        self.assertEqual(self.verdict("git reset --hard", repo), "allow")
+        self.assertEqual(self.verdict("git checkout other", repo), "allow")
+        self.assertEqual(self.verdict("git push origin HEAD", repo), "allow")  # feat
+        with open(os.path.join(repo, "a.txt"), "w") as f:
+            f.write("changed\n")
+        self.assertEqual(self.verdict("git restore a.txt", repo), "ask")
+        self.assertEqual(self.verdict("git restore b.txt", repo), "allow")  # only a.txt has work in it
+        self.assertEqual(self.verdict("git checkout a.txt", repo), "ask")
+        self.assertEqual(self.verdict("git reset --hard", repo), "ask")
+        self.assertEqual(self.verdict("git switch -f other", repo), "ask")
+        self.assertEqual(self.verdict("git switch other", repo), "allow")  # git itself refuses to lose work
+        self.assertEqual(self.verdict("cd %s && git restore a.txt" % repo, "/"), "ask")
+        self.assertEqual(self.verdict("git -C %s restore b.txt" % repo, "/"), "allow")
+        self.assertEqual(self.verdict("git reset --hard other", repo), "ask")  # same commit, but a.txt has work
+        git("checkout", "-q", "--", "a.txt")
+        self.assertEqual(self.verdict("git reset --hard other", repo), "allow")  # other is where feat already is
+        git("commit", "-q", "--allow-empty", "-m", "two")
+        self.assertEqual(self.verdict("git reset --hard other", repo), "ask")  # moves feat back: rewrite history
+        self.P.set_pref("act_restore", "block", session=self.SID, by_agent=True)
+        self.assertEqual(self.verdict("git restore a.txt", repo), "block")
 
     def test_default_branch_of_your_own_repo(self):
         cmd = "gh repo edit lkk270/zigzag --default-branch main"
@@ -3775,11 +3838,9 @@ class GuardPrefsTest(unittest.TestCase):
 
     def test_editing_the_title_and_description_of_your_own_open_pr(self):
         cmd = "gh pr edit 3 --title 'Fix the export timeout'"
-        self.assertEqual(self.P.effective()["edit_pr"], False)
-        self.assertEqual(self.check(cmd)[0], "2")
-        with self.assertRaises(PermissionError):
-            self.P.set_pref("edit_pr", True, by_agent=True)
-        self.P.set_pref("edit_pr", True)
+        self.assertEqual(self.check(cmd)[0], "2")  # Preferences off
+        self.acts()
+        self.assertEqual(self.P.effective()["act_edit_pr"], "allow")
         with mock.patch.object(guard, "_own_open_pr", return_value=True) as own:
             for ok in (cmd, "gh pr edit --body 'new text'", "gh pr edit 3 -t x -b y", "gh pr edit 3 --body-file b.md",
                        "gh pr edit --title=x -R o/r", "cd sub && gh pr edit 3 -F b.md"):
@@ -3789,14 +3850,34 @@ class GuardPrefsTest(unittest.TestCase):
             for other in ("gh pr edit 3 --add-reviewer bob", "gh pr edit 3 --title x --base main",
                           "gh pr edit 3 --add-label bug", "gh pr edit 3 --title x --remove-label bug",
                           "gh pr edit 3 --milestone v2", "gh pr edit 3", "gh pr edit 3 --title", "gh pr edit 3 4 -t x",
-                          "gh pr comment 3 -b x", "gh pr close 3"):
-                self.assertIsNotNone(self.check(other), other)
+                          "gh pr close 3"):
+                self.assertEqual(self.check(other)[0], "2", other)
+            self.P.set_pref("act_edit_pr", "ask", session=self.SID, by_agent=True)  # stricter is fine
+            self.assertEqual(self.verdict(cmd), "ask")
         with mock.patch.object(guard, "_own_open_pr", return_value=False):  # someone else's, or closed
-            self.assertIsNotNone(self.check(cmd))
-        line = "You may change the title and description of an open pull request I opened"
-        self.assertIn(line, self.P.render(self.P.effective(), self.P.load()))  # the line in lfg-preferences.md
-        self.P.set_pref("edit_pr", False, session=self.SID, by_agent=True)  # stricter is fine
-        self.assertNotIn(line, self.P.render(self.P.effective(self.SID), self.P.load()))
+            self.assertEqual(self.check(cmd)[0], "2")
+
+    def test_blocks_and_asks_name_the_row_to_change(self):
+        from lfgcore import hooks as H
+        self.acts()
+        self.P.set_pref("act_rewrite", "block", session=self.SID, by_agent=True)
+        data = {"session_id": self.SID, "tool_name": "Bash", "tool_input": {"command": "git rebase main"}}
+        with mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(H.pre_tool(data), 2)
+        self.assertIn('"Rewrite history" is set to Block', err.getvalue())
+        self.assertIn("Preferences → Git and GitHub actions", err.getvalue())
+        with mock.patch("sys.stdout", io.StringIO()) as out:
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "gh pr merge 3 --squash"})), 0)
+        said = json.loads(out.getvalue())["hookSpecificOutput"]
+        self.assertEqual(said["permissionDecision"], "ask")
+        self.assertIn('"Merge a PR" is set to Ask', said["permissionDecisionReason"])
+        with mock.patch("sys.stdout", io.StringIO()) as out:
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "gh pr comment 3 -b ok"})), 0)
+        self.assertEqual(out.getvalue(), "")
+        with mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "git tag v1"})), 2)
+        self.assertIn('Safety rules → "1. Other git writes"', err.getvalue())
+        self.assertIn('"Opening PRs" (GitHub) is "Never', self.P.check_command("gh pr create", self.P.effective()))
 
     def test_the_hook_reads_your_preferences_for_this_session(self):
         from lfgcore import hooks as H
@@ -3812,7 +3893,7 @@ class GuardPrefsTest(unittest.TestCase):
     def test_the_preferences_page_and_list_show_them(self):
         page = ui.api("prefs", {})
         ids = [p["id"] for p in page["catalog"]]
-        for pid in ("git_ff_sync", "gh_default_branch", "edit_pr", "rule_1", "rule_4", "rule_13", "style_answer_first",
+        for pid in ("act_ff_sync", "gh_default_branch", "act_edit_pr", "act_push_main", "rule_1", "rule_4", "rule_13", "style_answer_first",
                     "style_point_words"):
             self.assertIn(pid, ids)
         self.assertTrue(all(p["enforce"] for p in page["catalog"] if p["id"].startswith("rule_")))
@@ -3822,7 +3903,7 @@ class GuardPrefsTest(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             cli.cmd_prefs(types.SimpleNamespace(action="list", session=None))
         self.assertRegex(out.getvalue(), r"Safety rules\s+rule_13\s+block")
-        self.assertRegex(out.getvalue(), r"Git\s+git_ff_sync\s+off")
+        self.assertRegex(out.getvalue(), r"Git and GitHub actions\s+act_push_main\s+ask")
 
 
 class SessionsTest(unittest.TestCase):
@@ -4912,6 +4993,37 @@ class ReviewTest(unittest.TestCase):
         with mock.patch.object(R, "_gh", side_effect=AssertionError("asked GitHub")):
             self.assertEqual(R.gh_status("o/r", 2, max_age=10 ** 9)["state"], "OPEN")  # a restart remembers
 
+    def test_a_pr_page_never_opened_shows_at_once_and_fills_in(self):
+        import threading
+        from lfgcore import ui
+        R._STATUS.clear(); R._ME.clear(); R._SESS_LAST.clear()
+        gate = threading.Event()
+
+        def slow_gh(args, stdin=None, timeout=60):
+            gate.wait(5)
+            if args[:2] == ["api", "user"]:
+                return subprocess.CompletedProcess(args, 0, "lee\n", "")
+            return subprocess.CompletedProcess(args, 0, json.dumps({"state": "OPEN", "headRefName": "b"}), "")
+
+        def slow_sessions(repo, number, days=30):
+            gate.wait(5)
+            return []
+        with mock.patch.object(R, "_gh", side_effect=slow_gh), \
+                mock.patch.object(R, "sessions_for", side_effect=slow_sessions):
+            t = time.time()
+            d = ui.api("prreview", {"pr": ["o/r#41"], "wait": ["0"]})
+            self.assertLess(time.time() - t, 1)  # GitHub and the session search are still busy
+            self.assertEqual(sorted(d["pending"]), ["gh", "sessions"])
+            self.assertTrue(d["gh"]["pending"])
+            self.assertEqual(d["sessions"], [])
+            gate.set()
+            d = ui.api("prreview", {"pr": ["o/r#41"]})  # the page's second ask waits for them
+            self.assertEqual((d["gh"]["state"], d["pending"]), ("OPEN", []))
+            d = ui.api("prreview", {"pr": ["o/r#41"], "wait": ["0"]})  # known now: shown at once, nothing pending
+            self.assertEqual((d["gh"]["state"], d["pending"]), ("OPEN", []))
+            d = ui.api("prreview", {"pr": ["o/r#41"], "wait": ["0"], "fresh": ["1"]})  # Refresh: old answer, new soon
+            self.assertEqual((d["gh"]["state"], d["pending"]), ("OPEN", ["gh"]))
+
     def test_sessions_for_a_pr_reread_only_transcripts_that_changed(self):
         d = tempfile.mkdtemp()
         proj = os.path.join(d, "p")
@@ -4961,6 +5073,20 @@ class ReviewTest(unittest.TestCase):
         # a review stopped at 0 when it couldn't get the review skill's full text back from Headroom
         self.assertIn("mcp__plugin_lfg_headroom__headroom_retrieve", R.RUN_ALLOW)
         self.assertFalse([x for x in R.RUN_ALLOW if "headroom" in x and "retrieve" not in x])
+
+    def test_a_review_runs_any_command_but_changes_nothing(self):
+        # reviews ended asking to be let run shell commands: they could run only a short list
+        self.assertIn("Bash", R.RUN_ALLOW)
+        for w in ("Bash(git push*)", "Bash(git commit*)", "Bash(gh pr merge*)", "Bash(gh pr comment*)",
+                  "Bash(lfg review post *)", "Edit", "Write"):
+            self.assertIn(w, R.RUN_DENY)
+        from lfgcore import hooks as H
+        data = {"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "git push origin feat"}}
+        with mock.patch.object(guard, "_prefs_on", return_value=True), \
+                mock.patch.dict(os.environ, {"LFG_REVIEWER": "1"}), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(H.pre_tool(data), 2)
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "gh pr comment 3 -b x"})), 2)
+            self.assertEqual(H.pre_tool(dict(data, tool_input={"command": "psql -c 'select 1' && npm test"})), 0)
 
     def test_a_chat_file_opens_in_the_page_and_nothing_else_does(self):
         import base64

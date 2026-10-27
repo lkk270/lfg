@@ -250,6 +250,12 @@ def _following(group_prs):
     return out
 
 
+def group_names():
+    """Every group's name, as listing() gives them, without reading a single transcript."""
+    p = prefs()
+    return sorted(set(p["folders"]) | set(p["group_prs"]))
+
+
 def listing(days=None, scripted=False, hidden=False, only=None, loose=False):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
     by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`. `only`: a main
@@ -296,7 +302,7 @@ def listing(days=None, scripted=False, hidden=False, only=None, loose=False):
             r.pop(k, None)
         rows.append(r)
     rows.sort(key=lambda r: r["modified"], reverse=True)
-    return {"sessions": rows, "folders": sorted(set(p["folders"]) | set(p["group_prs"])), "group_prs": p["group_prs"],
+    return {"sessions": rows, "folders": group_names(), "group_prs": p["group_prs"],
             "projects_dir": PROJECTS, "hidden_count": len(hid), "loose_count": loose_count}
 
 

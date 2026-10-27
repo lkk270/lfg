@@ -316,16 +316,21 @@ def api(view, q):
                     p["run"]["resume"] = R.resume(p["run"])
                     p["together"] = R.together(p)
             fj = R.fix_job(repo, number)
-            # GitHub and the session search don't wait on each other
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                gh = pool.submit(R.gh_status, repo, number, 0 if _arg(q, "fresh") == "1" else 300)
-                sess = pool.submit(R.sessions_for, repo, number)
-                gh, sess = gh.result(), sess.result()
-            return {"record": rec, "job": R.progress(repo, number), "repo": repo, "number": number,
+            fresh = False
+            if _arg(q, "wait") == "0":  # the page first: what is known now, GitHub and the session search behind it
+                fresh = _arg(q, "fresh") == "1"  # Refresh: the last answer now, GitHub's new one when it lands
+                gh, sess = R.gh_status(repo, number, 0 if fresh else 300, wait=False), R.sessions_soon(repo, number)
+            else:  # GitHub and the session search don't wait on each other
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    gh = pool.submit(R.gh_status, repo, number, 0 if _arg(q, "fresh") == "1" else 300)
+                    sess = pool.submit(R.sessions_for, repo, number)
+                    gh, sess = gh.result(), sess.result()
+            return {"record": rec, "pending": [k for k, v in (("gh", fresh or (gh or {}).get("pending")),
+                                                               ("sessions", sess is None)) if v], "job": R.progress(repo, number), "repo": repo, "number": number,
                     "fix_job": R.progress(repo, number, j=fj) if fj else None,
-                    "gh": gh, "sessions": pr_sessions(sess, R.linked_sessions(pr))[:12],
+                    "gh": gh, "sessions": pr_sessions(sess or [], R.linked_sessions(pr))[:12],
                     "linked": [linked_pr(x) for x in R.linked(pr)],
-                    "groups": SS.groups_of(pr), "all_groups": SS.listing()["folders"],
+                    "groups": SS.groups_of(pr), "all_groups": SS.group_names(),
                     "models": R.models(), "model": R.chosen_model(), "methods": R.method_choices(),
                     "method_now": R.method_label((C.config().get("review") or {}).get("sources"))}
         except R.ReviewError as e:
