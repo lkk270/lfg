@@ -2015,6 +2015,18 @@ class RunSummaryTest(unittest.TestCase):
         self.assertEqual(dash._blocking({"blocking": 3}), 3)
         self.assertEqual(dash._blocking({"verdict": {"overall": "don't", "blocking": ["a", "b"]}}), 2)
         self.assertEqual(dash._blocking({"findings": [{"blocking": True}, {"blocking": False}]}), 1)
+        self.assertEqual(dash._blocking({"blocking": []}), 0)
+
+    def test_security_reads_a_report_with_lists_and_text_where_dicts_go(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        p = os.path.join(d, "run", "05-secure.json")
+        C.write_json(p, {"verdict": "safe_with_caveats", "blocking": [], "scanners": "not run",
+                         "inventory": ["migration: enum value", "terraform routers"], "findings": [{"id": "S1"}]})
+        with mock.patch.object(dash, "stage_files", lambda rid, name, branch=None: [p] if name == "05-secure.json" else []), \
+                mock.patch.object(dash, "sonar_view", lambda rid: None):
+            s = dash.security("r")["secure"][0]
+        self.assertEqual((s["blocking"], s["inventory"], s["scanners"]), (0, {"items": 2}, [{"tool": None, "exit": None, "note": "not run"}]))
 
 
 class UpdatesTest(unittest.TestCase):

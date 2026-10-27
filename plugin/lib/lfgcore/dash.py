@@ -216,6 +216,8 @@ def _blocking(s):
     b = s.get("blocking")
     if isinstance(b, int) and not isinstance(b, bool):
         return b
+    if isinstance(b, list):
+        return len(b)
     v = s.get("verdict")
     if isinstance(v, dict) and isinstance(v.get("blocking"), list):
         return len(v["blocking"])
@@ -1026,8 +1028,10 @@ def reviews(rid, branch=None):
     for p in stage_files(rid, "06-review.json", branch):
         rv = C.read_json(p, {}) or {}
         run = os.path.basename(os.path.dirname(p))
-        verdicts.append({"run": run, "verdict": rv.get("verdict"), "findings": len(rv.get("findings", []))})
-        for f in rv.get("findings", []):
+        verdicts.append({"run": run, "verdict": rv.get("verdict"), "findings": len(rv.get("findings") or [])})
+        for f in rv.get("findings") or []:
+            if not isinstance(f, dict):
+                f = {"title": str(f)}
             v = fb.get("%s/%s" % (run, f.get("id"))) or fb.get(f.get("id")) or {}
             mine = not v.get("run") or v.get("run") == run
             findings.append(dict(f, run=run, feedback=v.get("verdict") if mine else None))
@@ -1042,14 +1046,19 @@ def security(rid, branch=None):
     sec, pen = [], []
     for p in stage_files(rid, "05-secure.json", branch):
         s = C.read_json(p, {}) or {}
+        # an agent-written report: a part can be a list where a dict is expected, or plain text
         inv = s.get("inventory") or {}
+        inv = inv if isinstance(inv, dict) else {"items": inv if isinstance(inv, list) else [inv]}
+        scanners = s.get("scanners") or []
+        scanners = scanners if isinstance(scanners, list) else [{"note": str(scanners)}]
+        findings = s.get("findings") or []
         sec.append({"run": os.path.basename(os.path.dirname(p)), "ts": s.get("ts") or _mtime_iso(p),
                     "verdict": _verdict(s.get("verdict")),
                     "blocking": _blocking(s), "mode": s.get("mode"), "scope": s.get("scope"),
                     "inventory": {k: len(v) for k, v in inv.items() if isinstance(v, list)},
                     "scanners": [{"tool": x.get("tool"), "exit": x.get("exit"), "note": x.get("note")}
-                                 for x in s.get("scanners", [])],
-                    "findings": s.get("findings", [])[:200]})
+                                 if isinstance(x, dict) else {"note": str(x)} for x in scanners],
+                    "findings": findings[:200] if isinstance(findings, list) else []})
     for p in stage_files(rid, "05-pentest.json", branch):
         s = C.read_json(p, {}) or {}
         keep = ("mode", "model", "status", "next_steps", "preflight_failures")

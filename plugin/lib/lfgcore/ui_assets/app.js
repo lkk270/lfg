@@ -1504,6 +1504,7 @@ async function wireSonar(root) {
 
 PAGES.checks = async () => {
   const [r, s] = await Promise.all([api("reviews"), api("security")]);
+  for (const d of [r, s]) if (d.available === false) return unavailable(d);
   const last = s.secure[0], ship = s.shipcheck[0], rev = r.verdicts[0];
   const open = r.findings.filter(f => !f.feedback);
   const sum = `<div class="cols">${stat("Latest code review", rev ? say(rev.verdict)[0] : "None yet", rev ? plural(rev.findings, "finding") : "run <code>/lfg:expert</code>")}${stat("Latest security check", last ? say(last.verdict)[0] : "None yet", last ? (last.blocking ? `${plural(last.blocking, "problem")} to fix` : "nothing blocking") : "run <code>/lfg:secure</code>")}${stat("Latest ship check", ship ? (ship.pass ? "Passed" : "Failed") : "None yet", ship ? `${ship.ok} of ${ship.total} checks passed${(ship.manual || []).length ? ` · ${ship.manual.length} for you to do` : ""}` : "run <code>/lfg:ship</code>")}</div>`;
