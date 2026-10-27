@@ -2115,6 +2115,17 @@ class UpdatesTest(unittest.TestCase):
         self.assertEqual(self.head(), before)
         self.assertFalse(os.path.exists(os.path.join(self.co, "tests", "test_bad.py")))
 
+    def test_failing_tests_are_named_even_when_other_tests_print(self):
+        self.upstream_commit("tests/test_bad.py", "import unittest\nclass T(unittest.TestCase):\n"
+                                                  "    def test_x(self): self.fail('no')\n"
+                                                  "    def test_y(self): print('chatter\\n' * 30)\n")
+        j = self.run_apply()
+        self.assertEqual(j["status"], "failed")
+        self.assertIn("FAIL: test_x", j["why"])
+        self.assertIn("AssertionError: no", j["why"])
+        self.assertIn("FAILED (failures=1)", j["why"])
+        self.assertNotIn("chatter", j["why"])
+
     def test_refuses_a_checkout_with_uncommitted_work(self):
         self.write(self.co, "tests/test_ok.py", "# my edit\n")
         self.upstream_commit("new.txt", "hi")
