@@ -4792,6 +4792,63 @@ class ReviewTest(unittest.TestCase):
         p = R.load("o/r", 7)["passes"][0]
         self.assertEqual(([x["q"] for x in p["findings"][0]["chat"]], p.get("chat")), (["why no retry?"], None))
 
+    def test_github_is_asked_once_and_a_page_never_waits_on_a_known_status(self):
+        import threading
+        R._STATUS.clear(); R._ME.clear()
+        asked = []
+        gate = threading.Event()
+
+        def fake(args, stdin=None, timeout=60):
+            asked.append(args[:2])
+            if args[:2] == ["api", "user"]:
+                return subprocess.CompletedProcess(args, 0, "lee\n", "")
+            if len(asked) > 2:
+                gate.wait(5)  # a slow GitHub: only the background refresh waits on it
+            return subprocess.CompletedProcess(args, 0, json.dumps({"state": "OPEN", "headRefName": "b"}), "")
+        with mock.patch.object(R, "_gh", side_effect=fake):
+            first = R.gh_status("o/r", 1)
+            R.gh_status("o/r", 2)
+            self.assertEqual(asked.count(["api", "user"]), 1)  # who you are doesn't change: asked once
+            R._STATUS[("o/r", 1)] = (time.time() - 3600, first)  # an hour old
+            t = time.time()
+            self.assertEqual(R.gh_status("o/r", 1, max_age=60), first)  # the old answer, at once
+            self.assertLess(time.time() - t, 1)
+            gate.set()
+            for _ in range(50):
+                if time.time() - R._STATUS[("o/r", 1)][0] < 60:
+                    break
+                time.sleep(0.05)
+            self.assertLess(time.time() - R._STATUS[("o/r", 1)][0], 60)  # refreshed behind the page
+            R.gh_status("o/r", 1, max_age=0)  # Refresh still asks GitHub and waits for it
+        R._STATUS.clear()
+        with mock.patch.object(R, "_gh", side_effect=AssertionError("asked GitHub")):
+            self.assertEqual(R.gh_status("o/r", 2, max_age=10 ** 9)["state"], "OPEN")  # a restart remembers
+
+    def test_sessions_for_a_pr_reread_only_transcripts_that_changed(self):
+        d = tempfile.mkdtemp()
+        proj = os.path.join(d, "p")
+        os.makedirs(proj)
+        a, b = os.path.join(proj, "a.jsonl"), os.path.join(proj, "b.jsonl")
+        C.write_text(a, json.dumps({"type": "user", "cwd": "/x", "message": {"content": "look at o/r#7"}}) + "\n")
+        C.write_text(b, json.dumps({"type": "user", "cwd": "/x", "message": {"content": "nothing here"}}) + "\n")
+        opened = []
+        real = open
+
+        def counting(p, *a2, **kw):
+            if str(p).endswith(".jsonl"):
+                opened.append(os.path.basename(p))
+            return real(p, *a2, **kw)
+        with mock.patch.object(R, "SESSION_DIR", d), mock.patch("builtins.open", counting):
+            self.assertEqual([s["id"] for s in R.sessions_for("o/r", 7)], ["a"])
+            opened.clear()
+            self.assertEqual([s["id"] for s in R.sessions_for("o/r", 7)], ["a"])
+            self.assertEqual(opened, [])  # nothing changed: nothing read again
+            with real(b, "a") as fh:
+                fh.write(json.dumps({"type": "user", "message": {"content": "now o/r#7 too"}}) + "\n")
+            os.utime(b, (time.time() + 5, time.time() + 5))
+            self.assertEqual(sorted(s["id"] for s in R.sessions_for("o/r", 7)), ["a", "b"])
+            self.assertNotIn("a.jsonl", [x for x in opened if x == "a.jsonl" and opened.count(x) > 1])
+
     def test_the_review_chat_takes_any_file_and_slash_commands(self):
         import base64
         png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()

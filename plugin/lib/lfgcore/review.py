@@ -72,16 +72,42 @@ def pr_meta(repo, number):
             "head_sha": j["headRefOid"], "base": j["baseRefName"], "branch": j["headRefName"], "state": j["state"]}
 
 
-_STATUS = {}
+_STATUS, _REFRESHING = {}, set()
 
 
 def gh_status(repo, number, max_age=300):
     """Where the PR stands on GitHub: open/merged, approved or changes asked for, each reviewer's latest verdict,
-    who still has to review, and checks. Cached for max_age seconds."""
+    who still has to review, and checks. An answer older than max_age is still returned at once and asked again in
+    the background, so a page waits on GitHub only for a PR it has never asked about, or on Refresh (max_age=0)."""
+    import threading
     key = (repo, number)
+    if not _STATUS:  # a restarted dashboard starts from what the last one knew
+        _STATUS.update({tuple(k.rsplit("#", 1)[:1]) + (int(k.rsplit("#", 1)[1]),): tuple(v)
+                        for k, v in (C.read_json(_status_path(), {}) or {}).items() if "#" in k})
     hit = _STATUS.get(key)
     if hit and time.time() - hit[0] < max_age:
         return hit[1]
+    if hit and max_age > 0:
+        if key not in _REFRESHING:
+            _REFRESHING.add(key)
+            threading.Thread(target=_refresh_status, args=key, daemon=True).start()
+        return hit[1]
+    return _ask_status(repo, number)
+
+
+def _status_path():
+    return C.lfg_path("reviews", "gh-status.json")
+
+
+def _refresh_status(repo, number):
+    try:
+        _ask_status(repo, number)
+    finally:
+        _REFRESHING.discard((repo, number))
+
+
+def _ask_status(repo, number):
+    key = (repo, number)
     try:
         j = gh_json(["pr", "view", str(number), "-R", repo, "--json",
                      "state,isDraft,reviewDecision,mergeable,reviews,reviewRequests,statusCheckRollup,headRefOid,"
@@ -105,6 +131,10 @@ def gh_status(repo, number, max_age=300):
            "waiting_on": [(r.get("login") or r.get("name") or "") for r in j.get("reviewRequests") or []],
            "checks": checks, "head_sha": j.get("headRefOid"), "branch": j.get("headRefName") or "", "me": me()}
     _STATUS[key] = (time.time(), out)
+    try:
+        C.write_json(_status_path(), {"%s#%d" % k: list(v) for k, v in list(_STATUS.items())})
+    except OSError:
+        pass
     return out
 
 
@@ -152,9 +182,15 @@ def rewrite(repo, number, fid, instruction):
     return {"id": fid, "body": re.sub(r"^```\w*\n|\n```$", "", text)}
 
 
+_ME = {}
+
+
 def me():
-    cp = _gh(["api", "user", "-q", ".login"], timeout=30)
-    return cp.stdout.strip() if cp.returncode == 0 else ""
+    """Your GitHub login, asked once per dashboard (it was asked once for every PR on the page)."""
+    if not _ME.get("login"):
+        cp = _gh(["api", "user", "-q", ".login"], timeout=30)
+        _ME["login"] = cp.stdout.strip() if cp.returncode == 0 else ""
+    return _ME["login"]
 
 
 def diff_lines(repo, base, head):
@@ -2121,36 +2157,52 @@ def mentions(raw, repo, number):
     return bool(hits) and not (hits == [keys[-1]] and repo.split("/")[-1].encode() not in raw)
 
 
+_SESS_SEEN = {}  # (transcript, size, mtime, repo, number) -> its row when it mentions the PR, else None
+
+
 def sessions_for(repo, number, days=30):
-    """Your Claude Code sessions from the last `days` that mention this PR, newest first."""
+    """Your Claude Code sessions from the last `days` that mention this PR, newest first. A transcript is read again
+    only when it changed since the last look (reading all of them took a second on every PR page)."""
     cut, out = time.time() - days * 86400, []
     for p in glob.glob(os.path.join(SESSION_DIR, "*", "*.jsonl")):
         try:
-            if os.path.getmtime(p) < cut:
-                continue
-            with open(p, "rb") as fh:
-                raw = fh.read()
+            st = os.stat(p)
         except OSError:
             continue
-        if not mentions(raw, repo, number):
+        if st.st_mtime < cut:
             continue
-        title, cwd, first = "", "", ""
-        for ln in raw.splitlines():
-            if b'"custom-title"' in ln or b'"cwd"' in ln or (not first and b'"type":"user"' in ln):
-                try:
-                    ev = json.loads(ln)
-                except ValueError:
-                    continue
-                if ev.get("type") == "custom-title":
-                    title = ev.get("customTitle") or title
-                cwd = cwd or ev.get("cwd") or ""
-                c = (ev.get("message") or {}).get("content") if ev.get("type") == "user" else None
-                if not first and isinstance(c, str) and not c.startswith("<"):
-                    first = c
-        out.append({"path": p, "id": os.path.basename(p)[:-6], "title": title or first[:80] or "(untitled)",
-                    "cwd": cwd, "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(p))),
-                    "has_json": bool(json_from_session(p))})
+        key = (p, st.st_size, st.st_mtime, repo, number)
+        if key not in _SESS_SEEN:
+            _SESS_SEEN[key] = _session_row(p, repo, number)
+        if _SESS_SEEN[key]:
+            out.append(_SESS_SEEN[key])
     return sorted(out, key=lambda s: s["modified"], reverse=True)
+
+
+def _session_row(p, repo, number):
+    try:
+        with open(p, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    if not mentions(raw, repo, number):
+        return None
+    title, cwd, first = "", "", ""
+    for ln in raw.splitlines():
+        if b'"custom-title"' in ln or b'"cwd"' in ln or (not first and b'"type":"user"' in ln):
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if ev.get("type") == "custom-title":
+                title = ev.get("customTitle") or title
+            cwd = cwd or ev.get("cwd") or ""
+            c = (ev.get("message") or {}).get("content") if ev.get("type") == "user" else None
+            if not first and isinstance(c, str) and not c.startswith("<"):
+                first = c
+    return {"path": p, "id": os.path.basename(p)[:-6], "title": title or first[:80] or "(untitled)",
+            "cwd": cwd, "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(p))),
+            "has_json": bool(json_from_session(p))}
 
 
 ASK_SESSION = ("Lee is reviewing pull request %s from the LFG dashboard and asks you about it. You worked on this, so "
