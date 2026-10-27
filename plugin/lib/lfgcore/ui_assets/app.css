@@ -1278,6 +1278,9 @@ a.stk-i:hover { background: var(--hover); }
 .pr-compose.big textarea { min-height: 72px; border-radius: 10px; padding: 10px 12px; }
 .pr-compose-bar { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
 .pr-talk.wide .pr-compose.big textarea { min-height: 110px; }
+.pr-used-notes { margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--blue); background: var(--c-blue); border-radius: 0 8px 8px 0; }
+.pr-used-notes p { margin: 4px 0 0; }
+.notes-on { font-weight: 400; opacity: .85; }
 .pr-talk.drop { outline: 2px dashed var(--blue); outline-offset: -4px; }
 .pr-talk.drop::after { content: "Drop to attach"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   background: color-mix(in srgb, var(--page) 80%, transparent); color: var(--text); font-weight: 500; border-radius: 12px; pointer-events: none; }
