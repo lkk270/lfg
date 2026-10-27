@@ -3688,7 +3688,7 @@ function prTabClose(pr) {
 const prTabLabel = t => `${esc(t.pr.split("#")[1] ? "#" + t.pr.split("#")[1] : t.pr)} <span class="prtab-t">${esc(t.title)}</span>`;
 function prTabStrip() {
   const tabs = openTabs();
-  return tabs.length ? `<div class="pr-doc-tabs" role="tablist">${tabs.map(t => `<a class="prtab ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" title="${esc(t.pr + " · " + t.title)}">${prTabLabel(t)}<span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("")}</div>` : "";
+  return tabs.length ? `<div class="pr-doc-tabs" role="tablist">${tabs.map(t => `<a class="prtab ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" draggable="true" data-prtab="${esc(t.pr)}" title="${esc(t.pr + " · " + t.title)}">${prTabLabel(t)}<span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("")}</div>` : "";
 }
 document.addEventListener("click", e => {
   const x = e.target.closest("[data-prtab-x]");
@@ -3696,8 +3696,49 @@ document.addEventListener("click", e => {
   e.preventDefault(); e.stopPropagation();
   prTabClose(x.dataset.prtabX);
 }, true);
+/* Drag a tab, above the page or in the sidebar, to reorder: both follow the one order kept in this browser. */
+let prTabDrag = null;
+function prTabMove(from, to, after) {
+  const tabs = openTabs(), i = tabs.findIndex(t => t.pr === from);
+  if (i < 0 || from === to) return;
+  const [t] = tabs.splice(i, 1);
+  const j = tabs.findIndex(x => x.pr === to);
+  tabs.splice(j < 0 ? tabs.length : j + (after ? 1 : 0), 0, t);
+  prTabsSave(tabs);
+  renderNav("prs");
+  $$(".pr-doc-tabs").forEach(el => { el.outerHTML = prTabStrip(); });
+}
+const prTabAfter = (e, el) => {
+  const r = el.getBoundingClientRect();
+  return el.classList.contains("nav-sub") ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+};
+document.addEventListener("dragstart", e => {
+  const el = e.target.closest && e.target.closest("[data-prtab]");
+  if (!el) return;
+  prTabDrag = el.dataset.prtab;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", prTabDrag);
+  el.classList.add("dragging");
+});
+document.addEventListener("dragover", e => {
+  const el = prTabDrag && e.target.closest && e.target.closest("[data-prtab]");
+  if (!el) return;
+  e.preventDefault();
+  $$(".drop-before, .drop-after").forEach(x => x.classList.remove("drop-before", "drop-after"));
+  if (el.dataset.prtab !== prTabDrag) el.classList.add(prTabAfter(e, el) ? "drop-after" : "drop-before");
+});
+document.addEventListener("drop", e => {
+  const el = prTabDrag && e.target.closest && e.target.closest("[data-prtab]");
+  if (!el) return;
+  e.preventDefault();
+  prTabMove(prTabDrag, el.dataset.prtab, prTabAfter(e, el));
+});
+document.addEventListener("dragend", () => {
+  prTabDrag = null;
+  $$(".dragging, .drop-before, .drop-after").forEach(x => x.classList.remove("dragging", "drop-before", "drop-after"));
+});
 function renderNav(active) {
-  const subs = k => k !== "prs" ? "" : openTabs().map(t => `<a class="nav-sub ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" title="${esc(t.pr + " · " + t.title)}"><span>${prTabLabel(t)}</span><span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("");
+  const subs = k => k !== "prs" ? "" : openTabs().map(t => `<a class="nav-sub ${location.hash === prTabHref(t.pr) ? "on" : ""}" href="${prTabHref(t.pr)}" draggable="true" data-prtab="${esc(t.pr)}" title="${esc(t.pr + " · " + t.title)}"><span>${prTabLabel(t)}</span><span class="prtab-x" data-prtab-x="${esc(t.pr)}" role="button" aria-label="Close ${esc(t.pr)}">×</span></a>`).join("");
   $("#nav").innerHTML = NAV_GROUPS.map(([g, ks]) => `<div class="nav-grp">${esc(g)}</div>${ks.map(k => `<a class="${k === active && !(k === "prs" && openTabs().some(t => location.hash === prTabHref(t.pr))) ? "on" : ""}" href="#${k}"${k === active ? ' aria-current="page"' : ""}>${icon(k)}<span>${esc(TITLES[k])}</span></a>${subs(k)}`).join("")}`).join("");
 }
 /* Breadcrumb in the top bar: project / page / item. Pages that open an item call crumbs() again with it. */

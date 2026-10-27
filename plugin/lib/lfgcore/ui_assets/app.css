@@ -1118,4 +1118,9 @@ details.rv-card[open] > summary::after { transform: rotate(90deg); }
 #nav a.nav-sub { height: 26px; padding-left: 34px; font-size: 13px; gap: 4px; }
 #nav a.nav-sub > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #nav a.nav-sub .prtab-x { visibility: hidden; }
+[data-prtab].dragging { opacity: .4; }
+.prtab.drop-before { box-shadow: inset 2px 0 0 var(--blue); }
+.prtab.drop-after { box-shadow: inset -2px 0 0 var(--blue); }
+#nav a.nav-sub.drop-before { box-shadow: inset 0 2px 0 var(--blue); }
+#nav a.nav-sub.drop-after { box-shadow: inset 0 -2px 0 var(--blue); }
 #nav a.nav-sub:hover .prtab-x, #nav a.nav-sub.on .prtab-x { visibility: visible; }
