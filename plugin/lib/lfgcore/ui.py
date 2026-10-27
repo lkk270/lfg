@@ -283,6 +283,7 @@ def api(view, q):
                 p = next((x for x in rec["passes"] if x["n"] == int(_arg(q, "n") or 0)), None)
                 return {"steps": R.activity((p or {}).get("run", {}).get("log") or "")}
             rec = R.refresh_used(R.backfill(repo, number))
+            rec = R.rescore(rec) if rec else rec  # saved before the score rules last changed: show it as it stands now
             for p in (rec or {}).get("passes") or []:
                 if p.get("run"):
                     p["run"]["resume"] = R.resume(p["run"])
@@ -548,7 +549,7 @@ def review_action(what, body):
                 raise S.Invalid("with must be a list of PRs")
             return R.start(repo, number, ticket=body.get("ticket") or None, fresh=bool(body.get("fresh")),
                            together=[R.parse_pr(str(x)) for x in together], method=body.get("method") or None,
-                           fresh_eyes=bool(body.get("fresh_eyes")))
+                           fresh_eyes=bool(body.get("fresh_eyes")), notes=body.get("notes") or None)
         if what == "review_link":
             return R.link(R.ref(repo, number), str(body.get("other") or ""), on=body.get("on", True) is not False)
         if what == "review_link_session":
