@@ -28,7 +28,9 @@ ROUTE_TAG = "headroom-route"
 # compressed. `token` compresses earlier turns too, and each rewrite sends the whole conversation again at the full
 # price: about one call in nine on long sessions, which cost far more than the compression saved. Headroom's own
 # rate limit (60 rpm / 100k tpm) and semantic response cache are off so it never throttles or replays answers.
-PROXY_FLAGS = ["--no-rate-limit", "--no-cache", "--no-telemetry", "--no-subscription-tracking"]
+# `--lossless` compresses only in ways that keep every detail and never adds retrieval markers. A marker made Headroom
+# send that call unstreamed, and the next call, streamed again, sent the whole conversation again in half the cases.
+PROXY_FLAGS = ["--no-rate-limit", "--no-cache", "--no-telemetry", "--no-subscription-tracking", "--lossless"]
 
 
 def mode():
