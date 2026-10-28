@@ -169,7 +169,7 @@ def rewrite(repo, number, fid, instruction):
     ctx = "\n".join(x for x in ("Title: " + (f.get("title") or ""), "Issue: " + (f.get("issue") or ""),
                                  "Fix: " + (f.get("fix") or ""), "Where: %s:%s" % (f.get("file") or "-", f.get("line")
                                                                                    or "-")) if x)
-    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
+    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk"] + C.CLAUDE_BARE
                         + _model() + _direct(),
                         input=REWRITE % (_text(instruction, "instruction", 2000), ctx, f["body"],
                                          "\n\nWrite it the way this style guide says:\n" + style if style else ""),
@@ -1573,7 +1573,7 @@ def _chat_tools(run_, slash, images):
     if images or slash:
         return ["--allowedTools", ",".join(["Read"] + (["Skill"] if slash else [])),
                 "--disallowedTools", ",".join(RUN_DENY)]
-    return ["--tools", ""]
+    return C.CLAUDE_BARE
 
 
 def _review_now(rec, p):
@@ -1818,7 +1818,7 @@ def check_fixed(repo, number, fid):
                           f.get("line") or "-", f.get("issue") or "", f.get("fix") or "", f.get("file") or "the PR",
                           p["head_sha"][:8], head[:8], (patch or "(no changes to this file)")[:30000],
                           now[:12000] or "-", ", ".join(others[:40]) or "none")
-        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
+        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk"] + C.CLAUDE_BARE
                             + _model() + _direct(), input=prompt, capture_output=True, text=True, timeout=300)
         try:
             ans = _last_object(json.loads(cp.stdout).get("result") or "", "state")
@@ -2472,7 +2472,7 @@ def import_session(repo, number, path, ticket=None, convert=True):
         if not C.which("claude"):
             raise ReviewError("Claude Code (`claude`) is not on PATH")
         said = "\n\n".join(t for t in _session_texts(path) if t.strip())[-60000:]
-        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]
+        cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk"] + C.CLAUDE_BARE
                             + _model(), input=CONVERT % (SHAPE, said), capture_output=True, text=True, timeout=600)
         try:
             data = find_review_json(json.loads(cp.stdout).get("result") or "")

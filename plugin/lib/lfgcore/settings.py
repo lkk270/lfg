@@ -60,8 +60,9 @@ LOOPBACK_URL = re.compile(r"^http://(127\.0\.0\.1|localhost)(:\d{1,5})?/?$")
 FIELDS = [
     ("linear.team", "Linear team key", "str", "Team /inbox reads, e.g. ACME.", None),
     ("linear.workspace", "Linear workspace slug", "slug", "From linear.app/<slug>/; used for issue links.", None),
-    ("headroom.mode", "Headroom mode", "choice", "token compresses the whole conversation (saves more); cache "
-                                                 "keeps earlier turns byte-identical for prompt caching.",
+    ("headroom.mode", "Headroom mode", "choice", "cache (default) keeps earlier turns byte-identical so Claude "
+                                                 "reuses them cheaply; token compresses them too, but each rewrite "
+                                                 "sends the whole conversation again at full price.",
      ("token", "cache")),
     ("headroom.port", "Headroom port", "int", "Local proxy port (restart Claude Code after changing).",
      (1024, 65535)),

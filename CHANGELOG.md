@@ -19,6 +19,8 @@ A repo's LFG knowledge now lives in the repo, in `.lfg/`, committed with the wor
 - New free-text issues get a short random suffix (`iss-fix-login-3f2a`) so two people's issues never merge.
 - The guard protects `.lfg/repo-id` and `.lfg/.gitignore` and blocks a recursive delete of a repo's `.lfg/`.
 - CI installs the Omnigraph CLI so the knowledge-sync tests run.
+- Headroom runs in `cache` mode by default. `token` mode rewrote earlier turns, so about one call in nine on a long session sent the whole conversation again at full price, costing more than the compression saved. A `headroom.mode` you set yourself is kept.
+- "Is it fixed?", rewriting a comment, turning a session into a review, knowledge questions and a review chat with no session start Claude with no tools, MCP servers or slash commands: about 2k tokens a call instead of about 230k.
 
 ### Fixed
 - Runs started in a repo with no commits recorded their branch as `detached@`.

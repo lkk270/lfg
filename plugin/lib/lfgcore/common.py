@@ -36,6 +36,12 @@ def lfg_bin():
     installed = os.path.join(LFG_HOME, "plugin", "bin", "lfg")
     return installed if os.path.isfile(installed) else os.path.join(PLUGIN_ROOT, "bin", "lfg")
 
+# A one-shot `claude -p` that only reads its prompt and answers: no tools, MCP servers or slash commands. Without
+# these every call carries the definitions of every connected tool (about 230k tokens with a few MCP servers), sent
+# again at full price whenever the prompt cache has expired.
+CLAUDE_BARE = ["--tools", "", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {}}),
+               "--disable-slash-commands"]
+
 DEFAULT_CONFIG = {
     "models": {
         "product-manager": "sonnet", "architecture-designer": "opus", "software-engineer": "sonnet",
@@ -53,7 +59,7 @@ DEFAULT_CONFIG = {
     "ui": {"port": 7777},
     "storage": {"limit_mb": 500, "idle_graph_days": 30},
     "linear": {"team": "", "workspace": ""},
-    "headroom": {"port": 8787, "mode": "token", "scope": "off"},
+    "headroom": {"port": 8787, "mode": "cache", "scope": "off"},
     "guard": {"hardened": False, "allow_commit": False},
     "review": {"sources": [], "model": ""},
     "replies": {"lfg_tag": False},

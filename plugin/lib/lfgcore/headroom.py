@@ -24,15 +24,16 @@ DEFAULT_UPSTREAM = "https://api.anthropic.com"
 MODES = ("token", "cache")
 SCOPES = ("off", "repos", "everywhere")
 ROUTE_TAG = "headroom-route"
-# `token` (default) compresses earlier turns too; `cache` keeps them byte-identical for the provider's prompt cache,
-# but then Claude Code's prefix is frozen and almost nothing gets compressed. Headroom's own rate limit
-# (60 rpm / 100k tpm) and semantic response cache are off so it never throttles or replays answers.
+# `cache` (default) keeps earlier turns byte-identical for the provider's prompt cache, so only new turns get
+# compressed. `token` compresses earlier turns too, and each rewrite sends the whole conversation again at the full
+# price: about one call in nine on long sessions, which cost far more than the compression saved. Headroom's own
+# rate limit (60 rpm / 100k tpm) and semantic response cache are off so it never throttles or replays answers.
 PROXY_FLAGS = ["--no-rate-limit", "--no-cache", "--no-telemetry", "--no-subscription-tracking"]
 
 
 def mode():
-    m = cfg().get("mode") or "token"
-    return m if m in MODES else "token"
+    m = cfg().get("mode") or "cache"
+    return m if m in MODES else "cache"
 
 
 def cfg():
