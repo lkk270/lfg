@@ -26,8 +26,8 @@ SCOPES = ("off", "repos", "everywhere")
 ROUTE_TAG = "headroom-route"
 # `cache` (default) keeps earlier turns byte-identical for the provider's prompt cache, so only new turns get
 # compressed. `token` compresses earlier turns too, and each rewrite sends the whole conversation again at the full
-# price: about one call in nine on long sessions, which cost far more than the compression saved. Headroom's own rate limit
-# (60 rpm / 100k tpm) and semantic response cache are off so it never throttles or replays answers.
+# price: about one call in nine on long sessions, which cost far more than the compression saved. Headroom's own
+# rate limit (60 rpm / 100k tpm) and semantic response cache are off so it never throttles or replays answers.
 PROXY_FLAGS = ["--no-rate-limit", "--no-cache", "--no-telemetry", "--no-subscription-tracking"]
 
 
