@@ -151,7 +151,7 @@ def ask(question, items):
     lines = ["%s | %s | %s | %s | %s | %s" % (i.get("slug"), i.get("kind"), i.get("repo") or "-",
                                               i.get("feature") or "-", i.get("title") or i.get("name") or "",
                                               re.sub(r"\s+", " ", str(i.get("text") or ""))[:600]) for i in items]
-    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""],
+    cp = subprocess.run(["claude", "-p", "--output-format", "json", "--permission-mode", "dontAsk"] + C.CLAUDE_BARE,
                         input=ASK % (q[:1000], "\n".join(lines)[:150000]), capture_output=True, text=True,
                         timeout=300)
     try:

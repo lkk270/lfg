@@ -809,12 +809,12 @@ class HeadroomTest(unittest.TestCase):
             self.assertEqual(fh.read(), "{not json")
 
     def test_serve_uses_configured_mode(self):
-        self.assertEqual(HR.mode(), "token")
+        self.assertEqual(HR.mode(), "cache")
         with mock.patch.object(os, "execvpe") as ex:
             HR.serve()
         argv = ex.call_args[0][1]
-        self.assertEqual(argv[argv.index("--mode") + 1], "token")
-        self.assertEqual(C.read_json(C.lfg_path("headroom", "state.json"), {})["mode"], "token")
+        self.assertEqual(argv[argv.index("--mode") + 1], "cache")
+        self.assertEqual(C.read_json(C.lfg_path("headroom", "state.json"), {})["mode"], "cache")
 
     def session_start_text(self):
         import io
@@ -1040,7 +1040,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_save_config_validates_and_only_touches_given_keys(self):
         C.write_json(C.lfg_path("config.json"), {"linear": {"team": "ACME"}, "custom": {"keep": 1}})
-        r = ST.save_config({"linear.workspace": "acme", "headroom.mode": "token"})
+        r = ST.save_config({"linear.workspace": "acme", "headroom.mode": "cache"})
         self.assertEqual(r["changed"], ["linear.workspace"])
         raw = C.read_json(C.lfg_path("config.json"))
         self.assertEqual(raw["custom"], {"keep": 1})
