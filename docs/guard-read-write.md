@@ -20,6 +20,8 @@ The guard judges a command to an outside system by what it does, never by its fi
   changes things also counts: `INTO`, `FOR UPDATE`, `nextval`, `pg_terminate_backend`, `\gexec`. SQL arrives from `-c`,
   `-f`, `<`, a heredoc, a here-string or an `echo` pipe. SQL it cannot see (`cat x.sql | psql`) is a write.
 - **`gh api`** is a read only when it is a GET with no `-f`, `-F` or `--input` and no GraphQL mutation.
+- **Your own database is free.** A SQL client pointed at localhost, 127.0.0.1, ::1 or a socket path may write.
+  No host given, a `PGHOST` or service file, or any non-local host among several means a normal check.
 - **Local files** a read writes to (`> out.txt`) are not an outside write.
 - **Supabase local development** (`supabase start`, `stop`, `init`, `db reset`, `migration up` without `--linked` or
   `--db-url`) is allowed. It is your machine.

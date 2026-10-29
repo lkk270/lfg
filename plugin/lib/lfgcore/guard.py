@@ -1010,7 +1010,7 @@ def _outside_verdict(kind, why, base, argv):
            "%s is not a read (%s); reads are always allowed" % (what, why))
 
 
-def _outside(base, argv, seg, piped_text):
+def _outside(base, argv, seg, piped_text, envs=()):
     """gcloud, aws, az, kubectl, gsutil, bq, supabase and the SQL clients: allowed when the command only reads."""
     stdin = piped_text
     if base in outside.SQL_CLIENTS:
@@ -1025,7 +1025,7 @@ def _outside(base, argv, seg, piped_text):
                     stdin = None
                     break
                 stdin = (stdin or "") + ";" + body
-    verdict = outside.classify(base, argv, stdin=stdin, read_file=_read_sql_file)
+    verdict = outside.classify(base, argv, stdin=stdin, read_file=_read_sql_file, envs=envs)
     if verdict:
         _outside_verdict(verdict[0], verdict[1], base, argv)
 
@@ -1091,8 +1091,11 @@ def analyze_bash(cmd, depth=0):
     for head, body, quoted in docs:
         recv = _receiver(head)
         if recv in outside.SQL_CLIENTS:  # `psql ... <<EOF` runs the body as SQL
-            kind, why = outside.sql_kind(body)
-            _outside_verdict(kind, why, recv, [recv])
+            hsegs, _ = _segments(_tokens(head))
+            henvs, hargv = _strip_wrappers(hsegs[-1])
+            if not outside.local_target(recv, hargv, henvs):
+                kind, why = outside.sql_kind(body)
+                _outside_verdict(kind, why, recv, [recv])
         if recv in SHELLS:
             analyze_bash(body, depth + 1)  # `bash <<EOF` runs the body
         elif recv in INTERPRETERS:
@@ -1189,7 +1192,7 @@ def analyze_bash(cmd, depth=0):
                 _, prev = _strip_wrappers(segs[si - 1])
                 if prev and os.path.basename(prev[0]) in ("echo", "printf"):
                     piped = " ".join(prev[1:])
-            _outside(base, argv, seg, piped)
+            _outside(base, argv, seg, piped, envs)
         elif re.match(r"^\$\{?[A-Za-z_]\w*\}?$", argv[0]):
             _block("15", "the command name %s is a variable, so LFG cannot tell whether it reads or writes" % argv[0])
         _deploy(base, argv)

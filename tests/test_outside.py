@@ -125,6 +125,22 @@ class SqlIsJudgedByItsStatements(unittest.TestCase):
             self.assertIsNotNone(blocked("psql -h db -f %s/missing.sql" % d))
 
 
+class LocalDatabases(unittest.TestCase):
+    def test_writes_to_your_own_machine_are_allowed(self):
+        for cmd in ('psql -h localhost -c "delete from t"',
+                    'psql postgresql://postgres:x@127.0.0.1:54322/postgres -c "drop table t"',
+                    "psql -h localhost <<EOF\ndelete from t;\nEOF",
+                    'clickhouse-client --host localhost -q "drop table t"'):
+            self.assertIsNone(blocked(cmd), cmd)
+
+    def test_anything_not_clearly_local_is_checked(self):
+        for cmd in ('psql -h db.prod.example -c "delete from t"', 'psql -c "delete from t"',
+                    'PGHOST=db psql -h localhost -c "delete from t"',
+                    'psql -h localhost -h prod.example -c "delete from t"',
+                    "psql -h prod <<EOF\ndelete from t;\nEOF"):
+            self.assertIsNotNone(blocked(cmd), cmd)
+
+
 class GhApiMethods(unittest.TestCase):
     def test_get_is_a_read_and_everything_else_is_a_write(self):
         self.assertIsNone(blocked("gh api repos/o/r/pulls"))

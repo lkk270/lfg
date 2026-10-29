@@ -142,9 +142,41 @@ SQL_SOURCES = {  # client -> (inline short flags, inline long flags, file short 
 SQL_CLIENTS = set(SQL_SOURCES) | {"clickhouse"}
 
 
-def sql_client(base, argv, stdin, read_file):
+LOCAL_HOST = re.compile(r"^(localhost|127(\.\d+){3}|\[?::1\]?|0\.0\.0\.0|[a-z0-9.-]+\.localhost|"
+                        r"host\.docker\.internal|/.*)$", re.I)
+
+
+def local_target(base, argv, envs=()):
+    """True when a SQL client is pointed at your own machine (localhost, a socket path), so its writes are fine.
+    No host given is not local: the host may come from PGHOST or a service file, so that stays a normal check."""
+    if any(e.split("=", 1)[0] in ("PGHOST", "PGSERVICE", "PGHOSTADDR") for e in envs):
+        return False
+    hosts, i = [], 1
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--host") and i + 1 < len(argv):
+            hosts.append(argv[i + 1])
+            i += 1
+        elif a.startswith("--host="):
+            hosts.append(a.split("=", 1)[1])
+        elif a.startswith("-h") and len(a) > 2 and not a.startswith("--"):
+            hosts.append(a[2:])
+        else:
+            m = re.match(r"^[a-z]+(?:ql)?://(?:[^@/]*@)?(\[[^\]]+\]|[^:/?]+)", a, re.I)
+            if m:
+                hosts.append(m.group(1))
+            hosts += re.findall(r"\bhost=([^\s]+)", a)
+            if re.search(r"\bservice=", a):
+                return False
+        i += 1
+    return bool(hosts) and all(LOCAL_HOST.match(h) for h in hosts)
+
+
+def sql_client(base, argv, stdin, read_file, envs=()):
     """A psql / mysql / clickhouse-client command. stdin: the SQL text it is fed (a here-string or `echo` pipe), or
-    None when unknown. Every statement the command will run must be a read."""
+    None when unknown. Every statement the command will run must be a read, unless it targets your own machine."""
+    if local_target(base, argv, envs):
+        return READ, "your own machine (localhost); writes there are fine"
     if base == "clickhouse":
         if argv[1:2] not in (["client"],):
             return WRITE, "`clickhouse %s` is not a plain read" % " ".join(argv[1:2])
@@ -399,7 +431,7 @@ def _supabase(argv, read_file):
 CLIS = {"gcloud", "gsutil", "bq", "aws", "az", "kubectl", "supabase"} | SQL_CLIENTS
 
 
-def classify(base, argv, stdin=None, read_file=lambda p: None):
+def classify(base, argv, stdin=None, read_file=lambda p: None, envs=()):
     """(READ|WRITE|SECRET, why) for one simple command, or None when `base` is not a covered outside system."""
     if base not in CLIS:
         return None
@@ -417,7 +449,7 @@ def classify(base, argv, stdin=None, read_file=lambda p: None):
         return _kubectl(argv)
     if base == "supabase":
         return _supabase(argv, read_file)
-    return sql_client(base, argv, stdin, read_file)
+    return sql_client(base, argv, stdin, read_file, envs)
 
 
 # MCP tools of the systems above: the tool's own name says what it does.
