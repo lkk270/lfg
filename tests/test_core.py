@@ -2407,6 +2407,10 @@ class ClaudeSessionsTest(unittest.TestCase):
             self.assertEqual(live.state, "needs-you")
             (req,) = list(live.pending.values())
             self.assertEqual((req["tool"], req["input"]["file_path"]), ("Write", "x.txt"))
+            for _ in range(100):  # the request is pending a moment before its notification is written
+                if N.recent()["events"]:
+                    break
+                time.sleep(0.05)
             self.assertEqual(N.recent()["events"][0]["href"], "#studio/" + sid)  # "Claude needs your OK"
             live.decide(req["id"], "always")
             for _ in range(100):
