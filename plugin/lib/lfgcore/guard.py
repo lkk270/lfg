@@ -1010,6 +1010,26 @@ def _outside_verdict(kind, why, base, argv):
            "%s is not a read (%s); reads are always allowed" % (what, why))
 
 
+REDIRECT_OPS = {">", ">>", ">&", "&>", "&>>", ">|", "<", "<<<", "<&", "<>"}
+
+
+def _without_redirects(argv):
+    """argv minus redirections and their targets: `2>/dev/null` and `2>&1` are plumbing, not arguments, so they
+    must not make `gcloud run services list` look like an unknown command. The tokenizer splits `2>&1` into `2`,
+    `>&`, `1`; a bare file-descriptor digit right before an operator goes with it."""
+    out, i = [], 0
+    while i < len(argv):
+        t = argv[i]
+        if t in REDIRECT_OPS:
+            if out and out[-1].isdigit() and len(out[-1]) == 1:
+                out.pop()
+            i += 2
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
 def _outside(base, argv, seg, piped_text, envs=()):
     """gcloud, aws, az, kubectl, gsutil, bq, supabase and the SQL clients: allowed when the command only reads."""
     stdin = piped_text
@@ -1025,9 +1045,10 @@ def _outside(base, argv, seg, piped_text, envs=()):
                     stdin = None
                     break
                 stdin = (stdin or "") + ";" + body
-    verdict = outside.classify(base, argv, stdin=stdin, read_file=_read_sql_file, envs=envs)
+    verdict = outside.classify(base, _without_redirects(argv), stdin=stdin, read_file=_read_sql_file,
+                               envs=envs)
     if verdict:
-        _outside_verdict(verdict[0], verdict[1], base, argv)
+        _outside_verdict(verdict[0], verdict[1], base, _without_redirects(argv))
 
 
 def _env_dump(base, argv, envs):
