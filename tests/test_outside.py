@@ -30,6 +30,15 @@ class ReadsAreAlwaysAllowed(unittest.TestCase):
                     "clickhouse-client --query 'SELECT count(1) FROM t'", "psql -h db -c 'select 1'"):
             self.assertIsNone(blocked(cmd), cmd)
 
+    def test_error_redirects_do_not_turn_a_read_into_an_unknown_command(self):
+        for cmd in ("gcloud run services list 2>/dev/null", "gcloud run services list 2>&1",
+                    "gcloud run services list --format=json 2>&1 | head -5",
+                    "gcloud run services list > /tmp/out.txt 2>&1", "kubectl get pods &>/dev/null",
+                    "aws s3 ls 2>/dev/null"):
+            self.assertIsNone(blocked(cmd), cmd)
+        self.assertIsNotNone(blocked("gcloud run deploy svc --image x 2>/dev/null"))
+        self.assertIsNotNone(blocked("gcloud run services delete svc 2>&1"))
+
     def test_a_redirect_of_a_read_into_a_local_file_is_still_a_read(self):
         self.assertIsNone(blocked("gcloud run services list > /tmp/services.txt"))
 
