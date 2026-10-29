@@ -8,7 +8,6 @@ Supabase, SQL clients). A command is judged by what it does, never by its first 
 Anything not recognized as a read is a write: this module fails toward blocking. docs/guard-read-write.md says how to
 add a system. Pure functions, no I/O except through the `read_file` callable the guard passes in.
 """
-import os
 import re
 
 READ, WRITE, SECRET = "read", "write", "secret"
@@ -127,8 +126,8 @@ def _flag_values(argv, short, long_):
         for s in short:
             if len(s) == 2 and a.startswith(s) and len(a) > 2 and not a.startswith("--"):
                 out.append(a[2:])
-        for l in long_:
-            if a.startswith(l + "="):
+        for flag in long_:
+            if a.startswith(flag + "="):
                 out.append(a.split("=", 1)[1])
         i += 1
     return out
@@ -260,7 +259,8 @@ def _gcloud(argv):
     if pos[0] in ("help", "version", "info", "topic", "feedback", "cheat-sheet"):
         return READ, "help or version"
     for i, p in enumerate(pos):
-        if p in GCLOUD_NOT_READ or (GCLOUD_WRITE_WORD.match(p) and not (i == 0 and p == "run")):  # `run` first is Cloud Run
+        cloud_run_group = i == 0 and p == "run"  # `gcloud run ...` is the Cloud Run group, not the verb
+        if p in GCLOUD_NOT_READ or (GCLOUD_WRITE_WORD.match(p) and not cloud_run_group):
             return WRITE, "`%s` changes live infrastructure" % p
     for i, p in enumerate(pos):
         if GCLOUD_READ_VERB.match(p) and i >= 1 and len(pos) - i - 1 <= 2:
@@ -332,8 +332,9 @@ AZ_READ_VERB = re.compile(r"^(show|list|list-\w+|get-\w+|exists|find|search|quer
                           r"show-\w+|download-\w+)$")
 AZ_SECRET = re.compile(r"(\bget-access-token\b|list-keys|list-credentials|list-publishing-\w+|show-connection-string|"
                        r"show-publish-profile|\bkeyvault secret (show|download)\b|\bkeys list\b|\bcredential show\b|"
-                       r"\bappsettings list\b|\bconnection-string list\b|\bsecret (show|list)\b|\bcertificate download\b|"
-                       r"\bkeyvault key download\b|--expose-token|--show-values|list-sas|generate-sas|\bsas\b)")
+                       r"\bappsettings list\b|\bconnection-string list\b|\bsecret (show|list)\b|"
+                       r"\bcertificate download\b|\bkeyvault key download\b|--expose-token|--show-values|list-sas|"
+                       r"generate-sas|\bsas\b)")
 
 
 AZ_WRITE_WORD = re.compile(r"^(create|delete|update|set|add|remove|start|stop|restart|deploy|import|upload|"
