@@ -4,6 +4,9 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+### Added
+- Messages in Studio and in a PR review's chat show when they were sent: the time today, the date and time before that, the full date on hover.
+
 ### Fixed
 - Integrations → Claude Code plugins said a plugin synced from your claude.ai account or organisation was "installed for one repo"; it now says where it comes from and that it's changed there.
 

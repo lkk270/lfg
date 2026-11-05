@@ -6,6 +6,17 @@
       "title": "unreleased",
       "items": [
         {
+          "title": "When each message was sent",
+          "text": "Every message in Studio and in a PR review's chat, yours and Claude's, shows when it was sent: the time for today, the date and time for earlier days. Hover it for the full date.",
+          "page": "studio"
+        }
+      ]
+    },
+    {
+      "version": "unreleased",
+      "title": "unreleased",
+      "items": [
+        {
           "title": "Plugins from your claude.ai account",
           "text": "Integrations → Claude Code plugins now says when a plugin comes from your claude.ai account or organisation, and that you change it there, instead of calling it a one-repo install.",
           "page": "integrations",
