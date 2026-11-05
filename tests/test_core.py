@@ -6052,6 +6052,14 @@ console.log(JSON.stringify({started, n: t.length, first: t[0].title, list: t[0].
         self.assertEqual(out["steps"][1][:2], [None, None])
         self.assertIn("if (((t.news || {}).unseen || []).length) { newsTour(t.news.unseen); return; }", js)
         self.assertIn('id="hp-news"', js)
+    def test_the_setup_guide_can_be_skipped(self):
+        with open(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        guide = js[js.index("function setupGuide(first)"):js.index("function setupGuide(first)") + 6000]
+        self.assertIn('data-sg="skip"', guide)
+        self.assertIn("$('[data-sg=\"skip\"]', card).onclick = () => finish();", guide)
+        self.assertIn('if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(); }', guide)
+        self.assertIn('if (first) save("tour_done", { name: "setup-guide" });', guide)  # skipped counts as seen
 
     def run_tabs(self, calls, hash="#prs/o/r/7"):
         """Run the tab helpers in node with a stand-in browser; calls is JS ending in a console.log."""
