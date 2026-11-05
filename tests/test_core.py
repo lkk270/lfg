@@ -6052,6 +6052,7 @@ console.log(JSON.stringify({started, n: t.length, first: t[0].title, list: t[0].
         self.assertEqual(out["steps"][1][:2], [None, None])
         self.assertIn("if (((t.news || {}).unseen || []).length) { newsTour(t.news.unseen); return; }", js)
         self.assertIn('id="hp-news"', js)
+
     def test_the_setup_guide_can_be_skipped(self):
         with open(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js")) as f:
             js = f.read()
