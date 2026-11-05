@@ -6027,6 +6027,15 @@ class ReviewTest(unittest.TestCase):
         save = save[:save.index("});")]
         self.assertIn('$("textarea.editor", box).value', save)  # the box also holds the Ask Claude textarea, first
 
+    def test_the_setup_guide_can_be_skipped(self):
+        with open(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js")) as f:
+            js = f.read()
+        guide = js[js.index("function setupGuide(first)"):js.index("function setupGuide(first)") + 6000]
+        self.assertIn('data-sg="skip"', guide)
+        self.assertIn("$('[data-sg=\"skip\"]', card).onclick = () => finish();", guide)
+        self.assertIn('if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(); }', guide)
+        self.assertIn('if (first) save("tour_done", { name: "setup-guide" });', guide)  # skipped counts as seen
+
     def test_reviews_open_as_tabs_above_the_page_and_in_the_sidebar(self):
         """Run the tab helpers in node with a stand-in browser: open, retitle, close the one you're on."""
         node = C.which("node")
