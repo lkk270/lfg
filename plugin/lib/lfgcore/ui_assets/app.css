@@ -2676,3 +2676,12 @@ body.sg-open { overflow: hidden; }
 .prtab-menu { position: fixed; z-index: 60; min-width: 150px; padding: 4px; background: var(--page); border: 1px solid var(--line-2); border-radius: var(--r-sm); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .prtab-menu button { text-align: left; padding: 7px 10px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
 .prtab-menu button:hover, .prtab-menu button:focus-visible { background: var(--hover); }
+.cont-group { margin-bottom: 10px; }
+.cont-group > summary { list-style: none; display: flex; gap: 10px; align-items: center; padding: 9px 12px; cursor: pointer; }
+.cont-group > summary::-webkit-details-marker { display: none; }
+.cont-group > summary::before { content: ""; flex: none; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .12s; }
+.cont-group[open] > summary::before { transform: rotate(90deg); }
+.cont-group[open] > summary { border-bottom: 1px solid var(--line); }
+.cont-other > summary { color: var(--text-2); }
+.cont-live { color: var(--blue-tx); font-weight: 600; }
+.cont-own { color: var(--muted); }

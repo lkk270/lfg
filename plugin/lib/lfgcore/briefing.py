@@ -359,9 +359,50 @@ ROW_KEYS = ("id", "name", "auto_name", "named", "repo", "root", "worktree", "bra
             "starred", "hidden", "modified", "resume", "cwd", "folder_exists", "via_pr", "via_ticket")
 
 
+PURPOSE_MAX = 90
+
+
+def _cap(text, n=PURPOSE_MAX):
+    text = " ".join(str(text or "").split())
+    if len(text) <= n:
+        return text
+    cut = text[:n - 1].rsplit(" ", 1)[0] or text[:n - 1]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
+def _sentence(text):
+    text = " ".join(str(text or "").split())
+    return text[:1].upper() + text[1:]
+
+
+def purpose_of(r):
+    """What a session is for, in one plain line, from what LFG already has and with no model call: the title Claude
+    Code wrote for it; else your own name for it when it reads as words; else its first message cleaned up ("You are
+    a ...", a leading # or /command, extra spaces); else your name with the dashes taken out."""
+    ai = " ".join(str(r.get("ai_title") or "").split())
+    if ai:  # the ticket id is in the group heading: leave it off the line unless it is all there is
+        return _cap(re.sub(r"^[A-Z][A-Z0-9]+-\d+[\s:·–-]+(?=\S)", "", ai))
+    own = str(r.get("title") or "").strip()
+    if " " in own:
+        return _cap(own)
+    for line in str(r.get("first") or "").splitlines():
+        line = line.strip().lstrip("#>*- ").strip()
+        if not line:
+            continue
+        if line.startswith("/"):
+            cmd, _, rest = line.partition(" ")
+            return _cap("Run %s: %s" % (cmd, rest.strip()) if rest.strip() else "Run %s" % cmd)
+        line = re.sub(r"^you are (?:a |an |the )?", "", line, flags=re.I)
+        return _cap(_sentence(line))
+    if own:
+        return _cap(_sentence(re.sub(r"[-_]+", " ", own)))
+    return "Untitled session"
+
+
 def _session(r, role, now):
     return dict({k: r.get(k) for k in ROW_KEYS if k in r}, role=role, activity=activity(r, now),
-                first=str(r.get("first") or "")[:400])
+                first=str(r.get("first") or "")[:400], purpose=purpose_of(r),
+                own_name=(r.get("name") or "") if r.get("named") else "")
 
 
 def _gh_state():
@@ -704,6 +745,20 @@ def _checked_at(marks, key):
         return None
 
 
+def _title_of(graph, key):
+    return ((graph.get("groups") or {}).get(key) or {}).get("title") or \
+        ((graph.get("issues") or {}).get(key) or {}).get("title") or ""
+
+
+def _group_of(r, graph, info):
+    """The epic or ticket a recent session sits under: the one its own ticket belongs to, else the first (by name) of
+    the tickets it names or its group follows; "" when it has none: it is then one of the loose sessions."""
+    named = sorted(tickets_in(r) | _followed(info, r.get("folder")))
+    first = [r["ticket"]] if r.get("ticket") else []
+    pick = next(iter(first + named), "")
+    return _epic_of(graph, pick) if pick else ""
+
+
 def listing(now=None, rows=None, graph=None, groups=None):
     """What the list page shows: {"entries", "recent", "checked", "active_days", "group_info", "label_list"}.
     `recent`: every session touched in the last RECENT_HOURS, newest first, hidden ones left out, each with
@@ -712,10 +767,13 @@ def listing(now=None, rows=None, graph=None, groups=None):
     now = now or time.time()
     full = SS.listing(days=ACTIVE_DAYS) if rows is None else {"sessions": rows}
     rows = full["sessions"]
+    info = SS.group_info() if groups is None else groups
+    if graph is None:
+        graph = _merged_graph({r["id"] for r in dash.repos()["repos"] if r["root"] in {x.get("root") for x in rows}})
     marks = C.read_json(done_path(), {}) or {}
     checked = []
     entries_ = []
-    for e in entries(now, rows=rows, graph=graph, groups=groups):
+    for e in entries(now, rows=rows, graph=graph, groups=info):
         at = _checked_at(marks, e["key"] or "unsorted")
         if at is not None and _epoch(e["last_active"]) <= at:
             k = e["key"] or "unsorted"
@@ -731,6 +789,15 @@ def listing(now=None, rows=None, graph=None, groups=None):
             checked.append({"type": "session", "key": r["id"], "title": r.get("name") or r["id"],
                             "at": marks[r["id"]]})
         else:
-            recent.append(_session(r, "", now))
-    return {"entries": entries_, "recent": recent, "checked": checked, "active_days": ACTIVE_DAYS,
+            recent.append(dict(_session(r, "", now), group=_group_of(r, graph, info)))
+    groups_ = {}
+    for r in recent:  # newest first, so the first of a group is its latest
+        if r["group"]:
+            g = groups_.setdefault(r["group"], {"key": r["group"], "title": _title_of(graph, r["group"]), "count": 0,
+                                                "last": r["modified"], "working": 0})
+            g["count"] += 1
+            g["working"] += r["activity"] == "working"
+    return {"entries": entries_, "recent": recent,
+            "recent_groups": sorted(groups_.values(), key=lambda g: g["last"], reverse=True),
+            "checked": checked, "active_days": ACTIVE_DAYS,
             "group_info": full.get("group_info") or SS.group_info(), "label_list": full.get("label_list") or []}
