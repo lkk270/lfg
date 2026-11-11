@@ -546,14 +546,15 @@ def whats_new(mark_seen=True):
     """Lines for every version newer than the last one this machine saw (nothing on a first install, which gets the
     dashboard's tour instead). Remembered in ~/.lfg/state/version.json."""
     p = C.lfg_path("state", "version.json")
-    seen = (C.read_json(p, {}) or {}).get("seen")
+    state = C.read_json(p, {}) or {}
+    seen = state.get("seen")
     if not seen and (os.path.exists(C.lfg_path("state", "ledger.json")) or os.path.exists(C.lfg_path("enabled.json"))):
         seen = "0.2.0"  # installed before LFG kept track of versions
     from .control import releases
     lines = [] if not seen else ["%s: %s" % (i["title"], i["text"]) for r in reversed(releases())
                                  if _ver(seen) < _ver(r["version"]) <= _ver(C.VERSION) for i in r["items"]]
     if mark_seen and seen != C.VERSION:
-        C.write_json(p, {"seen": C.VERSION})
+        C.write_json(p, dict(state, seen=C.VERSION))  # keep `news_seen`: the dashboard's lives in this file too
     return lines
 
 
