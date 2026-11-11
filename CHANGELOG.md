@@ -4,6 +4,15 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.7.1 (2026-11-10)
+
+### Changed
+- Where you left off: every session in the last 24 hours says in one plain line what it is for, sessions tied to a ticket or epic are grouped under it, and the rest fold into one "Other recent sessions" line
+
+### Fixed
+- The What's new walkthrough no longer starts over from 0.4.0 after every update: updating (lfg setup) used to overwrite the file that remembers which release you last saw
+- The What's new card now fits the window: it is capped to the window height, a long list scrolls inside it and Next and Skip stay in view, and it is wider
+
 ## 0.7.0 (2026-11-10)
 
 ### Added
