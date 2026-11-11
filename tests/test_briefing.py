@@ -482,7 +482,7 @@ class ReviewFixesTest(BriefingTest):
 class ListPageProgressTest(unittest.TestCase):
     """The list's per-entry progress, run as the real app.js code in Node with fetch stubbed."""
 
-    def run_page(self, setup, wait_ms=400):
+    def run_page(self, setup, wait_ms=0, until=None):
         import shutil
         import subprocess
         node = shutil.which("node")
@@ -513,9 +513,12 @@ const PAGES = {}, route = () => {}, softRoute = () => {}, pageTimer = () => {}, 
 const localStorage = { getItem: () => "" };
 %s
 %s
-setTimeout(() => console.log(JSON.stringify(els.map(e => e.innerHTML))), %d);
+const until = () => (%s);   // wait for the page to settle (a slow CI box may take long), never a fixed short delay
+const t0 = Date.now();
+const tick = () => { if ((until() && Date.now() - t0 >= %d) || Date.now() - t0 > 8000) console.log(JSON.stringify(els.map(e => e.innerHTML))); else setTimeout(tick, 10); };
+setTimeout(tick, 0);
 try { wireContinue({}); } catch (e) { console.log("THROWN " + e.message); }
-""" % (src, setup, wait_ms)
+""" % (src, setup, until or 'els.every(e => !e.innerHTML.includes("Reading progress"))', wait_ms)
         return subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
 
     def test_progress_fills_in_on_the_list_even_when_the_sessions_page_was_never_opened(self):
@@ -532,7 +535,7 @@ const api = async (v, q) => q.key === "EPIC-1" ? { done: 2, total: 6, milestones
         r = self.run_page("""
 CONT_TIMEOUT_MS = 50;
 const api = async () => new Promise(() => {});
-""", wait_ms=600)
+""")
         out = json.loads(r.stdout.strip().splitlines()[-1])
         for html in out:
             self.assertNotIn("Reading progress", html)
@@ -551,7 +554,7 @@ const api = async () => { throw new Error("HTTP 500"); };
 els[0].innerHTML = "KNOWN 2 of 6";
 els[0].dataset.contHave = "1";
 const api = async () => { throw new Error("HTTP 500"); };
-""")
+""", until='els[0].innerHTML.includes("could not refresh")')
         out = json.loads(r.stdout.strip().splitlines()[-1])
         self.assertIn("KNOWN 2 of 6", out[0])
         self.assertIn("could not refresh", out[0])
@@ -564,7 +567,7 @@ const api = async (v, q) => {
   calls++;
   return calls < 3 ? { done: 1, total: 6, milestones: [], refreshing: true } : { done: 3, total: 6, milestones: [] };
 };
-""", wait_ms=500)
+""", until='/3 of 6 tickets done/.test(els[0].innerHTML)')
         out = json.loads(r.stdout.strip().splitlines()[-1])
         self.assertIn("3 of 6 tickets done", out[0])
 

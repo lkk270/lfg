@@ -230,6 +230,49 @@ class WhatsNewAndIntroTourTest(DictatePackTest):
             self.assertEqual(SU.whats_new(mark_seen=False), [])
         self.assertTrue(K.releases()[0]["items"])  # the real file reads
 
+    def test_updating_never_makes_the_walkthrough_start_over_from_0_4_0(self):
+        """`lfg setup` (every update) prints the terminal's what's new, and used to rewrite version.json with only its
+        own `seen`, dropping `news_seen`: the next dashboard then showed every release since 0.3.0 again."""
+        from lfgcore import control as K
+        rels = [{"version": v, "title": "T" + v, "items": [{"title": "i" + v, "text": "x"}]}
+                for v in ("0.6.0", "0.5.0", "0.4.0", "0.3.0")]
+        C.write_json(C.lfg_path("state", "tours.json"), {"setup-guide": {"how": "finished"}})
+        C.write_json(C.lfg_path("state", "version.json"), {"seen": "0.3.0"})  # an install from 0.3.0
+        with mock.patch.object(K, "releases", return_value=rels), mock.patch.object(C, "VERSION", "0.4.0"):
+            SU.whats_new()  # the update to 0.4.0
+            self.assertEqual([r["version"] for r in K.news_view()["unseen"]], ["0.4.0"])
+            K.tour_done("whats-new", "finished")  # he finished the walkthrough: 0.4.0 seen
+        self.assertEqual(C.read_json(C.lfg_path("state", "version.json"))["news_seen"], "0.4.0")
+        with mock.patch.object(K, "releases", return_value=rels), mock.patch.object(C, "VERSION", "0.6.0"):
+            SU.whats_new()  # he updates to 0.6.0 (0.5.0 and 0.6.0 are both new to him)
+            state = C.read_json(C.lfg_path("state", "version.json"))
+            self.assertEqual((state["seen"], state["news_seen"]), ("0.6.0", "0.4.0"))  # nothing was dropped
+            self.assertEqual([r["version"] for r in K.news_view()["unseen"]], ["0.6.0", "0.5.0"])  # not 0.4.0 again
+
+    def test_a_release_he_never_saw_is_not_hidden_by_the_fix(self):
+        from lfgcore import control as K
+        rels = [{"version": v, "title": "T" + v, "items": [{"title": "i" + v, "text": "x"}]}
+                for v in ("0.6.0", "0.5.0", "0.4.0")]
+        C.write_json(C.lfg_path("state", "tours.json"), {"setup-guide": {"how": "finished"}})
+        # he saw the walkthrough up to 0.4.0, then updated twice without opening the dashboard
+        C.write_json(C.lfg_path("state", "version.json"), {"seen": "0.4.0", "news_seen": "0.4.0"})
+        with mock.patch.object(K, "releases", return_value=rels), mock.patch.object(C, "VERSION", "0.5.0"):
+            SU.whats_new()
+        with mock.patch.object(K, "releases", return_value=rels), mock.patch.object(C, "VERSION", "0.6.0"):
+            SU.whats_new()
+            self.assertEqual([r["version"] for r in K.news_view()["unseen"]], ["0.6.0", "0.5.0"])
+            K.tour_done("whats-new", "skipped")
+            self.assertEqual(K.news_view()["unseen"], [])  # skipped counts as seen
+
+    def test_a_machine_that_already_lost_its_seen_version_still_shows_what_it_never_saw(self):
+        from lfgcore import control as K
+        rels = [{"version": v, "title": "T" + v, "items": [{"title": "i" + v, "text": "x"}]}
+                for v in ("0.6.0", "0.4.0", "0.3.0")]
+        C.write_json(C.lfg_path("state", "tours.json"), {"setup-guide": {"how": "finished"}})
+        C.write_json(C.lfg_path("state", "version.json"), {"seen": "0.6.0"})  # news_seen gone, as the old bug left it
+        with mock.patch.object(K, "releases", return_value=rels), mock.patch.object(C, "VERSION", "0.6.0"):
+            self.assertEqual([r["version"] for r in K.news_view()["unseen"]], ["0.6.0", "0.4.0"])  # never hidden
+
     def test_install_from_before_version_tracking_counts_as_an_update(self):
         C.write_json(C.lfg_path("enabled.json"), {"repos": {}})
         self.assertTrue(SU.whats_new())
