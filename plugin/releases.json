@@ -2,6 +2,17 @@
   "_about": "What's new in each LFG release, said to the user: the walkthrough the dashboard shows once after an update, Help → What's new, and the lines `lfg setup` prints. Each item is one step of the walkthrough: page and sel (optional) say which page to open and what to light up on it. Newest release first. CHANGELOG.md keeps the detailed record.",
   "releases": [
     {
+      "version": "0.7.0",
+      "title": "Tabs keep their own repo and color",
+      "items": [
+        {
+          "title": "Tabs keep their own repo and colour",
+          "text": "A new browser tab starts from your last repo and colour, then keeps its own: changing them in one tab no longer changes another. A finished-review alert for another repo opens in its own tab instead of moving the one you are in. The tab row ends with a + for a new studio or PR review.",
+          "page": "prs"
+        }
+      ]
+    },
+    {
       "version": "0.6.0",
       "title": "Where you left off",
       "items": [
