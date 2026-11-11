@@ -4,6 +4,15 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.7.0 (2026-11-10)
+
+### Added
+- A "+" at the end of the tab row opens a menu with New studio and New PR review
+
+### Fixed
+- A browser tab stays on its repo: clicking an alert for another repo no longer switches the tab you are in, it opens that repo in a new browser tab or the tab that already has it
+- Each browser tab keeps its own appearance (colour) and repo across a reload, and another tab's choice no longer changes it; a new tab starts from the last one chosen
+
 ## 0.6.0 (2026-11-10)
 
 ### Added
