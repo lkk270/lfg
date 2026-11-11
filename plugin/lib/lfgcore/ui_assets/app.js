@@ -3341,11 +3341,23 @@ const contRing = p => {
   return `<svg class="cont-ring" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="${p.done} of ${p.total} tickets done"><circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--line-2)" stroke-width="6"/><circle cx="32" cy="32" r="${r}" fill="none" stroke="${p.done === p.total ? "var(--green)" : "var(--blue)"}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${(c * w).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 32 32)"/><text x="32" y="36" text-anchor="middle" class="cont-ring-t">${pct(p.done, p.total)}%</text></svg>`;
 };
 const contDone = (key, what) => `<label class="cont-done" title="Done: hides this ${what} until there is new activity in it"><input type="checkbox" data-cont-done="${esc(key)}" aria-label="Done"> Done</label>`;
-const contRecent = s => `<li class="cont-recent">${contDone(s.id, "session")}<div class="cont-sess grow" data-cont-open="${esc(s.id)}" tabindex="0" role="button" aria-label="Show ${esc(s.name)}">${dot(s.activity === "working" ? "on" : "")}<div class="grow"><div class="title">${esc(s.name)} ${s.ticket ? `<span class="tag mono">${esc(s.ticket)}</span>` : s.folder ? `<span class="tag">${esc(s.folder)}</span>` : ""}</div>
-  <div class="meta">${s.activity === "working" ? "working now" : "idle"} · ${ago(s.modified)}${s.repo ? ` · ${esc(s.repo)}` : ""}</div></div></div></li>`;
+/* One recent session: what it is for in one plain line, then working or idle, how long ago and the repo; your own name
+   for it stays small underneath, so you can still match it to your terminal. */
+const contRecent = s => `<li class="cont-recent">${contDone(s.id, "session")}<div class="cont-sess grow" data-cont-open="${esc(s.id)}" tabindex="0" role="button" aria-label="Show ${esc(s.purpose || s.name)}">${dot(s.activity === "working" ? "on" : "")}<div class="grow"><div class="title">${esc(s.purpose || s.name)}</div>
+  <div class="meta">${s.activity === "working" ? '<b class="cont-live">working now</b>' : "idle"} · ${ago(s.modified)}${s.repo ? ` · ${esc(s.repo)}` : ""}${s.own_name && s.own_name !== s.purpose ? ` · <span class="mono cont-own" title="Your name for this session">${esc(s.own_name)}</span>` : ""}</div></div></div></li>`;
+/* The last 24 hours, scannable: sessions tied to a ticket or epic sit under it, everything else folds into one line. */
+function contDay(d) {
+  const rs = d.recent || [], gs = d.recent_groups || [];
+  if (!rs.length) return '<p class="muted">No session was touched in the last 24 hours.</p>';
+  const rows = list => `<ul class="items cont-list">${list.map(contRecent).join("")}</ul>`;
+  const groups = gs.map(g => `<details class="cont-group box" open><summary><span class="grow"><b>${esc(g.title || g.key)}</b> <span class="tag mono">${esc(g.key)}</span></span><span class="muted small nowrap">${plural(g.count, "session")}${g.working ? ` · ${n(g.working)} working` : ""}</span></summary>${rows(rs.filter(x => x.group === g.key))}</details>`).join("");
+  const loose = rs.filter(x => !gs.some(g => g.key === x.group));
+  const other = loose.length ? `<details class="cont-group cont-other box"><summary><span class="grow"><b>Other recent sessions (${n(loose.length)})</b></span><span class="muted small nowrap">no ticket or group</span></summary>${rows(loose)}</details>` : "";
+  return groups + other;
+}
 const contList = d => {
   const es = d.entries || [], rs = d.recent || [], ck = d.checked || [];
-  const day = section("Last 24 hours", rs.length ? `<div class="box"><ul class="items cont-list">${rs.map(contRecent).join("")}</ul></div>` : '<p class="muted">No session was touched in the last 24 hours.</p>', plural(rs.length, "session"));
+  const day = section("Last 24 hours", contDay(d), plural(rs.length, "session"));
   const entries = es.length ? `<div class="box"><ul class="items cont-list">${es.map(e => `<li class="cont-entry">${contDone(e.key || "unsorted", "entry")}<a class="grow" href="${contHref(e.key)}">
     <div class="title">${esc(e.title)} ${e.key ? `<span class="tag mono">${esc(e.key)}</span>` : ""} <span class="tag">${CONT_KIND[e.kind] || esc(e.kind)}</span></div>
     <div class="meta">${ago(e.last_active)}${e.repos.length ? ` · ${esc(e.repos.join(", "))}` : ""} ${contChips(e.sessions)}</div>
@@ -3357,7 +3369,7 @@ const contList = d => {
 };
 /* One session as a row; clicking it fills the panel on the right. */
 const contSess = (s, need) => `<li class="cont-sess${state.contSel === s.id ? " on" : ""}" data-cont-sess="${esc(s.id)}" tabindex="0" role="button" aria-label="Show ${esc(s.name)}">
-  ${dot(s.activity === "working" ? "on" : "")}<div class="grow"><div class="title">${esc(s.name)} ${s.role === "orchestrator" ? '<span class="tag blue">orchestrator</span>' : ""} ${need.has(s.id) ? '<span class="tag warn">needs you</span>' : ""}</div>
+  ${dot(s.activity === "working" ? "on" : "")}<div class="grow"><div class="title">${esc(s.purpose || s.name)} ${s.role === "orchestrator" ? '<span class="tag blue">orchestrator</span>' : ""} ${need.has(s.id) ? '<span class="tag warn">needs you</span>' : ""}</div>
   <div class="meta">${s.activity === "working" ? "working now" : "idle"} · ${ago(s.modified)}${s.repo ? ` · ${esc(s.repo)}` : ""}${s.ticket ? ` · <span class="mono">${esc(s.ticket)}</span>` : ""}</div></div></li>`;
 const CONT_GO = { review_pr: "Open the PR", question: "Open the question", checks: "Open the PR", idle_pr: "Open the session" };
 function contBrief(d, unlocked) {

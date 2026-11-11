@@ -1,3 +1,4 @@
+# ruff: noqa: E501  (embedded JavaScript)
 """Tests for the "Where you left off" briefing (lfgcore/briefing.py). Stdlib only; run with the rest:
 `python3 -m unittest discover -s tests`."""
 import json
@@ -771,33 +772,42 @@ class ListRowsPageTest(unittest.TestCase):
 
     run_page = ListPageProgressTest.run_page
 
-    def test_the_list_has_a_last_24_hours_section_with_a_done_box_on_every_row(self):
-        r = self.run_page("""
-const api = async () => ({});
+    DATA = """
 const D = { active_days: 14,
   entries: [{ key: "EPIC-1", title: "The epic", kind: "epic", repos: ["app"], last_active: "2026-11-10T09:00:00",
               sessions: { working: 1, idle: 0, unsorted: 0 } }],
+  recent_groups: [{ key: "ATO-4361", title: "Apply Terraform changes after approval", count: 2, working: 1, last: "2026-11-10T09:00:00" }],
   recent: [
-    { id: "s1", name: "Fix login", ticket: "ATO-1", folder: "", activity: "working", repo: "app",
-      modified: "2026-11-10T09:00:00" },
-    { id: "s2", name: "Just a chat", ticket: "", folder: "My group", activity: "idle", repo: "api",
-      modified: "2026-11-10T08:00:00" }],
+    { id: "s1", name: "build-4361-g4", own_name: "build-4361-g4", purpose: "Apply Terraform changes after approval", group: "ATO-4361",
+      activity: "working", repo: "external-api", modified: "2026-11-10T09:00:00" },
+    { id: "s2", name: "fix-1850-r3", own_name: "fix-1850-r3", purpose: "Fixing the PR 1850 review findings", group: "ATO-4361",
+      activity: "idle", repo: "external-api", modified: "2026-11-10T08:00:00" },
+    { id: "s3", name: "Home directory disk usage", own_name: "", purpose: "Home directory disk usage", group: "",
+      activity: "idle", repo: "", modified: "2026-11-10T07:00:00" },
+    { id: "s4", name: "x", own_name: "", purpose: "Untitled session", group: "", activity: "idle", repo: "api",
+      modified: "2026-11-10T06:00:00" }],
   checked: [
     { type: "entry", key: "ATO-3", title: "Old epic", at: "2026-11-09T09:00:00" },
     { type: "session", key: "s9", title: "Old chat", at: "2026-11-09T09:00:00" }] };
+"""
+
+    def test_the_list_has_a_last_24_hours_section_with_a_done_box_on_every_row(self):
+        r = self.run_page(self.DATA + """
+const api = async () => ({});
 console.log("HTML1 " + JSON.stringify(contList(D)));
 state.contChecked = true;
 console.log("HTML2 " + JSON.stringify(contList(D)));
-console.log("HTML3 " + JSON.stringify(contList({ active_days: 14, entries: [], recent: [], checked: [] })));
+console.log("HTML3 " + JSON.stringify(contList({ active_days: 14, entries: [], recent: [], recent_groups: [], checked: [] })));
 """, wait_ms=10)
         self.assertNotIn("THROWN", r.stdout, r.stdout + r.stderr)
         got = {ln[:5]: json.loads(ln[6:]) for ln in r.stdout.splitlines() if ln.startswith("HTML")}
         one, two, three = got["HTML1"], got["HTML2"], got["HTML3"]
         self.assertLess(one.index("Last 24 hours"), one.index("Epics and tickets"))  # the day section is on top
-        for want in ("Fix login", "Just a chat", "ATO-1", "My group", "working now", "idle", 'data-cont-open="s1"',
-                     'data-cont-open="s2"', "The epic"):
+        for want in ("Apply Terraform changes after approval", "Fixing the PR 1850 review findings",
+                     "Home directory disk usage", "working now", "idle", "external-api", 'data-cont-open="s1"',
+                     'data-cont-open="s4"', "The epic"):
             self.assertIn(want, one)
-        self.assertEqual(one.count("data-cont-done="), 3)  # two sessions and the entry
+        self.assertEqual(one.count("data-cont-done="), 5)  # four sessions and the entry
         self.assertIn('data-cont-done="EPIC-1"', one)
         self.assertIn("Show 2 checked off", one)
         self.assertNotIn("data-cont-undo", one)
@@ -805,6 +815,116 @@ console.log("HTML3 " + JSON.stringify(contList({ active_days: 14, entries: [], r
         self.assertEqual(two.count("data-cont-undo="), 2)
         self.assertIn("No session was touched in the last 24 hours", three)
         self.assertNotIn("checked off", three)
+
+    def test_sessions_of_a_ticket_sit_under_it_and_the_rest_fold_into_one_line(self):
+        r = self.run_page(self.DATA + """
+const api = async () => ({});
+console.log("HTML " + JSON.stringify(contList(D)));
+""", wait_ms=10)
+        html = json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("HTML ")][0][5:])
+        day = html[:html.index("Epics and tickets")]
+        self.assertLess(day.index("ATO-4361"), day.index("Fixing the PR 1850"))  # the group's heading, then its rows
+        self.assertIn("2 sessions", day)
+        self.assertIn("1 working", day)
+        other = day.index("Other recent sessions (2)")
+        self.assertLess(day.index("Fixing the PR 1850"), other)  # the grouped ones come first
+        self.assertLess(other, day.index("Home directory disk usage"))  # the loose ones are inside the fold
+        self.assertEqual(day.count("Other recent sessions"), 1)  # one fold, not one per kind
+        fold = day[day.rindex("<details", 0, other):other]
+        self.assertNotIn(" open", fold)  # collapsed until clicked
+        self.assertEqual(day.count("<details"), 2)  # the ticket's group and the fold
+
+    def test_each_row_says_what_it_is_for_and_keeps_your_own_name_small(self):
+        r = self.run_page(self.DATA + """
+const api = async () => ({});
+console.log("HTML " + JSON.stringify(contRecent(D.recent[0])));
+console.log("PLAIN " + JSON.stringify(contRecent(D.recent[2])));
+""", wait_ms=10)
+        row = json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("HTML ")][0][5:])
+        plain = json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("PLAIN ")][0][6:])
+        self.assertIn("Apply Terraform changes after approval", row)
+        self.assertIn("build-4361-g4", row)  # your own name, small, so you can match it to your terminal
+        self.assertLess(row.index("Apply Terraform"), row.index("build-4361-g4"))
+        self.assertNotIn("cont-own", plain)  # nothing extra when you never named it
+
+    def test_with_no_ticket_groups_there_is_just_the_one_fold(self):
+        r = self.run_page(self.DATA + """
+const api = async () => ({});
+const d = Object.assign({}, D, { recent_groups: [], recent: D.recent.map(x => Object.assign({}, x, { group: "" })) });
+console.log("HTML " + JSON.stringify(contList(d)));
+""", wait_ms=10)
+        html = json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("HTML ")][0][5:])
+        self.assertIn("Other recent sessions (4)", html)
+        self.assertEqual(html.count("<details"), 1)
+
+
+class PurposeAndGroupingTest(unittest.TestCase):
+    """Each recent session says what it is for in one plain line, and the 24-hour list is grouped."""
+
+    def r(self, sid, ago, **kw):
+        base = {"name": sid, "title": "", "ai_title": "", "first": "", "ticket": "", "branch": "", "folder": "",
+                "named": False, "labels": [], "hidden": False}
+        return srow(sid, ago, **dict(base, **kw))
+
+    def test_the_purpose_is_the_title_claude_code_wrote_not_a_slug_or_the_raw_first_message(self):
+        row = self.r("a", 60, title="build-4361-g4-apply-tf", ai_title="Apply Terraform changes after approval",
+                     first="Ticket: ATO-4361 (Apply Terraform changes only after...) You are step G4")
+        self.assertEqual(B.purpose_of(row), "Apply Terraform changes after approval")
+
+    def test_with_no_claude_code_title_the_first_message_is_cleaned_into_one_line(self):
+        cases = {
+            "# Review of Atomus3D/external-api\n\nPlease fix the findings below": "Review of Atomus3D/external-api",
+            "/address-pr-review pr 1849": "Run /address-pr-review: pr 1849",
+            "/clear": "Run /clear",
+            "You are a review-fix session for PR #1849 on lee/terraform-stack.\nMore":
+                "Review-fix session for PR #1849 on lee/terraform-stack.",
+            "   \n\n  fix the login bug   please  ": "Fix the login bug please",
+        }
+        for first, want in cases.items():
+            self.assertEqual(B.purpose_of(self.r("a", 1, first=first)), want, first)
+
+    def test_a_long_first_line_is_cut_at_a_word_with_an_ellipsis(self):
+        out = B.purpose_of(self.r("a", 1, first="word " * 60))
+        self.assertLessEqual(len(out), B.PURPOSE_MAX)
+        self.assertTrue(out.endswith("…"))
+        self.assertNotIn("wor…", out)
+
+    def test_a_leading_ticket_id_is_left_off_because_the_group_heading_already_says_it(self):
+        self.assertEqual(B.purpose_of(self.r("a", 1, ai_title="ATO-4363 Cloudflare token in saved plans")),
+                         "Cloudflare token in saved plans")
+        self.assertEqual(B.purpose_of(self.r("a", 1, ai_title="ATO-4363")), "ATO-4363")  # never leaves it empty
+
+    def test_the_title_you_gave_it_is_the_purpose_only_when_nothing_better_exists(self):
+        self.assertEqual(B.purpose_of(self.r("a", 1, title="terraform-step-e2")), "Terraform step e2")
+        self.assertEqual(B.purpose_of(self.r("a", 1)), "Untitled session")
+
+    def test_every_recent_row_carries_its_purpose_and_the_name_you_gave_it(self):
+        row = self.r("a", 3600, name="build-4361", title="build-4361", named=True, ai_title="Apply changes",
+                     repo="external-api")
+        out = B.listing(NOW, rows=[row], graph=graph(), groups={})["recent"][0]
+        self.assertEqual((out["purpose"], out["repo"], out["activity"]), ("Apply changes", "external-api", "idle"))
+        self.assertEqual(out["own_name"], "build-4361")
+
+    def test_sessions_under_an_epic_or_ticket_are_grouped_and_the_rest_are_left_loose(self):
+        rows = [self.r("a", 10, branch="lee/tt-1-x", ai_title="One"),
+                self.r("b", 20, first="for EPIC-1", ai_title="Two"),
+                self.r("c", 30, branch="lee/ato-9-y", ai_title="Three"), self.r("d", 40, ai_title="No purpose"),
+                self.r("e", 50, folder="G", ai_title="In a group")]
+        groups = {"G": {"parent": "", "prs": [], "tickets": ["ATO-9"]}}
+        out = B.listing(NOW, rows=rows, graph=graph(), groups=groups)
+        by = {g["key"]: g for g in out["recent_groups"]}
+        self.assertEqual(sorted(by), ["ATO-9", "EPIC-1"])
+        self.assertEqual(by["EPIC-1"]["title"], "The epic")
+        self.assertEqual(by["EPIC-1"]["count"], 2)
+        ids = {r["id"]: r["group"] for r in out["recent"]}
+        self.assertEqual(ids, {"a": "EPIC-1", "b": "EPIC-1", "c": "ATO-9", "d": "", "e": "ATO-9"})
+        self.assertEqual([g["key"] for g in out["recent_groups"]][0], "EPIC-1")  # the newest activity first
+
+    def test_a_session_naming_two_tickets_goes_under_its_own_ticket_not_both(self):
+        rows = [self.r("a", 10, ticket="TT-1", branch="lee/tt-1-x", first="also ATO-9", ai_title="X")]
+        out = B.listing(NOW, rows=rows, graph=graph(), groups={})
+        self.assertEqual([r["group"] for r in out["recent"]], ["EPIC-1"])
+        self.assertEqual(sum(g["count"] for g in out["recent_groups"]), 1)
 
 
 if __name__ == "__main__":
