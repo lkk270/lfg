@@ -2,6 +2,17 @@
   "_about": "What's new in each LFG release, said to the user: the walkthrough the dashboard shows once after an update, Help → What's new, and the lines `lfg setup` prints. Each item is one step of the walkthrough: page and sel (optional) say which page to open and what to light up on it. Newest release first. CHANGELOG.md keeps the detailed record.",
   "releases": [
     {
+      "version": "0.7.1",
+      "title": "Clearer session list",
+      "items": [
+        {
+          "title": "A clearer session list",
+          "text": "Each recent session now says what it is for in plain words, with whether it is working or idle, how long ago and which repo. Sessions for the same ticket sit together, and everything else folds into one \"Other recent sessions\" line you can open.",
+          "page": "continue"
+        }
+      ]
+    },
+    {
       "version": "0.7.0",
       "title": "Tabs keep their own repo and color",
       "items": [

@@ -4,6 +4,11 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.7.1 (2026-11-10)
+
+### Changed
+- Where you left off: every session in the last 24 hours says in one plain line what it is for, sessions tied to a ticket or epic are grouped under it, and the rest fold into one "Other recent sessions" line
+
 ## 0.7.0 (2026-11-10)
 
 ### Added
