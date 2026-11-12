@@ -1,9 +1,0 @@
-{
-  "changelog": {
-    "Fixed": [
-      "The What's new walkthrough no longer starts over from 0.4.0 after every update: updating (lfg setup) used to overwrite the file that remembers which release you last saw",
-      "The What's new card now fits the window: it is capped to the window height, a long list scrolls inside it and Next and Skip stay in view, and it is wider"
-    ]
-  },
-  "whats_new": []
-}
