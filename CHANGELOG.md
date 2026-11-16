@@ -4,6 +4,11 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.7.3 (2026-11-16)
+
+### Fixed
+- Release 0.7.2 could not install: its What's new entry was missing, which LFG's own release test requires. Fable 5.2 now has one.
+
 ## 0.7.2 (2026-11-16)
 
 ### Added
