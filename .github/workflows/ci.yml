@@ -17,7 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        # Pinned, not ubuntu-latest: that is now Ubuntu 26.04, which has no Python 3.9 build, so setup-python fails. LFG
+        # supports 3.9, so the 3.9 job stays; move this when 3.9 is dropped or a 3.9 build exists for the newer image.
+        os: [ubuntu-24.04]
         python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
