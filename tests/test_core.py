@@ -4207,6 +4207,14 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(self.SS.cost("claude-fable-5-1", dict(dict.fromkeys(self.SS.FIELDS, 0), cache_read=4000000)),
                          1.0)
 
+    def test_fable_5_2_is_priced_at_8_and_40_dollars_a_million(self):
+        z = dict.fromkeys(self.SS.FIELDS, 0)
+        self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, input=1000000)), 8.0)
+        self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, output=1000000)), 40.0)
+        self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, cache_read=1000000)), 0.2)
+        self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, cache_write_5m=1000000)), 10.0)
+        self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, cache_write_1h=1000000)), 16.0)
+
     def test_haiku_5_5_prompts_over_100k_cost_more_each_on_its_own(self):
         # Two requests: 60K in (cheap tier) and 150K in (long tier). Together the day is over 100K, but only the
         # second request is.
@@ -6152,7 +6160,16 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual([x["name"] for x in used["mcp"]], ["linear"])
         with self.assertRaises(ui.S.Invalid):
             ui.save("review_model", {"model": "gpt-5"})
-        self.assertEqual(R.models()[1], {"id": "claude-fable-5-1", "label": "Fable 5.1"})
+        self.assertEqual(R.models()[1], {"id": "claude-fable-5-2", "label": "Fable 5.2"})
+        self.assertEqual(R.models()[2], {"id": "claude-fable-5-1", "label": "Fable 5.1"})  # 5.1 stays selectable
+
+    def test_fable_5_2_is_a_choice_in_reviews_and_settings_and_is_priced(self):
+        self.assertIn("claude-fable-5-2", [m["id"] for m in R.models()])
+        choices = next(f[4] for f in ui.S.FIELDS if f[0] == "review.model")
+        self.assertIn("claude-fable-5-2", choices)
+        self.assertIn("claude-fable-5-1", choices)
+        self.assertEqual(ui.save("review_model", {"model": "claude-fable-5-2"})["changed"], ["review.model"])
+        self.addCleanup(ui.save, "review_model", {"model": ""})  # the config is shared with the other tests
 
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
         sid = "11111111-2222-3333-4444-555555555555"
