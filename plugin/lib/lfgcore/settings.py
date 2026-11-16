@@ -71,7 +71,7 @@ FIELDS = [
      (1024, 65535)),
     ("review.model", "Model for reviews", "choice", "The model every review, re-review, chat and fix runs on. "
                                                     "Default is whatever Claude Code itself uses.",
-     ("", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")),
+     ("", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")),
     ("ui.port", "Dashboard port", "int", "Used the next time you run lfg ui.", (1024, 65535)),
     ("replies.lfg_tag", "Say whether LFG was used", "bool", "In LFG repos, Claude starts each reply with the LFG "
                                                            "skill or tools it used, or why it didn't use LFG.", None),

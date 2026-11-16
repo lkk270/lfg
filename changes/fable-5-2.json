@@ -1,0 +1,8 @@
+{
+  "changelog": {
+    "Added": [
+      "Fable 5.2 (claude-fable-5-2) is a choice for reviews (Settings → Model for reviews and the review model picker), and its usage is priced at $8 in, $40 out and $0.20 cache read per million tokens. Fable 5.1 stays selectable."
+    ]
+  },
+  "whats_new": []
+}
