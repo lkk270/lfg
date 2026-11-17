@@ -4,6 +4,11 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.7.4 (2026-11-16)
+
+### Added
+- Mythos 5.2 (claude-mythos-5-2) is a choice for reviews (Settings → Model for reviews and the review model picker), and its usage is priced at $8 in, $40 out and $0.20 cache read per million tokens, the same as Fable 5.2. It is for organizations verified by Anthropic; other accounts get an error from the API. Fable 5.2, Fable 5.1 and the others stay selectable.
+
 ## 0.7.3 (2026-11-16)
 
 ### Fixed
