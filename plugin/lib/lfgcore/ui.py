@@ -658,6 +658,10 @@ def save(what, body):
                     raise ValueError("ids must be a list")
                 return SS.hide(ids, on=body.get("on", True) is not False)
             if what == "session_trash":
+                from . import claudesess as CS
+                live = CS._LIVE.get(str(body.get("id") or ""))
+                if live and live.state != "ended":
+                    raise ValueError("That session is still running in LFG. End it first, then delete it.")
                 return SS.trash(body.get("id"))
             if what == "session_star":
                 return SS.star(body.get("id"), body.get("on", True) is not False)
