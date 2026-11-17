@@ -1103,7 +1103,8 @@ def remove_worktree(path):
 
 
 def group_cleanup(repo, group):
-    """For "Done with this": the group's sessions and the worktrees they ran in, each with what removing it loses."""
-    rows = [r for r in listing(hidden=True)["sessions"] if r["repo"] == repo and r["group"] == group]
+    """For "Done with this": the group's sessions and the worktrees they ran in, each with what removing it loses.
+    Scripted sessions count too (LFG's studios and background runs), as the Studio list shows them in the group."""
+    rows = [r for r in listing(hidden=True, scripted=True)["sessions"] if r["repo"] == repo and r["group"] == group]
     paths = sorted({r["cwd"] for r in rows if r["worktree"] and r["cwd"]})
     return {"sessions": [r["id"] for r in rows if not r["hidden"]], "worktrees": [worktree_state(p) for p in paths]}
