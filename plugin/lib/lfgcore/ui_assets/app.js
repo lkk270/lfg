@@ -6431,11 +6431,10 @@ function wireSessList(root, list) {
   $$("[data-grp-new]", root).forEach(b => b.onclick = () => newGroupDrawer(ctx));
   $$("[data-sess-done]", root).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); const [repo, group] = JSON.parse(b.dataset.sessDone); sessionDoneDrawer(repo, group, ctx); });
   const find = $("#ss-find", root);
-  if (find && once(find, "find")) {
-    const apply = () => { state.ssFind = find.value; ssFindInPlace(root, ctx.rows, find.value); };
-    find.addEventListener("input", apply);
-    find.addEventListener("search", apply);  // Enter, and the box's own clear button
-  }
+  // the rows of the list drawn last, not of this redraw: the box keeps one listener across redraws
+  const apply = () => { state.ssFind = find.value; ssFindInPlace(root, ((state.sess || {}).list || {}).sessions, find.value); };
+  if (find && once(find, "find")) find.addEventListener("input", apply);
+  if (find && once(find, "find-search")) find.addEventListener("search", apply);  // Enter, and the box's own clear button
   ssFindInPlace(root, ctx.rows, state.ssFind || "");  // a redraw draws every row: hide again what doesn't match
   wireGroupsAndLabels(root, ctx, ctx.rows);
   wireSessMenu(root, ctx);
