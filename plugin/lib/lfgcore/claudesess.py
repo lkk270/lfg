@@ -1133,8 +1133,10 @@ def detail(rid, root, sid, limit=None):
         items = _review_items(items, mine.get("chips") or {})
     from . import headroom as H
     via = l_.via if l_ else ("headroom" if H.base_url(root, use_env=False).rstrip("/") == H.local_url() else "direct")
-    return {"available": True, "id": sid, "items": items, "title": mine.get("title") or meta["title"] or
-            _one_line(meta["first"]) or "New session",
+    from . import sessions as SS
+    title = SS.display_title(sid, SS.prefs()["names"], mine.get("title"), meta["title"], _one_line(meta["first"]),
+                             "New session")
+    return {"available": True, "id": sid, "items": items, "title": title,
             "branch": (l_.branch if l_ else None) or meta["branch"], "model": (l_.model if l_ else None) or
             meta["model"] or mine.get("model"), "mode": (l_.mode if l_ else mine.get("mode")) or "default",
             "modes": MODES, "source": "lfg" if mine.get("lfg") else

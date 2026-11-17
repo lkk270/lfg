@@ -3075,7 +3075,14 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("scroll", e => { if (!(e.target.closest && e.target.closest(".sess-menu"))) sessMenuClose(); }, true);
 window.addEventListener("resize", sessMenuClose);
-/* A session's rename: a studio keeps its title in Studio's own index, any other session gets a name in LFG only. */
+/* A session's rename: your name for it in LFG, which wins over Claude Code's /rename title everywhere. A studio also
+   keeps it as its own title (the sidebar and tabs read that), and a studio with no transcript yet has only that. */
+async function sessRenameSave(id, studio, name) {
+  if (!studio) return save("session_name", { id, name });
+  const r = await save("sess_rename", { id, title: name });
+  if (r.ok) await save("session_name", { id, name });  // fails only before the first reply: the title above covers it
+  return r;
+}
 function sessionRenameDrawer(s, ctx) {
   const studio = s.kind === "studio", cur = s.title || s.name || "";
   openDrawer("Rename session", `<div class="readable"><p>Shown in LFG only; Claude Code's own title is left alone.${studio ? "" : ` Leave it empty to go back to the automatic name: <i>${esc(s.auto_name || "")}</i>.`}</p>
@@ -3083,7 +3090,7 @@ function sessionRenameDrawer(s, ctx) {
     <div class="set-actions"><button class="btn primary" id="sess-save">Save</button><span class="save-msg" id="sess-msg"></span></div></div>`);
   const go = async () => {
     const v = $("#sess-val").value;
-    const r = studio ? await save("sess_rename", { id: s.id, title: v }) : await save("session_name", { id: s.id, name: v });
+    const r = await sessRenameSave(s.id, studio, v);
     saidMsg($("#sess-msg"), r, "Saved.");
     if (r.ok) setTimeout(() => { closeDrawer(); if (studio) loadNavSessions(); ctx.refresh(); }, 400);
   };
@@ -3291,7 +3298,7 @@ function wireSessions(root) {
 }
 /* Where you left off: what you were last working on (epics, milestones, big tickets) across every repo, and a
    briefing for each. Built by LFG from your sessions, tickets and PRs; nothing to fill in. The session actions are
-   the Sessions page's own: the same data-sess-* attributes, wired by wireSessions. */
+   the Studio list's own menu handlers, wired by wireSessions. */
 const CONT_KIND = { epic: "Epic", ticket: "Ticket", unsorted: "Unsorted" };
 const contHref = k => `#continue/${encodeURIComponent(k || "unsorted")}`;
 const contChips = c => [c.working ? `<span class="tag on">${dot("on")}${n(c.working)} working</span>` : "", c.idle ? `<span class="tag">${n(c.idle)} idle</span>` : "", c.unsorted && c.unsorted > 0 ? `<span class="tag warn">${n(c.unsorted)} not matched</span>` : ""].filter(Boolean).join(" ");
@@ -3370,7 +3377,7 @@ function contBrief(d, unlocked) {
     <aside class="cont-panel box" id="cont-panel" aria-live="polite"></aside></div>`;
 }
 const contSessions = d => [d.orchestrator, ...(d.other_orchestrators || []), ...(d.milestones || []).flatMap(m => m.sessions), ...(d.unsorted || [])].filter(Boolean);
-/* The panel for one session: what it was for, where it stopped, what it changed, and the Sessions page's actions. */
+/* The panel for one session: what it was for, where it stopped, what it changed, and the Studio list's actions. */
 function contPanel(s, unlocked) {
   if (!s) return '<p class="muted">Pick a session to see what it was for and where it stopped.</p>';
   const dis = unlocked ? "" : "disabled";
@@ -3455,7 +3462,7 @@ function wireContinue(root) {
   $$("[data-cont-showchecked]", root).forEach(a => a.onclick = e => { e.preventDefault(); state.contChecked = !state.contChecked; route(); });
   const openSess = id => { const l = state.contList; if (!l) return; openDrawer("Session", '<div id="cont-drawer-panel" class="cont-panel-in"></div>'); contDrawPanel($("#cont-drawer-panel"), l.recent || [], id); };
   $$("[data-cont-open]", root).forEach(el => { el.onclick = () => openSess(el.dataset.contOpen); el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSess(el.dataset.contOpen); } }; });
-  /* the panel: one session at a time, with the Sessions page's own handlers wired on it */
+  /* the panel: one session at a time, with the Studio list's menu handlers wired on it */
   const show = async id => {
     state.contSel = id;
     $$(".cont-sess", root).forEach(li => li.classList.toggle("on", li.dataset.contSess === id));
@@ -3463,7 +3470,7 @@ function wireContinue(root) {
   };
   if (d && panel) show(state.contSel);
   $$("[data-cont-sess]", root).forEach(li => { li.onclick = () => show(li.dataset.contSess); li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(li.dataset.contSess); } }; });
-  if (d && panel) wireSessions(root);  // the Sessions page's handlers: only a briefing has sessions to act on
+  if (d && panel) wireSessions(root);  // the Studio list's handlers: only a briefing has sessions to act on
   $$("[data-cont-refresh]", root).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Writing…";
     const r = await save("briefing_refresh", { key: b.dataset.contRefresh });
@@ -4954,7 +4961,7 @@ async function prDetail(arg) {
   const can = unlocked && !running;
   const notes = (state.reviewNotes || {})[pr] || "", notesOpen = !!notes || (state.reviewNotesOpen || {})[pr];
   const withNotes = notes.trim() ? NOTES_ON : "";
-  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed" data-label="Re-review">Re-review${withNotes}</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews" data-label="Review from scratch">Review from scratch${withNotes}</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} data-label="Review">Review${withNotes}</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group on the Sessions page">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><button class="btn" data-pr-notes ${can ? "" : "disabled"} aria-expanded="${notesOpen ? "true" : "false"}" title="Tell the next review what to look into on top of its method: an angle, some context, a worry">${notes ? "Notes added" : "Add notes…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>
+  const actions = `<div class="row wrap pr-actions">${rec ? `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} title="Check what happened to your posted comments, review only the new commits, then look once more for anything missed" data-label="Re-review">Re-review${withNotes}</button><button class="btn" data-pr-start="${esc(pr)}" data-fresh="1" ${can ? "" : "disabled"} title="Review the whole PR again from scratch, ignoring earlier reviews" data-label="Review from scratch">Review from scratch${withNotes}</button><label class="fresh-eyes" title="Only with Review from scratch: a re-review needs the earlier reviews"><input type="checkbox" data-fresh-eyes ${state.freshEyes ? "checked" : ""} ${can ? "" : "disabled"}>Fresh eyes${info("Review from scratch without seeing earlier reviews, your Fix/Pass choices, or anything CodeRabbit, Sonar or people said. A true second opinion. Findings it repeats get a tag, and posting tells you who raised them already.")}</label>` : `<button class="btn primary" data-pr-start="${esc(pr)}" ${can ? "" : "disabled"} data-label="Review">Review${withNotes}</button>`}<button class="btn" data-pr-sessions="${esc(pr)}" ${can ? "" : "disabled"} title="Bring in a review you did in a Claude Code session">Import</button><button class="btn" data-pr-group="${esc(pr)}" ${unlocked ? "" : "disabled"} title="Put this PR in one of your session groups: every session that mentions it, review runs included, joins that group in the Studio list">${(d.groups || []).length ? `In ${esc(d.groups.join(", "))}` : "Add to a group…"}</button><button class="btn" data-pr-notes ${can ? "" : "disabled"} aria-expanded="${notesOpen ? "true" : "false"}" title="Tell the next review what to look into on top of its method: an angle, some context, a worry">${notes ? "Notes added" : "Add notes…"}</button><span class="grow"></span>${methodPick(d, unlocked)}${modelPick(d, unlocked)}</div>
     <div class="pr-notes" ${notesOpen ? "" : "hidden"}><textarea data-grow rows="2" data-pr-notes-text="${esc(pr)}" placeholder="What should the next review look into? E.g. &quot;focus on the retry logic and whether a failed fetch can leave a run half-done&quot;. Only for the next review you start." ${can ? "" : "disabled"}>${esc(notes)}</textarea></div>${rec ? AGAIN_HELP : ""}`;
   state.prGroups = { pr, groups: d.groups || [], all: d.all_groups || [] };
   state.prDetail = { pr, linked: (d.linked || []).map(x => x.pr) };
@@ -5113,7 +5120,7 @@ async function prLinkSession(pr) {
 function prGroup() {
   const G = state.prGroups, others = G.all.filter(g => !G.groups.includes(g));
   openDrawer(`Group ${G.pr} with its sessions`, `<div class="readable">
-    <p>A group follows this PR: every session that mentions it joins the group on the Sessions page, including the review runs started here, alongside any sessions you put there yourself. Take one out with its ✕ and it stays out.</p>
+    <p>A group follows this PR: every session that mentions it joins the group in the Studio list, including the review runs started here, alongside any sessions you put there yourself. Take one out with its ✕ and it stays out.</p>
     ${G.groups.length ? `<div class="k">Following it</div><div class="row wrap">${G.groups.map(g => `<span class="tag">${esc(g)} <a href="#" data-grp-off="${esc(g)}" title="Stop following this PR">✕</a></span>`).join("")}</div>` : ""}
     ${others.length ? `<div class="k">Your groups</div><div class="row wrap">${others.map(g => `<button class="btn small" data-grp-on="${esc(g)}">${esc(g)}</button>`).join("")}</div>` : ""}
     <div class="k">New group</div>
@@ -5121,7 +5128,7 @@ function prGroup() {
     <span class="save-msg" id="grp-msg"></span></div>`);
   const go = async (group, on) => {
     const r = await save("group_pr", { group, pr: G.pr, on });
-    saidMsg($("#grp-msg"), r, on ? `Added to ${group}. Its sessions show there on the Sessions page.` : `No longer in ${group}.`);
+    saidMsg($("#grp-msg"), r, on ? `Added to ${group}. Its sessions show there in the Studio list.` : `No longer in ${group}.`);
     if (r.ok) setTimeout(() => { closeDrawer(); softRoute(); }, 900);
   };
   $$("[data-grp-on]").forEach(b => b.onclick = () => go(b.dataset.grpOn, true));
@@ -6183,9 +6190,16 @@ let ssPoll = null;
 
 PAGES.studio = async arg => {
   if (!arg) {  // the list: every session, and the worktrees they work in
-    const scope = ssScope();
-    const [list, where, unlocked, sr] = await Promise.all([api("studio", { scope, ...(state.showHidden ? { hidden: "1" } : {}) }), state.repo ? api("studio_where").catch(() => null) : null, isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
+    let scope = ssScope();
+    let [list, where, unlocked, sr] = await Promise.all([api("studio", { scope, ...(state.showHidden ? { hidden: "1" } : {}) }), state.repo ? api("studio_where").catch(() => null) : null, isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
     if (list.available === false) return unavailable(list);
+    const want = state.ssGotoSid;
+    state.ssGotoSid = null;
+    if (want && !(list.sessions || []).some(x => x.id === want)) {  // the row a notice points at is in another scope, or hidden
+      const wide = await api("studio", { scope: "all", hidden: "1" }).catch(() => null);
+      const row = wide && (wide.sessions || []).find(x => x.id === want);
+      if (row) { scope = "all"; localStorage.setItem(SS_SCOPE_KEY, "all"); if (row.hidden) state.showHidden = true; list = state.showHidden ? wide : await api("studio", { scope: "all" }); }
+    }
     state.sess = { list, d: null, id: null, where };
     state.sessions = list;
     if (scope === "repo") state.navSess = list.sessions || [];
@@ -6243,6 +6257,16 @@ function ssScope() {
     localStorage.setItem(SS_SCOPE_KEY, v);
   }
   return v === "repo" && !state.repo ? "all" : v;
+}
+/* Going to one row (a notice): clear the search, Starred, label and Yours/Background filters so it is shown; the list
+   widens the scope (and shows hidden) itself if the row is not in the current one. */
+function ssShowRow(sid) {
+  state.goto = `[data-sid="${CSS.escape(sid)}"]`;
+  state.ssGotoSid = sid;
+  state.ssFind = "";
+  state.ssFilter = "all";
+  localStorage.setItem(SESS_STARRED_KEY, "");
+  setLabelFilter([]);
 }
 /* Old addresses of the list (#sessions, with or without a scope, and #studio/all) become #studio, keeping the scope
    and "show hidden" they asked for. */
@@ -7122,7 +7146,7 @@ function wireStudio(root) {
   const wireConv = ssConvWirer({ conv, S, d, go, refresh: () => refresh(), follow: t => { ta.value = t; send.click(); }, rewound: () => { loadNavSessions(); route({ soft: true }); } });
   const wireHead = () => {
     const end = $("[data-ss-end]", head); if (end) end.onclick = async () => { if (confirm("End this session? Claude Code stops; you can continue the session later.")) { await go("sess_end", { id: S.id }, end); loadNavSessions(); route({ soft: true }); } };
-    const rename = async () => { const t = prompt("Name this session", d.title); if (t && t.trim()) { await go("sess_rename", { id: S.id, title: t }); loadNavSessions(); route({ soft: true }); } };
+    const rename = async () => { const t = prompt("Name this session", d.title); if (t && t.trim()) { const r = await sessRenameSave(S.id, d.source === "lfg", t); if (!r.ok) return prefToast(r.why || "Couldn't rename it.", true); loadNavSessions(); route({ soft: true }); } };
     const ttl = $("[data-ss-rename]", head); if (ttl) ttl.onclick = rename;
     const more = $("[data-ss-more]", head), menu = $(".ss-menu", head);
     const close = () => { menu.hidden = true; more.setAttribute("aria-expanded", "false"); document.removeEventListener("click", outside, true); };
@@ -7372,7 +7396,7 @@ async function watchNotices() {
 const NOTICE_PLACE = { findings: ".pr-pass-body", fix: ".pr-fixbar" };
 function noticeGo(x) {
   if ((x.place || "").startsWith("session:")) {  // a skill run finished: open the session it ran on
-    state.goto = `[data-sid="${CSS.escape(x.place.slice(8))}"]`;
+    ssShowRow(x.place.slice(8));
     if (location.hash === "#studio") route(); else location.hash = "#studio";
     return;
   }

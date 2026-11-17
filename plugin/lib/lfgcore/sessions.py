@@ -556,6 +556,12 @@ def groups_of(pr):
     return sorted(g for g, prs in prefs()["group_prs"].items() if pr in prs)
 
 
+def display_title(sid, names, *rest):
+    """The title a session shows everywhere: your own name for it (Rename in LFG) first, then the first of `rest`
+    that is set (a studio's title, Claude Code's /rename title, the made-up name)."""
+    return (names or {}).get(sid) or next((x for x in rest if x), "") or "Untitled session"
+
+
 def rename(sid, name):
     """Your own name for a session, shown in LFG only (Claude Code's /rename title is left alone). Empty clears it."""
     sid, p = _known(sid), prefs()

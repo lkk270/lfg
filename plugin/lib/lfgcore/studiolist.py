@@ -34,7 +34,7 @@ def _pr_of(by_branch, branch):
     return {"number": pr["number"], "state": pr.get("state"), "url": pr.get("url")} if pr else None
 
 
-def _row(row, idx, live, summary, prs):
+def _row(row, idx, live, summary, prs, names):
     row = {k: v for k, v in row.items() if k not in ("path", "size", "mtime")}
     sid = row["id"]
     mine, lv = idx.get(sid) or {}, live.get(sid)
@@ -42,16 +42,17 @@ def _row(row, idx, live, summary, prs):
     model = mine.get("model") or (lv.model if lv else "") or summary.get("model") or ""
     return dict(row, kind=kind, source=KIND_SOURCE[kind], state=STATE.get(lv.state, "working") if lv else "saved",
                 live=bool(lv), model=model, model_label=models.label(model),
-                title=mine.get("title") or row.get("title") or row.get("name") or "Untitled session",
+                title=SS.display_title(sid, names, mine.get("title"), row.get("title"), row.get("name")),
                 mode=lv.mode if lv else mine.get("mode"), pr=_pr_of(prs, row.get("branch")),
                 files=summary.get("files") or 0, skills=summary.get("skills") or [], issues=summary.get("issues") or [],
                 updated=row.get("modified"), via="pr" if row.get("via_pr") else "ticket" if row.get("via_ticket")
                 else "", worktree_name=row.get("worktree") or None)
 
 
-def _live_row(lv, placed, labels):
+def _live_row(lv, placed, labels, names):
     where = placed.get(lv.sid) or {}
-    return {"id": lv.sid, "name": lv.title, "title": lv.title, "repo": "", "cwd": lv.root, "resume": "",
+    title = SS.display_title(lv.sid, names, lv.title)
+    return {"id": lv.sid, "name": title, "title": title, "repo": "", "cwd": lv.root, "resume": "",
             "starred": False, "hidden": False, "folder": where.get("folder", ""), "via_pr": False,
             "via_ticket": False, "via": where.get("via", ""), "labels": labels.get(lv.sid, []),
             "branch": lv.branch, "worktree": "", "worktree_name": None, "cost": None, "modified": lv.started,
@@ -72,6 +73,7 @@ def listing(rid, root, hidden=False, scope="repo"):
     if scope == "repo" and not root:
         base = dict(base, sessions=[])
     live, prs, cache, fresh = dict(CS._LIVE), _prs(rid), CS._summary_cache(), False
+    p = SS.prefs()
     rows = []
     background = 0
     for n, r in enumerate(base["sessions"]):
@@ -84,16 +86,15 @@ def listing(rid, root, hidden=False, scope="repo"):
         else:
             summary, built = CS.summary_for(cache, r["path"], r.get("root") or "")
         fresh = fresh or built
-        rows.append(_row(r, idx, live, summary, prs))
+        rows.append(_row(r, idx, live, summary, prs, p["names"]))
     if fresh:
         C.ensure_dir(C.lfg_path("sessions"))
         C.write_json(C.lfg_path("sessions", "list-cache.json"), {k: v for k, v in cache.items() if os.path.exists(k)})
     seen = {r["id"] for r in rows}
-    p = SS.prefs()
     labels = {sid: [{"name": n, "color": p["label_colors"].get(n.lower(), "gray")} for n in names]
               for sid, names in p["labels"].items()}
     placed = SS.placements()
-    early = [_live_row(lv, placed, labels) for sid, lv in live.items()
+    early = [_live_row(lv, placed, labels, p["names"]) for sid, lv in live.items()
              if sid not in seen and (lv.rid == rid if scope == "repo" else scope == "all")]
     return {"sessions": early + rows, "modes": CS.MODES, "models": models.choices(models.own_model()),
             "group_info": base["group_info"], "label_list": base["label_list"],

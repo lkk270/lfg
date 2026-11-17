@@ -207,6 +207,19 @@ class StudioListTest(unittest.TestCase):
         from lfgcore import studiolist as SL
         return {r["id"]: r for r in SL.listing("r1", self.repo1, **kw)["sessions"]}
 
+    def test_your_name_wins_over_the_claude_code_title(self):
+        d = os.path.join(self.projects, self.repo1.replace("/", "-"))
+        with open(os.path.join(d, self.A + ".jsonl"), "a") as f:
+            f.write(self.json.dumps({"type": "custom-title", "customTitle": "cc title", "sessionId": self.A}) + "\n")
+        self.assertEqual(self.rows(scope="all")[self.A]["title"], "cc title")
+        self.SS.rename(self.A, "my name")
+        self.SS.rename(self.B, "renamed studio")
+        rows = self.rows(scope="all")
+        self.assertEqual(rows[self.A]["title"], "my name")
+        self.assertEqual(rows[self.B]["title"], "renamed studio")
+        from lfgcore import claudesess as CS
+        self.assertEqual(CS.detail("r1", self.repo1, self.A)["title"], "my name")
+
     def test_kind_and_model_and_old_keys(self):
         rows = self.rows(scope="all")
         self.assertEqual(rows[self.A]["kind"], "terminal")
