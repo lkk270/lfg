@@ -2,6 +2,18 @@
   "_about": "What's new in each LFG release, said to the user: the walkthrough the dashboard shows once after an update, Help → What's new, and the lines `lfg setup` prints. Each item is one step of the walkthrough: page and sel (optional) say which page to open and what to light up on it. Newest release first. CHANGELOG.md keeps the detailed record.",
   "releases": [
     {
+      "version": "0.7.4",
+      "title": "Mythos 5.2",
+      "items": [
+        {
+          "title": "Mythos 5.2 for reviews",
+          "text": "You can now pick Mythos 5.2 as the model for reviews. It is only available to organizations Anthropic has verified, so if your account does not have access, pick another model. Fable 5.2 and the rest are still there.",
+          "page": "prs",
+          "sel": "[data-review-model]"
+        }
+      ]
+    },
+    {
       "version": "0.7.3",
       "title": "Fable 5.2 in What's new, and an install fix",
       "items": [
