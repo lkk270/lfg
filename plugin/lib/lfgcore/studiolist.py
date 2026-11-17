@@ -8,6 +8,7 @@ from . import models
 from . import sessions as SS
 
 SUMMARISED = 300  # rows (newest first) whose transcript summary is built or refreshed per request
+BACKGROUND_ROWS = 200  # background runs (kind background) sent per request, newest first; every other row is kept
 SCOPES = ("repo", "all", "loose")
 STATE = {"starting": "working", "working": "working", "needs-you": "needs-you", "idle": "idle", "ended": "ended"}
 ENTRY_KIND = {"cli": "terminal", "claude-desktop": "desktop"}
@@ -72,7 +73,12 @@ def listing(rid, root, hidden=False, scope="repo"):
         base = dict(base, sessions=[])
     live, prs, cache, fresh = dict(CS._LIVE), _prs(rid), CS._summary_cache(), False
     rows = []
+    background = 0
     for n, r in enumerate(base["sessions"]):
+        if _kind(r, idx.get(r["id"]) or {}) == "background":
+            background += 1
+            if background > BACKGROUND_ROWS:
+                continue
         if n >= SUMMARISED:  # older rows only use a summary that is already cached
             summary, built = cache.get(r["path"]) or {}, False
         else:

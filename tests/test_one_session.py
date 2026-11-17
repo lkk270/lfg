@@ -293,6 +293,22 @@ class StudioListTest(unittest.TestCase):
         row = self.rows(scope="all")[sid]
         self.assertEqual((row["kind"], row["source"]), ("background", "background"))
 
+    def test_background_rows_are_capped_to_the_newest(self):
+        from lfgcore import studiolist as SL
+        ids = []
+        for i in range(SL.BACKGROUND_ROWS + 5):
+            sid = "%08d-1111-0000-0000-000000000000" % i
+            self.write(sid, self.repo1, "main", "Read only. Call list_teams", "sdk-cli")
+            path = os.path.join(self.projects, self.repo1.replace("/", "-"), sid + ".jsonl")
+            os.utime(path, (2000000000 + i, 2000000000 + i))
+            ids.append(sid)
+        rows = self.rows(scope="all")
+        background = [r for r in rows.values() if r["kind"] == "background"]
+        self.assertEqual(len(background), SL.BACKGROUND_ROWS)
+        self.assertEqual({r["id"] for r in background}, set(ids[5:]))  # the five oldest are dropped
+        for sid in (self.A, self.B, self.C_, self.D):
+            self.assertIn(sid, rows)
+
 
 if __name__ == "__main__":
     unittest.main()
