@@ -380,10 +380,11 @@ def _wt_name(root, cwd):
 
 def where(rid, root):
     """For the new-session screen: the branch checked out right now, the default branch, local branches, and every
-    worktree with where it stands (see worktree.status)."""
+    worktree with where it stands (see worktree.status), and the models it can start on."""
     from . import worktree as W
+    models = models_list.choices(models_list.own_model())
     if not root or not os.path.isdir(root):
-        return {"branch": "", "worktrees": [], "branches": []}
+        return {"branch": "", "worktrees": [], "branches": [], "models": models}
     sessions = {}
     for s in listing(rid, root)["sessions"]:
         if s.get("worktree_name"):
@@ -392,7 +393,7 @@ def where(rid, root):
     branches = C.run(["git", "for-each-ref", "refs/heads", "--format=%(refname:short)"], cwd=root,
                      timeout=10).stdout.split()
     return {"branch": C.git_branch(root), "default": W.default_branch(root), "worktrees": wts,
-            "branches": branches[:300]}
+            "branches": branches[:300], "models": models}
 
 
 def _pr_for(rid, branch):
@@ -950,9 +951,19 @@ def set_model(sid, model):
     l_ = _LIVE.get(sid)
     if l_ and l_.state != "ended":
         l_.set_model(model)
-    else:
+    elif re.match(r"^[0-9a-f-]{36}$", str(sid or "")) and (sid in _index() or transcript(sid)):
         _remember(sid, model=model or None)
+    else:
+        raise Invalid("that session isn't here any more")
     return {"id": sid, "model": model}
+
+
+def chosen_model(mine, running=None, said=None):
+    """The model a session is set to: the one picked for it in LFG (none picked = Claude Code's default), else the
+    one its process runs, else the one its last reply used. `mine`: its entry in LFG's session index."""
+    if "model" in mine:
+        return mine["model"] or ""
+    return running or said or ""
 
 
 def start(rid, root, text, model=None, mode="default", title="", where=None, attachments=None):
@@ -1138,9 +1149,11 @@ def detail(rid, root, sid, limit=None, row=False):
     from . import sessions as SS
     title = SS.display_title(sid, SS.prefs()["names"], mine.get("title"), meta["title"], _one_line(meta["first"]),
                              "New session")
+    model = chosen_model(mine, l_.model if l_ else None, meta["model"])
     out = {"available": True, "id": sid, "items": items, "title": title,
-            "branch": (l_.branch if l_ else None) or meta["branch"], "model": (l_.model if l_ else None) or
-            meta["model"] or mine.get("model"), "mode": (l_.mode if l_ else mine.get("mode")) or "default",
+            "branch": (l_.branch if l_ else None) or meta["branch"], "model": model,
+            "model_label": models_list.label(model), "models": models_list.choices(models_list.own_model()),
+            "mode": (l_.mode if l_ else mine.get("mode")) or "default",
             "modes": MODES, "source": "lfg" if mine.get("lfg") else
             {"claude-desktop": "desktop", "cli": "terminal"}.get(meta["entry"], "background"),
             "state": l_.state if l_ else "saved", "pending": [{k: v for k, v in p.items() if k != "raw"}

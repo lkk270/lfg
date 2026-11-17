@@ -160,6 +160,74 @@ class ModelSwitchTest(unittest.TestCase):
         argv = popen.call_args.args[0]
         self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-5-5")
 
+    def test_live_set_model_default_waits_for_the_next_message(self):
+        lv = self.live()
+        lv._native_set_model = True  # even then: Claude Code's default has no name to send
+        with mock.patch.object(self.CS, "_remember") as rem:
+            lv.set_model("")
+        self.assertEqual(rem.call_args.kwargs, {"model": None})
+        self.assertEqual((lv.sent, lv.model, lv.model_pending), ([], None, True))
+
+    def test_cs_set_model_default_on_a_running_studio(self):
+        CS = self.CS
+        lv = self.live()
+        lv._native_set_model = True
+        CS._LIVE[self.SID] = lv
+        self.assertEqual(CS.set_model(self.SID, ""), {"id": self.SID, "model": ""})
+        self.assertEqual((lv.model, lv.model_pending, lv.sent), (None, True, []))
+        self.assertIsNone(CS._index()[self.SID]["model"])
+
+    def test_session_action_sess_model(self):
+        from lfgcore import settings as S
+        from lfgcore import ui
+        CS = self.CS
+        CS._remember(self.SID, lfg=True, model="opus")
+        self.assertEqual(ui.session_action("sess_model", {"id": self.SID, "model": ""}),
+                         {"id": self.SID, "model": ""})
+        self.assertIn("model", CS._index()[self.SID])
+        self.assertIsNone(CS._index()[self.SID]["model"])  # Claude Code's default is stored as no model
+        with self.assertRaises(S.Invalid) as cm:
+            ui.session_action("sess_model", {"id": self.SID, "model": "nope"})
+        self.assertEqual(str(cm.exception), "not a model")
+        self.assertIsNone(CS._index()[self.SID]["model"])
+
+    def test_session_action_sess_model_refused_while_working(self):
+        from lfgcore import settings as S
+        from lfgcore import ui
+        self.CS._LIVE[self.SID] = self.live("working")
+        with self.assertRaises(S.Invalid) as cm:
+            ui.session_action("sess_model", {"id": self.SID, "model": "claude-haiku-5-5"})
+        self.assertEqual(str(cm.exception), "Wait for the answer to finish, then change the model.")
+
+    def test_set_model_needs_a_session_it_knows(self):
+        CS = self.CS
+        for sid in ("../x", "not-a-session", "22222222-2222-3333-4444-555555555555"):
+            with self.assertRaises(CS.Invalid, msg=sid):
+                CS.set_model(sid, "claude-haiku-5-5")
+        self.assertEqual(CS._index(), {})  # nothing stored for them
+
+    def test_detail_carries_the_chosen_model_its_label_and_the_list(self):
+        CS = self.CS
+        tr = os.path.join(CS.PROJECTS, "p")
+        os.makedirs(tr)
+        with open(os.path.join(tr, self.SID + ".jsonl"), "w") as f:
+            f.write('{"type":"user","cwd":"%s","entrypoint":"cli","message":{"role":"user","content":"hi"}}\n'
+                    % self.root)
+            f.write('{"type":"assistant","cwd":"%s","message":{"model":"claude-sonnet-5-5","content":[]}}\n'
+                    % self.root)
+        d = CS.detail("r1", self.root, self.SID)
+        self.assertEqual((d["model"], d["model_label"]), ("claude-sonnet-5-5", "Sonnet 5.5"))  # its last reply
+        self.assertEqual([m["id"] for m in d["models"]], [""] + IDS)
+        CS.set_model(self.SID, "opus")
+        d = CS.detail("r1", self.root, self.SID)
+        self.assertEqual((d["model"], d["model_label"]), ("opus", "Opus"))  # what you picked, for its next run
+        CS.set_model(self.SID, "")
+        d = CS.detail("r1", self.root, self.SID)
+        self.assertEqual((d["model"], d["model_label"]), ("", "Claude Code default"))
+
+    def test_where_carries_the_model_list(self):
+        self.assertEqual([m["id"] for m in self.CS.where("r1", None)["models"]], [""] + IDS)
+
 
 class StudioListTest(unittest.TestCase):
     A, B, C_, D = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2, 3, 4))
@@ -300,6 +368,15 @@ class StudioListTest(unittest.TestCase):
             "model": "claude-haiku-5-5", "content": []}})
         self.assertEqual(self.rows(scope="all")[self.A]["model"], "claude-haiku-5-5")  # a changed file is re-read
 
+    def test_a_switch_shows_on_the_row(self):
+        self.append(self.A, self.repo1, {"type": "assistant", "cwd": self.repo1, "message": {
+            "model": "claude-sonnet-5-5", "content": []}})
+        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Sonnet 5.5")  # its last reply
+        self.CS.set_model(self.A, "claude-haiku-5-5")  # for when it continues here
+        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Haiku 5.5")
+        self.CS.set_model(self.A, "")
+        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Claude Code default")
+
     def test_a_scripted_session_is_background(self):
         sid = "55555555-0000-0000-0000-000000000000"
         self.write(sid, self.repo1, "main", "Read only. Call list_teams", "sdk-cli")
@@ -416,7 +493,7 @@ const unlockCmd = () => "lfg ui --unlock", ssTagList = () => "", ssCtxHtml = () 
 const ssWherePicker = () => "<select id=ss-where></select>";
 const ssLive = st => ["working", "needs-you", "starting", "idle"].includes(st);
 const SS_MODES = [["default", "Ask first", ""], ["acceptEdits", "Accept edits", ""], ["plan", "Plan only", ""]];
-const localStorage = { getItem: () => null };
+const store = {}, localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); } };
 const state = { sess: { unlocked: true }, navSess: [] };
 const strip = h => h.replace(/<[^>]+>/g, "|").split("|").map(x => x.trim()).filter(Boolean);
 const menu = h => strip(h.slice(h.indexOf('<div class="sess-menu"'), h.indexOf("</div></span>")));
@@ -488,6 +565,76 @@ console.log(JSON.stringify({ live: c({ live: true, studio: true }), livetTerm: c
                                         True])
         self.assertEqual(out["fork"][:2], ["What should the new session do?", "Start fork"])
         self.assertFalse(out["fork"][3])
+
+    MODELS = r"""
+const MODELS = [{ id: "", label: "Claude Code default (opus)" }, { id: "claude-fable-5-2", label: "Fable 5.2" },
+  { id: "claude-mythos-5-2", label: "Mythos 5.2" }, { id: "claude-haiku-5-5", label: "Haiku 5.5" }];
+"""
+
+    def test_header_model_button(self):
+        out = self.run_js(self.MODELS + r"""
+const pick = h => {
+  const b = (h.match(/<button[^>]*data-ss-model[^>]*>/) || [""])[0];
+  const list = h.slice(h.indexOf('class="sess-menu ss-model-menu"'));
+  const opts = [...list.matchAll(/data-model="([^"]*)"[^>]*>([^<]*)</g)].map(m => m[2]);
+  const cur = [...list.matchAll(/class="cur"[^>]*data-model="([^"]*)"/g)].map(m => m[1]);
+  return { label: (h.match(/data-ss-model[^>]*>([^<]*)</) || [])[1], off: / disabled/.test(b),
+    title: (b.match(/title="([^"]*)"/) || [])[1], opts, cur };
+};
+const one = (o, more) => ssHead(Object.assign({ id: "a", title: "Chat", source: "lfg", state: "idle", cost: 1,
+  model: "claude-fable-5-2", model_label: "Fable 5.2", models: MODELS, row: { resume: "r" } }, o));
+const h = one({});
+const out = { idle: pick(h), order: [h.indexOf("data-ss-model"), h.indexOf("ss-cost")],
+  working: pick(one({ state: "working" })), starting: pick(one({ state: "starting" })),
+  needs: pick(one({ state: "needs-you" })), asking: pick(one({ pending: [{ id: "p" }] })),
+  dflt: pick(one({ model: "", model_label: "Claude Code default" })),
+  legacy: pick(one({ model: "opus", model_label: "Opus" })),
+  term: pick(one({ source: "terminal", state: "saved", model: "claude-haiku-5-5", model_label: "Haiku 5.5" })),
+  none: /data-ss-model/.test(one({ models: undefined })) };
+state.sess.unlocked = false; out.locked = pick(one({}));
+console.log(JSON.stringify(out));
+""")
+        busy = "Wait for the answer to finish, then change the model."
+        labels = ["Claude Code default (opus)", "Fable 5.2", "Mythos 5.2", "Haiku 5.5"]
+        self.assertEqual(out["idle"]["label"], "Fable 5.2 ▾")
+        self.assertFalse(out["idle"]["off"])
+        self.assertEqual(out["idle"]["opts"], labels)
+        self.assertEqual(out["idle"]["cur"], ["claude-fable-5-2"])
+        self.assertNotIn(-1, out["order"])
+        self.assertLess(out["order"][0], out["order"][1])  # just left of the cost
+        for k in ("working", "starting", "needs", "asking"):
+            self.assertTrue(out[k]["off"], k)
+            self.assertEqual(out[k]["title"], busy, k)
+        self.assertEqual((out["dflt"]["label"], out["dflt"]["cur"]), ("Default ▾", [""]))
+        # an older alias names the button and matches no option; the list is still whole
+        self.assertEqual((out["legacy"]["label"], out["legacy"]["cur"], out["legacy"]["opts"]), ("Opus ▾", [], labels))
+        self.assertFalse(out["term"]["off"])
+        self.assertIn("continue", out["term"]["title"])
+        self.assertTrue(out["locked"]["off"])
+        self.assertTrue(out["locked"]["title"].startswith("Locked"))
+        self.assertFalse(out["none"])
+
+    def test_new_studio_model_select(self):
+        out = self.run_js(self.MODELS + r"""
+const sel = h => { const s = (h.match(/<select[^>]*id="ss-model"[\s\S]*?<\/select>/) || [""])[0];
+  return { opts: [...s.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map(m => [m[1], m[2]]),
+    on: (s.match(/value="([^"]*)" selected/) || [null, null])[1] }; };
+const out = { fresh: sel(ssComposer({ isNew: true, models: MODELS })) };
+store["lfg.ss.model"] = "claude-haiku-5-5"; out.kept = sel(ssComposer({ isNew: true, models: MODELS }));
+store["lfg.ss.model"] = "claude-gone-1"; out.gone = sel(ssComposer({ isNew: true, models: MODELS }));
+out.reply = /id="ss-model"/.test(ssComposer({ live: true, studio: true, models: MODELS }));
+const h = ssComposer({ isNew: true, models: MODELS });
+out.order = [h.indexOf('data-seg="mode"'), h.indexOf('id="ss-model"'), h.indexOf('id="ss-send"')];
+console.log(JSON.stringify(out));
+""")
+        self.assertEqual(out["fresh"]["opts"], [["", "Claude Code default (opus)"], ["claude-fable-5-2", "Fable 5.2"],
+                                                ["claude-mythos-5-2", "Mythos 5.2"], ["claude-haiku-5-5", "Haiku 5.5"]])
+        self.assertEqual(out["fresh"]["on"], "")
+        self.assertEqual(out["kept"]["on"], "claude-haiku-5-5")
+        self.assertEqual(out["gone"]["on"], "")  # a remembered model no longer listed falls back to the default
+        self.assertFalse(out["reply"])
+        self.assertEqual(out["order"], sorted(out["order"]))  # next to Ask / Auto / Plan, before Start
+        self.assertNotIn(-1, out["order"])
 
     def test_where_you_left_off_panel_uses_the_shared_menu(self):
         out = self.run_js(r"""

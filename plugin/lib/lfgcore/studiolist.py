@@ -39,7 +39,7 @@ def _row(row, idx, live, summary, prs, names):
     sid = row["id"]
     mine, lv = idx.get(sid) or {}, live.get(sid)
     kind = _kind(row, mine)
-    model = mine.get("model") or (lv.model if lv else "") or summary.get("model") or ""
+    model = CS.chosen_model(mine, lv.model if lv else None, summary.get("model"))
     return dict(row, kind=kind, source=KIND_SOURCE[kind], state=STATE.get(lv.state, "working") if lv else "saved",
                 live=bool(lv), model=model, model_label=models.label(model),
                 title=SS.display_title(sid, names, mine.get("title"), row.get("title"), row.get("name")),

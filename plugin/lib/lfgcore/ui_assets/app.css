@@ -2647,6 +2647,10 @@ body.sg-open { overflow: hidden; }
 .sess-menu button:disabled { color: var(--muted); cursor: default; opacity: .7; }
 .sess-menu button.danger:not(:disabled) { color: var(--red-tx, var(--red)); }
 .sess-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.ss-model-wrap { flex: none; }
+.ss-model:disabled { cursor: default; opacity: .6; }
+.ss-model-menu { min-width: 260px; }
+.sess-menu.ss-model-menu button.cur { background: var(--active); color: var(--blue-tx); font-weight: 600; }
 
 /* Where you left off: the list, the briefing and the session panel. Theme variables only, so light and dark both work. */
 .cont-list > li.cont-entry { border-bottom: 1px solid var(--line); }

@@ -6237,7 +6237,7 @@ function ssNew(sug) {
   return `<header class="ss-head"><div class="grow"><h1 class="ss-title">New studio</h1>
       <div class="ss-tags"><span class="tg">${esc(repoName())}</span><span class="brtag" id="ss-branch" title="The branch Claude will work on"></span><span class="tg wt" id="ss-wt-tag" hidden></span></div></div></header>
     <div class="ss-conv ss-empty">${list.length ? `<div class="ss-quick"><span class="muted small">Suggestions</span>${list.map((x, i) => `<button class="chip ss-sug ${x.tone || ""}" data-sug="${i}" title="${esc(x.title)}"><span class="ss-sug-k">${esc(x.skill)}</span>${esc(x.title.length > 56 ? x.title.slice(0, 54) + "…" : x.title)}</button>`).join("")}</div>` : ""}</div>
-    ${ssComposer({ isNew: true })}`;
+    ${ssComposer({ isNew: true, models: (state.sess.where || {}).models })}`;
 }
 
 /* The Studio list's scope: this repo, every repo, or sessions outside any repo. The Sessions page's own choice is read
@@ -6379,6 +6379,14 @@ function wireSessList(root, list) {
    saved terminal or desktop session says it continues here. The where-it-works picker and Start are only on
    #studio/new (o.isNew). */
 const ssSendLabel = o => o.live || o.studio ? "Send" : "Continue here";
+/* the new studio's model, from the payload's list; the last one picked is remembered, unless it left the list */
+const SS_MODEL_KEY = "lfg.ss.model";
+function ssModelPick(models) {
+  if (!(models || []).length) return "";
+  let want = ""; try { want = localStorage.getItem(SS_MODEL_KEY) || ""; } catch (e) { /* private window */ }
+  if (!models.some(m => m.id === want)) want = "";
+  return `<select id="ss-model" class="ss-sel" aria-label="Model" title="The model this studio runs on">${models.map(m => `<option value="${esc(m.id)}"${m.id === want ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select>`;
+}
 function ssComposer(o) {
   const mode = o.mode || localStorage.getItem("lfg.ss.mode") || "default", reply = !o.isNew && (o.live || o.studio);
   const seg = (name, opts, cur) => `<span class="seg" role="radiogroup" data-seg="${name}">${opts.map(([k, l, tip]) => `<button type="button" role="radio" aria-checked="${k === cur}" class="pill${k === cur ? " on" : ""}" data-v="${k}" title="${esc(tip)}">${l}</button>`).join("")}</span>`;
@@ -6388,7 +6396,7 @@ function ssComposer(o) {
     <div class="ss-att" id="ss-att" data-fill data-keep="hidden" hidden></div>
     <textarea id="ss-text" rows="1" placeholder="${o.fork ? "What should the new session do?" : o.isNew ? "Describe the task. / for skills, @ for files and folders" : reply ? "Message this studio. / for skills, @ for files" : "Write to continue this session here"}"></textarea>
     <div class="ss-comp-b"><button type="button" class="icon-btn ss-clip" id="ss-attach" title="Attach files or images. You can also drop them here or paste a screenshot.">${icon("clip")}</button><input type="file" id="ss-file" multiple hidden>
-      ${o.isNew ? ssWherePicker() : ""}${o.isNew || reply ? seg("mode", SS_MODES, mode) : ""}
+      ${o.isNew ? ssWherePicker() : ""}${o.isNew || reply ? seg("mode", SS_MODES, mode) : ""}${o.isNew ? ssModelPick(o.models) : ""}
       <span class="grow"></span><button class="btn primary small" id="ss-send">${o.fork ? "Start fork" : o.isNew ? "Start" : ssSendLabel(o)}</button></div></div>`;
 }
 
@@ -6656,12 +6664,26 @@ function ssRowOf(d) {
 const SS_MENU_EXTRA = `<button type="button" role="menuitem" data-menu="fork" title="A new session with this whole conversation; this one stays as it is">Fork session</button>
   <button type="button" role="menuitem" data-menu="compact" title="Claude Code summarizes the conversation to free up context, as /compact does">Compact conversation</button>
   <button type="button" role="menuitem" data-menu="export" title="Download the conversation as a Markdown file">Export as Markdown</button>`;
+/* The open session's model: a button naming it, and the list to change it (the shared menu's look). Off while
+   Claude is answering or waiting for you; on a terminal or desktop session it sets the model for continuing here. An
+   older alias (opus) names the button and matches no option. */
+const SS_MODEL_BUSY = "Wait for the answer to finish, then change the model.";
+function ssModelBtn(d, unlocked) {
+  const models = d.models || [];
+  if (!models.length) return "";
+  const cur = d.model || "", label = cur ? d.model_label || cur : "Default";
+  const busy = ["working", "starting", "needs-you"].includes(d.state) || (d.pending || []).length;
+  const why = !unlocked ? `Locked: run ${unlockCmd()} in your terminal to change it here` : busy ? SS_MODEL_BUSY
+    : d.source === "lfg" || ssLive(d.state) ? "The model this studio runs on. A change applies from your next message."
+    : "The model it uses when you continue it here. Its terminal is left alone.";
+  return `<span class="ss-model-wrap"><button type="button" class="btn small ss-model" data-ss-model data-keep="aria-expanded" aria-haspopup="menu" aria-expanded="false"${!unlocked || busy ? " disabled" : ""} title="${esc(why)}">${esc(label)} ▾</button>
+    <div class="sess-menu ss-model-menu" role="menu" data-keep="hidden style" hidden>${models.map(m => `<button type="button" role="menuitemradio" aria-checked="${m.id === cur}"${m.id === cur ? ' class="cur"' : ""} data-model="${esc(m.id)}">${esc(m.label)}</button>`).join("")}</div></span>`;
+}
 function ssHead(d) {
-  const model = String(d.model || "").replace(/^claude-/, "").replace(/-(\d)-(\d)$/, " $1.$2").replace(/^./, c => c.toUpperCase());
   const s = ssRowOf(d), unlocked = !!(state.sess || {}).unlocked;
   return `<div class="grow"><h1 class="ss-title"${unlocked ? ' title="Click to rename" data-ss-rename' : ""}>${esc(d.title)}</h1>
-      <div class="ss-tags">${ssTagList(d, true)}${model ? `<span class="tg">${esc(model)}</span>` : ""}${d.via === "headroom" ? '<span class="tg on">via Headroom</span>' : ""}${labelChips(s)}</div></div>
-    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${sessStar(s, unlocked)}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}${sessMenu(s, { unlocked, extra: SS_MENU_EXTRA })}</div>`;
+      <div class="ss-tags">${ssTagList(d, true)}${d.via === "headroom" ? '<span class="tg on">via Headroom</span>' : ""}${labelChips(s)}</div></div>
+    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}${ssModelBtn(d, unlocked)}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${sessStar(s, unlocked)}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}${sessMenu(s, { unlocked, extra: SS_MENU_EXTRA })}</div>`;
 }
 function ssDetail(d) {
   const live = ssLive(d.state), fork = state.ssFork && state.ssFork.sid === d.id ? state.ssFork : null;
@@ -7096,7 +7118,7 @@ function wireStudio(root) {
     if (!S.id) {
       const where = ssWhereValue(root);
       if (where.kind === "new" && !where.branch) { const n = $("#ss-wt-name", root); n.focus(); n.placeholder = "Name the new branch"; n.classList.add("need"); return; }
-      const r = await go("sess_start", { text, mode: segVal("mode"), where, attachments: files }, send, where.kind === "here" || where.kind === "worktree" ? "Starting…" : "Making the worktree…");
+      const r = await go("sess_start", { text, mode: segVal("mode"), model: ($("#ss-model", root) || {}).value || "", where, attachments: files }, send, where.kind === "here" || where.kind === "worktree" ? "Starting…" : "Making the worktree…");
       if (r.ok) { clearComposer(); loadNavSessions(); location.hash = "#studio/" + r.id; }
       return;
     }
@@ -7108,6 +7130,8 @@ function wireStudio(root) {
     const r = await go("sess_say", { id: S.id, text, attachments: files }, send, "Sending…");
     if (r.ok) { clearComposer(); send.disabled = false; send.textContent = "Send"; refresh(); }
   };
+  const msel = $("#ss-model", root);
+  if (msel) msel.onchange = () => { try { localStorage.setItem(SS_MODEL_KEY, msel.value); } catch (e) { /* private window */ } };
   const fx = $("[data-fork-x]", root); if (fx) fx.onclick = () => { state.ssFork = null; route({ soft: true }); };
   const wsel = $("#ss-where", root);
   const tag = () => { const [b, wt] = ssTarget(root), t = $("#ss-branch", root), w = $("#ss-wt-tag", root); if (t) t.textContent = b; if (w) { w.hidden = !wt; w.innerHTML = wt ? `${icon("folder")}${esc(wt)}` : ""; } };
@@ -7155,6 +7179,17 @@ function wireStudio(root) {
       trashed: () => { loadNavSessions(); tabClose("studio", S.id); if (location.hash === "#studio/" + S.id) location.hash = "#studio"; } };
     wireSessMenu(head, ctx);
     const ttl = $("[data-ss-rename]", head); if (ttl) ttl.onclick = () => sessionRenameDrawer(ssRowOf(d), ctx);
+    const mb = $("[data-ss-model]", head);
+    if (mb) {
+      mb.onclick = e => { e.preventDefault(); e.stopPropagation(); const m = mb.nextElementSibling, open = m.hidden; sessMenuClose(); if (open) sessMenuOpen(mb, m); };
+      $$("[data-model]", mb.nextElementSibling).forEach(b => b.onclick = async () => {
+        sessMenuClose();
+        if (b.dataset.model === (d.model || "")) return;
+        const r = await save("sess_model", { repo: state.repo, id: S.id, model: b.dataset.model });
+        if (!r.ok) return prefToast(String(r.why || "That didn't work.").replace(/`/g, ""), true);  // the label stays as it was
+        await refresh(); loadNavSessions();
+      });
+    }
     $$("[data-menu]", head).forEach(b => b.onclick = () => {
       const k = b.dataset.menu;
       if (k === "export") return ssDownload(`${(d.title || "session").replace(/[^\w.-]+/g, "-").slice(0, 60)}.md`, ssMarkdown(d));
@@ -7184,7 +7219,7 @@ function wireStudio(root) {
   const atBottom = () => conv.scrollTop + conv.clientHeight >= conv.scrollHeight - 120;
   if (once(conv, "at-end")) conv.scrollTop = conv.scrollHeight;  // a session opens at its end; a redraw leaves you where you are
   let sig = "";
-  const sigOf = n => JSON.stringify([n.items.length, n.state, (n.pending || []).length, (n.queued || []).length, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null, (n.outside || {}).ts]);
+  const sigOf = n => JSON.stringify([n.items.length, n.state, n.model, (n.pending || []).length, (n.queued || []).length, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null, (n.outside || {}).ts]);
   const busyBg = n => (n.activity || []).some(a => a.status === "running");
   wireAct($("#ss-act", root));
   const drawAct = n => { const box = $("#ss-act", root); if (box) morph(box, ssAct(n)); const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };
