@@ -6737,9 +6737,9 @@ const SS_MODEL_BUSY = "Wait for the answer to finish, then change the model.";
 function ssModelBtn(d, unlocked) {
   const models = d.models || [];
   if (!models.length) return "";
-  const cur = d.model || "", label = d.model_label || cur || "Claude Code default";  // the row's words: a default names what it runs on
+  const cur = d.model || "", label = d.model_label || cur || "Claude Code default";  // the server's words: a default shows the model it runs on
   const busy = ["working", "starting", "needs-you"].includes(d.state) || (d.pending || []).length;
-  const why = !unlocked ? `Locked: run ${unlockCmd()} in your terminal to change it here` : busy ? SS_MODEL_BUSY
+  const why = d.model_note && !cur && !busy && unlocked ? `${d.model_note}. A change applies from your next message.` : !unlocked ? `Locked: run ${unlockCmd()} in your terminal to change it here` : busy ? SS_MODEL_BUSY
     : d.source === "lfg" || ssLive(d.state) ? "The model this studio runs on. A change applies from your next message."
     : "The model it uses when you continue it here. Its terminal is left alone.";
   return `<span class="ss-model-wrap"><button type="button" class="btn small ss-model" data-ss-model data-keep="aria-expanded" aria-haspopup="menu" aria-expanded="false"${!unlocked || busy ? " disabled" : ""} title="${esc(why)}">${esc(label)} ▾</button>

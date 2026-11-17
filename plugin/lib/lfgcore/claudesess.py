@@ -382,7 +382,7 @@ def where(rid, root):
     """For the new-session screen: the branch checked out right now, the default branch, local branches, and every
     worktree with where it stands (see worktree.status), and the models it can start on."""
     from . import worktree as W
-    models = models_list.choices(models_list.own_model())
+    models = models_list.choices()
     if not root or not os.path.isdir(root):
         return {"branch": "", "worktrees": [], "branches": [], "models": models}
     sessions = {}
@@ -478,7 +478,7 @@ def listing(rid, root):
     if changed:
         C.ensure_dir(C.lfg_path("sessions"))
         C.write_json(C.lfg_path("sessions", "list-cache.json"), {k: v for k, v in cache.items() if os.path.exists(k)})
-    return {"sessions": out, "modes": MODES, "models": models_list.choices(models_list.own_model()),
+    return {"sessions": out, "modes": MODES, "models": models_list.choices(),
             "group_info": SS.group_info(), "label_list": SS.label_list()}
 
 
@@ -1149,10 +1149,11 @@ def detail(rid, root, sid, limit=None, row=False):
     from . import sessions as SS
     title = SS.display_title(sid, SS.prefs()["names"], mine.get("title"), meta["title"], _one_line(meta["first"]),
                              "New session")
-    model, own = chosen_model(mine, l_.model if l_ else None, meta["model"]), models_list.own_model()
+    model = chosen_model(mine, l_.model if l_ else None, meta["model"])
     out = {"available": True, "id": sid, "items": items, "title": title,
             "branch": (l_.branch if l_ else None) or meta["branch"], "model": model,
-            "model_label": models_list.shown(model, meta["model"], own), "models": models_list.choices(own),
+            "model_label": models_list.shown(model, meta["model"]),
+            "model_note": models_list.note(model, meta["model"]), "models": models_list.choices(),
             "mode": (l_.mode if l_ else mine.get("mode")) or "default",
             "modes": MODES, "source": "lfg" if mine.get("lfg") else
             {"claude-desktop": "desktop", "cli": "terminal"}.get(meta["entry"], "background"),

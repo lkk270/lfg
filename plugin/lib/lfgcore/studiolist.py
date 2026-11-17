@@ -34,14 +34,15 @@ def _pr_of(by_branch, branch):
     return {"number": pr["number"], "state": pr.get("state"), "url": pr.get("url")} if pr else None
 
 
-def _row(row, idx, live, summary, prs, names, own=""):
+def _row(row, idx, live, summary, prs, names):
     row = {k: v for k, v in row.items() if k not in ("path", "size", "mtime")}
     sid = row["id"]
     mine, lv = idx.get(sid) or {}, live.get(sid)
     kind = _kind(row, mine)
     model = CS.chosen_model(mine, lv.model if lv else None, summary.get("model"))
     return dict(row, kind=kind, source=KIND_SOURCE[kind], state=STATE.get(lv.state, "working") if lv else "saved",
-                live=bool(lv), model=model, model_label=models.shown(model, summary.get("model"), own),
+                live=bool(lv), model=model, model_label=models.shown(model, summary.get("model")),
+                model_note=models.note(model, summary.get("model")),
                 title=SS.display_title(sid, names, mine.get("title"), row.get("title"), row.get("name")),
                 mode=lv.mode if lv else mine.get("mode"), pr=_pr_of(prs, row.get("branch")),
                 files=summary.get("files") or 0, skills=summary.get("skills") or [], issues=summary.get("issues") or [],
@@ -49,7 +50,7 @@ def _row(row, idx, live, summary, prs, names, own=""):
                 else "", worktree_name=row.get("worktree") or None)
 
 
-def _live_row(lv, placed, labels, names, own=""):
+def _live_row(lv, placed, labels, names):
     where = placed.get(lv.sid) or {}
     title = SS.display_title(lv.sid, names, lv.title)
     return {"id": lv.sid, "name": title, "title": title, "repo": "", "cwd": lv.root, "resume": "",
@@ -58,7 +59,7 @@ def _live_row(lv, placed, labels, names, own=""):
             "branch": lv.branch, "worktree": "", "worktree_name": None, "cost": None, "modified": lv.started,
             "updated": lv.started, "prompts": 0, "loose": False, "kind": "studio", "source": "lfg",
             "state": STATE.get(lv.state, "working"), "live": True, "model": lv.model or "",
-            "model_label": models.shown(lv.model or "", "", own), "mode": lv.mode, "pr": None, "skills": [],
+            "model_label": models.shown(lv.model or ""), "model_note": "", "mode": lv.mode, "pr": None, "skills": [],
             "issues": []}
 
 
@@ -74,7 +75,7 @@ def listing(rid, root, hidden=False, scope="repo"):
     if scope == "repo" and not root:
         base = dict(base, sessions=[])
     live, prs, cache, fresh = dict(CS._LIVE), _prs(rid), CS._summary_cache(), False
-    p, own = SS.prefs(), models.own_model()
+    p = SS.prefs()
     rows = []
     background = 0
     for n, r in enumerate(base["sessions"]):
@@ -87,7 +88,7 @@ def listing(rid, root, hidden=False, scope="repo"):
         else:
             summary, built = CS.summary_for(cache, r["path"], r.get("root") or "")
         fresh = fresh or built
-        rows.append(_row(r, idx, live, summary, prs, p["names"], own))
+        rows.append(_row(r, idx, live, summary, prs, p["names"]))
     if fresh:
         C.ensure_dir(C.lfg_path("sessions"))
         C.write_json(C.lfg_path("sessions", "list-cache.json"), {k: v for k, v in cache.items() if os.path.exists(k)})
@@ -95,8 +96,8 @@ def listing(rid, root, hidden=False, scope="repo"):
     labels = {sid: [{"name": n, "color": p["label_colors"].get(n.lower(), "gray")} for n in names]
               for sid, names in p["labels"].items()}
     placed = SS.placements()
-    early = [_live_row(lv, placed, labels, p["names"], own) for sid, lv in live.items()
+    early = [_live_row(lv, placed, labels, p["names"]) for sid, lv in live.items()
              if sid not in seen and (lv.rid == rid if scope == "repo" else scope == "all")]
-    return {"sessions": early + rows, "modes": CS.MODES, "models": models.choices(own),
+    return {"sessions": early + rows, "modes": CS.MODES, "models": models.choices(),
             "group_info": base["group_info"], "label_list": base["label_list"],
             "hidden_count": base["hidden_count"], "loose_count": base["loose_count"]}

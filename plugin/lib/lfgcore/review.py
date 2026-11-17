@@ -1105,7 +1105,7 @@ MODELS = models_list.MODELS
 
 def models():
     """The models a review can run on, with names a person knows. "" is Claude Code's own default (its settings)."""
-    return models_list.choices(models_list.own_model())
+    return models_list.choices()
 
 
 def chosen_model():

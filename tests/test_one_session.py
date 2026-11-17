@@ -39,14 +39,20 @@ class ModelsTest(unittest.TestCase):
         from lfgcore import models as M
         self.assertEqual(M.choices()[0], {"id": "", "label": "Claude Code default"})
         self.assertEqual([m["id"] for m in M.choices()[1:]], IDS)
-        self.assertEqual(M.choices("opus")[0]["label"], "Claude Code default (opus)")
+        self.assertEqual(M.choices()[0]["label"], "Claude Code default")  # never names the settings model
 
     def test_shown_names_what_the_default_runs_on(self):
         from lfgcore import models as M
-        self.assertEqual(M.shown("claude-haiku-5-5", "claude-sonnet-5-5", "opus"), "Haiku 5.5")  # a pick wins
-        self.assertEqual(M.shown("", "claude-sonnet-5-5", "opus"), "Claude Code default (Sonnet 5.5)")  # last reply
-        self.assertEqual(M.shown("", "", "opus"), "Claude Code default (opus)")  # as the picker names it
-        self.assertEqual(M.shown("", "", ""), "Claude Code default")
+        self.assertEqual(M.shown("claude-haiku-5-5", "claude-sonnet-5-5"), "Haiku 5.5")  # a pick wins
+        self.assertEqual(M.shown("", "claude-opus-5-5"), "Opus 5.5")  # the running model, not "default (...)"
+        self.assertEqual(M.shown("", "claude-x-9"), "x 9")  # an unknown id, tidied
+        self.assertEqual(M.shown("", ""), "Claude Code default")  # nothing known: the settings file is not trusted
+
+    def test_note_says_what_the_default_runs_on(self):
+        from lfgcore import models as M
+        self.assertEqual(M.note("", "claude-opus-5-5"), "Running on Opus 5.5 (Claude Code's default)")
+        self.assertEqual(M.note("", ""), "")
+        self.assertEqual(M.note("claude-haiku-5-5", "claude-opus-5-5"), "")
 
     def test_review_uses_the_same_list(self):
         from lfgcore import models as M
@@ -230,7 +236,7 @@ class ModelSwitchTest(unittest.TestCase):
         self.assertEqual((d["model"], d["model_label"]), ("opus", "Opus"))  # what you picked, for its next run
         CS.set_model(self.SID, "")
         d = CS.detail("r1", self.root, self.SID)
-        self.assertEqual((d["model"], d["model_label"]), ("", "Claude Code default (Sonnet 5.5)"))  # what it ran on
+        self.assertEqual((d["model"], d["model_label"]), ("", "Sonnet 5.5"))  # what it ran on
 
     def test_where_carries_the_model_list(self):
         self.assertEqual([m["id"] for m in self.CS.where("r1", None)["models"]], [""] + IDS)
@@ -382,14 +388,14 @@ class StudioListTest(unittest.TestCase):
         self.CS.set_model(self.A, "claude-haiku-5-5")  # for when it continues here
         self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Haiku 5.5")
         self.CS.set_model(self.A, "")
-        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Claude Code default (Sonnet 5.5)")
+        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Sonnet 5.5")
         settings = os.path.join(self.home, ".claude", "settings.json")
         with open(settings, "w") as f:
             f.write('{"model": "opus"}')
-        self.CS.set_model(self.B, "")  # a studio with no reply yet: what Claude Code's settings pick
-        self.assertEqual(self.rows(scope="all")[self.B]["model_label"], "Claude Code default (opus)")
+        self.CS.set_model(self.B, "")  # no reply yet: the settings model is never named
+        self.assertEqual(self.rows(scope="all")[self.B]["model_label"], "Claude Code default")
         self.live[self.LIVE_ONLY] = self.stub(self.LIVE_ONLY, "working", "")
-        self.assertEqual(self.rows()[self.LIVE_ONLY]["model_label"], "Claude Code default (opus)")
+        self.assertEqual(self.rows()[self.LIVE_ONLY]["model_label"], "Claude Code default")
 
     def test_a_scripted_session_is_background(self):
         sid = "55555555-0000-0000-0000-000000000000"
@@ -605,7 +611,7 @@ console.log(JSON.stringify({ live: c({ live: true, studio: true }), livetTerm: c
         self.assertFalse(out["fork"][3])
 
     MODELS = r"""
-const MODELS = [{ id: "", label: "Claude Code default (opus)" }, { id: "claude-fable-5-2", label: "Fable 5.2" },
+const MODELS = [{ id: "", label: "Claude Code default" }, { id: "claude-fable-5-2", label: "Fable 5.2" },
   { id: "claude-mythos-5-2", label: "Mythos 5.2" }, { id: "claude-haiku-5-5", label: "Haiku 5.5" }];
 """
 
@@ -625,7 +631,8 @@ const h = one({});
 const out = { idle: pick(h), order: [h.indexOf("data-ss-model"), h.indexOf("ss-cost")],
   working: pick(one({ state: "working" })), starting: pick(one({ state: "starting" })),
   needs: pick(one({ state: "needs-you" })), asking: pick(one({ pending: [{ id: "p" }] })),
-  dflt: pick(one({ model: "", model_label: "Claude Code default (Sonnet 5.5)" })),
+  dflt: pick(one({ model: "", model_label: "Opus 5.5", model_note: "Running on Opus 5.5 (Claude Code's default)" })),
+  dfltNone: pick(one({ model: "", model_label: "Claude Code default", model_note: "" })),
   legacy: pick(one({ model: "opus", model_label: "Opus" })),
   term: pick(one({ source: "terminal", state: "saved", model: "claude-haiku-5-5", model_label: "Haiku 5.5" })),
   none: /data-ss-model/.test(one({ models: undefined })) };
@@ -633,7 +640,7 @@ state.sess.unlocked = false; out.locked = pick(one({}));
 console.log(JSON.stringify(out));
 """)
         busy = "Wait for the answer to finish, then change the model."
-        labels = ["Claude Code default (opus)", "Fable 5.2", "Mythos 5.2", "Haiku 5.5"]
+        labels = ["Claude Code default", "Fable 5.2", "Mythos 5.2", "Haiku 5.5"]
         self.assertEqual(out["idle"]["label"], "Fable 5.2 ▾")
         self.assertFalse(out["idle"]["off"])
         self.assertEqual(out["idle"]["opts"], labels)
@@ -644,7 +651,10 @@ console.log(JSON.stringify(out));
             self.assertTrue(out[k]["off"], k)
             self.assertEqual(out[k]["title"], busy, k)
         # the same words as the row: what the default runs on, never just "Default"
-        self.assertEqual((out["dflt"]["label"], out["dflt"]["cur"]), ("Claude Code default (Sonnet 5.5) ▾", [""]))
+        self.assertEqual((out["dflt"]["label"], out["dflt"]["cur"]), ("Opus 5.5 ▾", [""]))
+        self.assertIn("Running on Opus 5.5 (Claude Code's default)", out["dflt"]["title"])
+        self.assertEqual(out["dfltNone"]["label"], "Claude Code default ▾")
+        self.assertNotIn("Running on", out["dfltNone"]["title"])
         # an older alias names the button and matches no option; the list is still whole
         self.assertEqual((out["legacy"]["label"], out["legacy"]["cur"], out["legacy"]["opts"]), ("Opus ▾", [], labels))
         self.assertFalse(out["term"]["off"])
@@ -666,7 +676,7 @@ const h = ssComposer({ isNew: true, models: MODELS });
 out.order = [h.indexOf('data-seg="mode"'), h.indexOf('id="ss-model"'), h.indexOf('id="ss-send"')];
 console.log(JSON.stringify(out));
 """)
-        self.assertEqual(out["fresh"]["opts"], [["", "Claude Code default (opus)"], ["claude-fable-5-2", "Fable 5.2"],
+        self.assertEqual(out["fresh"]["opts"], [["", "Claude Code default"], ["claude-fable-5-2", "Fable 5.2"],
                                                 ["claude-mythos-5-2", "Mythos 5.2"], ["claude-haiku-5-5", "Haiku 5.5"]])
         self.assertEqual(out["fresh"]["on"], "")
         self.assertEqual(out["kept"]["on"], "claude-haiku-5-5")
