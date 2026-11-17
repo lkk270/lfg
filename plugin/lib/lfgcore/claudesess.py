@@ -1119,9 +1119,11 @@ def _review_items(items, chips):
     return out
 
 
-def detail(rid, root, sid, limit=None):
+def detail(rid, root, sid, limit=None, row=False):
     """One session: what was said and done (from its transcript), plus its live state and open permission prompts.
-    `limit`: only the last that many items (a review's chat shows the recent part; `earlier` says how many it left)."""
+    `limit`: only the last that many items (a review's chat shows the recent part; `earlier` says how many it left).
+    `row`: also its list settings (star, group, labels, hidden, resume command) for the header's menu. The page asks
+    once when it opens; its refreshes leave it out, since finding its group reads the other transcripts."""
     if not re.match(r"^[0-9a-f-]{36}$", str(sid or "")):
         return {"available": False, "why": "not a session id"}
     l_ = _LIVE.get(sid)
@@ -1136,7 +1138,7 @@ def detail(rid, root, sid, limit=None):
     from . import sessions as SS
     title = SS.display_title(sid, SS.prefs()["names"], mine.get("title"), meta["title"], _one_line(meta["first"]),
                              "New session")
-    return {"available": True, "id": sid, "items": items, "title": title,
+    out = {"available": True, "id": sid, "items": items, "title": title,
             "branch": (l_.branch if l_ else None) or meta["branch"], "model": (l_.model if l_ else None) or
             meta["model"] or mine.get("model"), "mode": (l_.mode if l_ else mine.get("mode")) or "default",
             "modes": MODES, "source": "lfg" if mine.get("lfg") else
@@ -1153,6 +1155,9 @@ def detail(rid, root, sid, limit=None):
             "issues": meta["issues"], "pr": _pr_for(rid, (l_.branch if l_ else None) or meta["branch"]),
             "worktree_name": _wt_name(root, l_.root if l_ else meta["cwd"]),
             "activity": activity(path, meta.get("activity") or [], bool(l_ and l_.state not in ("ended", "saved")))}
+    if row:  # and the groups and labels its Change group and Labels drawers offer
+        out.update(row=SS.row_of(sid, path), group_info=SS.group_info(), label_list=SS.label_list())
+    return out
 
 
 EDIT_TOOLS = ("Edit", "MultiEdit", "Write", "NotebookEdit")

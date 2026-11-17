@@ -3025,14 +3025,15 @@ function sessRow(s, ctx) {
     <a class="btn small" href="#studio/${esc(s.id)}">Open</a>${sessMenu(s, ctx)}</div>`;
 }
 /* Every action on a session, in one menu: the list row, an open session's header and Where you left off all use it.
-   ctx.unlocked: false greys out what changes something. */
+   ctx.unlocked: false greys out what changes something. ctx.extra: items only the open session has (Fork, Compact,
+   Export), put first. */
 function sessMenu(s, ctx) {
   const name = s.title || s.name || s.id, ref = esc(JSON.stringify([s.id, name]));
   const lock = ctx.unlocked ? "" : ` disabled title="Locked: run ${esc(unlockCmd())} in your terminal to change it here"`;
   const item = (attrs, label, cls) => `<button type="button" role="menuitem"${cls ? ` class="${cls}"` : ""} ${attrs}>${label}</button>`;
   const del = !ctx.unlocked ? lock : sessCanDelete(s) ? ' title="Move its file to the Trash"' : ' disabled title="End it first"';
   return `<span class="sess-menu-wrap"><button type="button" class="icon-btn" data-sess-menu data-keep="aria-expanded" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(name)}">⋯</button>
-    <div class="sess-menu" role="menu" data-keep="hidden style" hidden>
+    <div class="sess-menu" role="menu" data-keep="hidden style" hidden>${ctx.extra ? `${ctx.extra}<hr>` : ""}
       ${item(s.resume ? `data-sess-copy="${esc(s.resume)}" title="${esc(s.resume)}"` : 'disabled title="It has no transcript yet"', "Copy resume command")}
       ${item(`data-sess-changes='${ref}' title="Every file it edited, as diffs, from its own transcript"`, "What it changed")}
       ${item(`data-sess-skill='${ref}'${lock || ' title="Run a skill or an instruction on it, once or in a loop"'}`, "Run a skill…")}
@@ -3104,7 +3105,7 @@ function sessionTrashDrawer(s, ctx) {
   $("#sess-trash-go").onclick = async () => {
     const r = await save("session_trash", { id: s.id });
     saidMsg($("#sess-trash-msg"), r, "Moved to the Trash.");
-    if (r.ok) setTimeout(() => { closeDrawer(); ctx.refresh(); }, 700);
+    if (r.ok) setTimeout(() => { closeDrawer(); (ctx.trashed || ctx.refresh)(); }, 700);
   };
 }
 /* Wires the menu and the star inside `root`. ctx = { rows: [sessions], info: {group: ...}, labels: [...], refresh() } */
@@ -3377,26 +3378,18 @@ function contBrief(d, unlocked) {
     <aside class="cont-panel box" id="cont-panel" aria-live="polite"></aside></div>`;
 }
 const contSessions = d => [d.orchestrator, ...(d.other_orchestrators || []), ...(d.milestones || []).flatMap(m => m.sessions), ...(d.unsorted || [])].filter(Boolean);
-/* The panel for one session: what it was for, where it stopped, what it changed, and the Studio list's actions. */
+/* The panel for one session: what it was for, where it stopped, and the same star, Open and ... menu as its row in
+   the Studio list. Where you left off has no live state of its own, so a studio's kind and whether it runs come from
+   the sidebar's copy of the list (a running studio's Delete then says to end it first). */
 function contPanel(s, unlocked) {
   if (!s) return '<p class="muted">Pick a session to see what it was for and where it stopped.</p>';
-  const dis = unlocked ? "" : "disabled";
+  const nav = (state.navSess || []).find(x => x.id === s.id);
+  if (nav) ["kind", "live", "state"].forEach(k => { if (s[k] === undefined) s[k] = nav[k]; });
   return `<div class="cont-panel-in" data-sid="${esc(s.id)}"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag">not named</span>'} ${labelChips(s)}</div>
-    <div class="meta">${s.activity === "working" ? "working now" : "idle"} · ${ago(s.modified)}${s.repo ? ` · ${esc(s.repo)}` : ""}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.folder_exists === false ? ' · <span class="bad-tx">its folder is gone</span>' : ""}</div>
+    <div class="meta">${s.activity === "working" ? "working now" : "idle"} · ${ago(s.modified)}${s.repo ? ` · ${esc(s.repo)}` : ""}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.folder ? ` · <span title="Your group">in ${esc(s.folder)}${s.via_pr ? " (via PR)" : s.via_ticket ? " (via ticket)" : ""}</span>` : ""}${s.folder_exists === false ? ' · <span class="bad-tx">its folder is gone</span>' : ""}</div>
     <div class="k">What it was for</div><p class="small pre-wrap">${s.first ? esc(s.first) + (s.first.length >= 400 ? "…" : "") : "No first message."}</p>
     <div class="k">Where it stopped</div><div class="sess-recent small" data-cont-recent="${esc(s.id)}"><span class="loading-inline muted">Loading…</span></div>
-    <div class="sess-actions"><button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
-    <button class="btn small" data-sess-changes='${esc(JSON.stringify([s.id, s.name]))}' title="Every file this session edited, as diffs, from its own transcript">What it changed</button>
-    <button class="btn small" data-sess-skill='${esc(JSON.stringify([s.id, s.name]))}' ${dis} title="Run a skill or an instruction on this session">Run a skill…</button>
-    <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
-    <button class="btn small" data-sess-remind="${esc(s.id)}" ${dis} title="Its next message carries your style rules again, once">Remind it of my style</button>
-    <button class="btn small" data-sess-name="${esc(s.id)}" ${dis}>Rename</button>
-    ${s.folder ? `<span class="tag" title="Your group">${esc(s.folder)}${s.via_pr ? " · via PR" : s.via_ticket ? " · via ticket" : ""}</span>` : ""}
-    <button class="btn small" data-sess-folder="${esc(s.id)}" ${dis}>${s.folder ? "Change group" : "Add to a group…"}</button>
-    <button class="btn small" data-sess-labels="${esc(s.id)}" ${dis}>Labels…</button>
-    <button class="btn small" data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}' ${dis}>${s.hidden ? "Show again" : "Hide"}</button>
-    <button class="btn small" data-sess-trash="${esc(s.id)}" ${dis}>Delete</button>
-    <button class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${dis} aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button></div></div>`;
+    <div class="sess-actions">${sessStar(s, unlocked)}<a class="btn small primary" href="#studio/${esc(s.id)}">Open</a>${sessMenu(s, { unlocked })}</div></div>`;
 }
 PAGES.continue = async arg => {
   if (!arg) {
@@ -6216,8 +6209,8 @@ PAGES.studio = async arg => {
   }
   const ch = arg.match(/^([0-9a-f-]{36})\/changes$/);
   if (ch) return `${tabStrip("studio")}${await ssChanges(ch[1])}`;
-  const d = await api("studio_session", { id: arg });
-  state.sess = { d, id: arg };
+  const [d, unlocked] = await Promise.all([api("studio_session", { id: arg, row: "1" }), isUnlocked()]);
+  state.sess = { d, id: arg, unlocked };
   crumbs("studio", d && d.available !== false ? d.title : null, `#studio/${arg}`);
   if (d.available !== false) tabOpen("studio", arg, d.title);
   return d.available === false ? unavailable(d) : `${tabStrip("studio")}<div class="ss-one${(d.activity || []).length ? " has-act" : ""}">${ssDetail(d)}</div>`;
@@ -6382,17 +6375,21 @@ function wireSessList(root, list) {
   fillSessWork(root);
 }
 
+/* Under an open session: a plain reply box ("Message this studio", Send) while it runs or when LFG started it; a
+   saved terminal or desktop session says it continues here. The where-it-works picker and Start are only on
+   #studio/new (o.isNew). */
+const ssSendLabel = o => o.live || o.studio ? "Send" : "Continue here";
 function ssComposer(o) {
-  const mode = o.mode || localStorage.getItem("lfg.ss.mode") || "default";
+  const mode = o.mode || localStorage.getItem("lfg.ss.mode") || "default", reply = !o.isNew && (o.live || o.studio);
   const seg = (name, opts, cur) => `<span class="seg" role="radiogroup" data-seg="${name}">${opts.map(([k, l, tip]) => `<button type="button" role="radio" aria-checked="${k === cur}" class="pill${k === cur ? " on" : ""}" data-v="${k}" title="${esc(tip)}">${l}</button>`).join("")}</span>`;
   const fork = o.fork ? `<div class="ss-forking">${icon("branch")}<span class="grow">New session from ${o.fork.at ? `before <b>“${esc(o.fork.label)}”</b>` : "this whole conversation"}. This one stays as it is.</span><button class="btn small" data-fork-x>Cancel</button></div>` : "";
   return `<div class="ss-comp" id="ss-comp">
     <div class="ss-ac" id="ss-ac" data-fill data-keep="hidden" hidden></div>${fork}
     <div class="ss-att" id="ss-att" data-fill data-keep="hidden" hidden></div>
-    <textarea id="ss-text" rows="1" placeholder="${o.fork ? "What should the new session do?" : o.isNew ? "Describe the task. / for skills, @ for files and folders" : o.saved ? "Write to continue this session here" : "Reply to Claude. / for skills, @ for files"}"></textarea>
+    <textarea id="ss-text" rows="1" placeholder="${o.fork ? "What should the new session do?" : o.isNew ? "Describe the task. / for skills, @ for files and folders" : reply ? "Message this studio. / for skills, @ for files" : "Write to continue this session here"}"></textarea>
     <div class="ss-comp-b"><button type="button" class="icon-btn ss-clip" id="ss-attach" title="Attach files or images. You can also drop them here or paste a screenshot.">${icon("clip")}</button><input type="file" id="ss-file" multiple hidden>
-      ${o.isNew ? ssWherePicker() : ""}${o.isNew || o.live ? seg("mode", SS_MODES, mode) : ""}
-      <span class="grow"></span><button class="btn primary small" id="ss-send">${o.fork ? "Start fork" : o.isNew ? "Start" : o.saved ? "Continue here" : "Send"}</button></div></div>`;
+      ${o.isNew ? ssWherePicker() : ""}${o.isNew || reply ? seg("mode", SS_MODES, mode) : ""}
+      <span class="grow"></span><button class="btn primary small" id="ss-send">${o.fork ? "Start fork" : o.isNew ? "Start" : ssSendLabel(o)}</button></div></div>`;
 }
 
 /* Where a new session works: this checkout, a worktree, an existing branch in a worktree of its own, or a new
@@ -6650,24 +6647,27 @@ function ssOutside(d) {
   if (!o) return "";
   return `<div class="callout warn small ss-outside">You carried on with this session in ${esc(o.where)} ${ago(o.ts)}${o.compacted ? " and compacted it there" : ""}. The studio hasn't seen that yet: it is still working from its copy from before. Your next message here reloads it first, so it picks up where ${esc(o.where)} left off. Use one window at a time, or the two copies drift apart again. <button class="btn small" data-ss-reload>Reload now</button></div>`;
 }
+/* The open session as the shared menu sees it: the list settings the page read once (d.row) plus what the
+   conversation says now. Always the same object, so a star or a group set here survives the page's refreshes. */
+function ssRowOf(d) {
+  return Object.assign(d.row || (d.row = {}), { id: d.id, title: d.title, kind: d.source === "lfg" ? "studio" : d.source || "terminal", state: d.state, live: d.state !== "saved" });
+}
+/* only the open session has these; the rest of its menu is every session's */
+const SS_MENU_EXTRA = `<button type="button" role="menuitem" data-menu="fork" title="A new session with this whole conversation; this one stays as it is">Fork session</button>
+  <button type="button" role="menuitem" data-menu="compact" title="Claude Code summarizes the conversation to free up context, as /compact does">Compact conversation</button>
+  <button type="button" role="menuitem" data-menu="export" title="Download the conversation as a Markdown file">Export as Markdown</button>`;
 function ssHead(d) {
   const model = String(d.model || "").replace(/^claude-/, "").replace(/-(\d)-(\d)$/, " $1.$2").replace(/^./, c => c.toUpperCase());
-  return `<div class="grow"><h1 class="ss-title" title="Click to rename" data-ss-rename>${esc(d.title)}</h1>
-      <div class="ss-tags">${ssTagList(d, true)}${model ? `<span class="tg">${esc(model)}</span>` : ""}${d.via === "headroom" ? '<span class="tg on">via Headroom</span>' : ""}</div></div>
-    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}
-      <button class="icon-btn ss-more" data-ss-more data-keep="aria-expanded" aria-haspopup="menu" aria-expanded="false" title="More">${icon("more")}</button>
-      <div class="ss-menu" role="menu" data-keep="hidden" hidden>
-        <button role="menuitem" data-menu="fork">${icon("branch")}Fork session</button>
-        <button role="menuitem" data-menu="compact">${icon("compress")}Compact conversation</button>
-        <hr><button role="menuitem" data-menu="export">${icon("download")}Export as Markdown</button>
-        <button role="menuitem" data-menu="resume">${icon("terminal")}Copy terminal command</button>
-        <button role="menuitem" data-menu="rename">${icon("docs")}Rename</button></div></div>`;
+  const s = ssRowOf(d), unlocked = !!(state.sess || {}).unlocked;
+  return `<div class="grow"><h1 class="ss-title"${unlocked ? ' title="Click to rename" data-ss-rename' : ""}>${esc(d.title)}</h1>
+      <div class="ss-tags">${ssTagList(d, true)}${model ? `<span class="tg">${esc(model)}</span>` : ""}${d.via === "headroom" ? '<span class="tg on">via Headroom</span>' : ""}${labelChips(s)}</div></div>
+    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${sessStar(s, unlocked)}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}${sessMenu(s, { unlocked, extra: SS_MENU_EXTRA })}</div>`;
 }
 function ssDetail(d) {
   const live = ssLive(d.state), fork = state.ssFork && state.ssFork.sid === d.id ? state.ssFork : null;
   return `<header class="ss-head" id="ss-head">${ssHead(d)}</header>
     <div class="ss-conv${d.state === "working" || d.state === "starting" || (d.pending || []).length ? " ss-busy" : ""}" id="ss-conv">${ssConv(d)}</div>
-    ${ssComposer({ live, saved: !live, mode: d.mode, fork })}
+    ${ssComposer({ live, studio: d.source === "lfg", mode: d.mode, fork })}
     <aside class="ss-act" id="ss-act" aria-label="Running in the background" aria-live="polite">${ssAct(d)}</aside>`;
 }
 
@@ -7100,7 +7100,11 @@ function wireStudio(root) {
       if (r.ok) { clearComposer(); loadNavSessions(); location.hash = "#studio/" + r.id; }
       return;
     }
-    if (!ssLive(d.state)) { const r = await go("sess_resume", { id: S.id }, send, "Starting…"); if (!r.ok) return; }
+    if (!ssLive(d.state)) {
+      const r = await go("sess_resume", { id: S.id }, send, "Starting…"); if (!r.ok) return;
+      const m = segVal("mode");  // a saved studio's switch: the mode picked before Send, not the one it last had
+      if (m && m !== (d.mode || "default")) await go("sess_mode", { id: S.id, mode: m });
+    }
     const r = await go("sess_say", { id: S.id, text, attachments: files }, send, "Sending…");
     if (r.ok) { clearComposer(); send.disabled = false; send.textContent = "Send"; refresh(); }
   };
@@ -7146,18 +7150,14 @@ function wireStudio(root) {
   const wireConv = ssConvWirer({ conv, S, d, go, refresh: () => refresh(), follow: t => { ta.value = t; send.click(); }, rewound: () => { loadNavSessions(); route({ soft: true }); } });
   const wireHead = () => {
     const end = $("[data-ss-end]", head); if (end) end.onclick = async () => { if (confirm("End this session? Claude Code stops; you can continue the session later.")) { await go("sess_end", { id: S.id }, end); loadNavSessions(); route({ soft: true }); } };
-    const rename = async () => { const t = prompt("Name this session", d.title); if (t && t.trim()) { const r = await sessRenameSave(S.id, d.source === "lfg", t); if (!r.ok) return prefToast(r.why || "Couldn't rename it.", true); loadNavSessions(); route({ soft: true }); } };
-    const ttl = $("[data-ss-rename]", head); if (ttl) ttl.onclick = rename;
-    const more = $("[data-ss-more]", head), menu = $(".ss-menu", head);
-    const close = () => { menu.hidden = true; more.setAttribute("aria-expanded", "false"); document.removeEventListener("click", outside, true); };
-    const outside = e => { if (!e.target.closest(".ss-menu, [data-ss-more]")) close(); };
-    more.onclick = () => { const open = menu.hidden; menu.hidden = !open; more.setAttribute("aria-expanded", open); if (open) document.addEventListener("click", outside, true); else close(); };
-    $$("[data-menu]", menu).forEach(b => b.onclick = async () => {
-      close();
+    // the same menu and star as a list row, plus Fork, Compact and Export
+    const ctx = { rows: [ssRowOf(d)], info: d.group_info || {}, labels: d.label_list || [], refresh: () => { loadNavSessions(); route({ soft: true }); },
+      trashed: () => { loadNavSessions(); tabClose("studio", S.id); if (location.hash === "#studio/" + S.id) location.hash = "#studio"; } };
+    wireSessMenu(head, ctx);
+    const ttl = $("[data-ss-rename]", head); if (ttl) ttl.onclick = () => sessionRenameDrawer(ssRowOf(d), ctx);
+    $$("[data-menu]", head).forEach(b => b.onclick = () => {
       const k = b.dataset.menu;
-      if (k === "rename") return rename();
       if (k === "export") return ssDownload(`${(d.title || "session").replace(/[^\w.-]+/g, "-").slice(0, 60)}.md`, ssMarkdown(d));
-      if (k === "resume") { await navigator.clipboard.writeText(`claude --resume ${S.id}`); return alert(`Copied: claude --resume ${S.id}\n\nRun it in this project's folder to carry on in a terminal.`); }
       if (k === "fork") { state.ssFork = { sid: S.id, at: "", label: "" }; route({ soft: true }); return; }
       if (k === "compact") return compact();
     });
@@ -7198,11 +7198,12 @@ function wireStudio(root) {
     const nsig = sigOf(n);
     if (nsig !== sig) {
       const stick = atBottom(), was = d.state;
-      sig = nsig; state.sess.d = n; Object.assign(d, n);
-      morph(conv, ssConv(n)); morph(head, ssHead(n)); wireConv(); wireHead(); wireOut();  // only what changed: open steps, selection, the menu stay
+      sig = nsig; Object.assign(d, n); state.sess.d = d;  // d keeps the list settings (row) the page read once
+      morph(conv, ssConv(n)); morph(head, ssHead(d)); wireConv(); wireHead(); wireOut();  // only what changed: open steps, selection, the menu stay
       conv.classList.toggle("ss-busy", n.state === "working" || n.state === "starting" || !!(n.pending || []).length);
       if (n.state === "idle" && was !== "idle") loadCtx();
-      if (send) { const want = ssLive(n.state) ? "Send" : "Continue here"; if (!send.disabled && send.textContent !== want) send.textContent = want; }
+      if (send && !(state.ssFork && state.ssFork.sid === S.id)) {  // a fork keeps its Start fork
+        const want = ssSendLabel({ live: ssLive(n.state), studio: n.source === "lfg" }); if (!send.disabled && send.textContent !== want) send.textContent = want; }
       if (stick) conv.scrollTop = conv.scrollHeight;
     }
     if (ssLive(n.state)) ssPoll = setTimeout(refresh, n.state === "idle" ? 4000 : 1200);

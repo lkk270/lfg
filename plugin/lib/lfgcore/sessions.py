@@ -551,6 +551,29 @@ def placements(sessions=None):
     return out
 
 
+def row_of(sid, path=None):
+    """One session's own settings, with the keys a list row has (name, auto_name, resume, folder, labels, starred,
+    hidden): what an open session's header needs for the shared session menu. `path`: its transcript, when there
+    is one yet."""
+    p = prefs()
+    own = p["names"].get(sid, "")
+    out = {"id": sid, "name": own, "auto_name": "", "resume": "", "starred": sid in p["starred"],
+           "hidden": sid in p["hidden"], "folder": "", "via_pr": False, "via_ticket": False,
+           "labels": [{"name": n, "color": p["label_colors"].get(n.lower(), "gray")} for n in p["labels"].get(sid, [])]}
+    s = None
+    if path:
+        try:
+            s = parse(path)
+        except OSError:
+            s = None
+    if s:
+        r = dict(s, ticket=_ticket(s["branch"], s["title"], s["ai_title"], s["first"]))
+        out.update(name=name_for(r, own), auto_name=name_for(r), resume=resume_command(r))
+    where = placements([s] if s else []).get(sid) or {"folder": "", "via": ""}
+    out.update(folder=where["folder"], via_pr=where["via"] == "pr", via_ticket=where["via"] == "ticket")
+    return out
+
+
 def groups_of(pr):
     """The groups that follow a PR."""
     return sorted(g for g, prs in prefs()["group_prs"].items() if pr in prs)

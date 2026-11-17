@@ -422,7 +422,8 @@ def api(view, q):
         if view == "studio":
             from . import studiolist as SL
             return SL.listing(rid, root, hidden=_arg(q, "hidden") in ("1", "true"), scope=_arg(q, "scope") or "repo")
-        return CS.detail(rid, root, _arg(q, "id"), limit=int(_arg(q, "limit") or 0) or None)
+        return CS.detail(rid, root, _arg(q, "id"), limit=int(_arg(q, "limit") or 0) or None,
+                         row=_arg(q, "row") in ("1", "true"))
     if view == "studio_changes":  # every file a session changed, as diffs, from its transcript
         from . import claudesess as CS
         return CS.changes(rid, dash.repo_root(rid), _arg(q, "id"))

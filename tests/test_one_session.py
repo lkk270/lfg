@@ -402,5 +402,156 @@ console.log(JSON.stringify({ studio: chips(studio), menu: menu(studio), term: ch
         self.assertTrue(out["openHref"])
 
 
+class OneMenuTest(unittest.TestCase):
+    """Task 5: the open session's header, its reply box and Where you left off's panel use the list row's menu."""
+
+    BLOCKS = [("/* One session as a row", "/* The menu opens beside its button"),
+              ("/* The panel for one session", "PAGES.continue = async arg"),
+              ("/* Under an open session: a plain reply box", "/* Where a new session works"),
+              ("/* The open session as the shared menu sees it", "function ssDetail(d)")]
+    STUBS = r"""
+const esc = s => String(s ?? ""), icon = k => "", dot = t => "", ago = () => "now", homePath = p => p;
+const money = v => "$" + v, groupPath = g => g, labelChips = () => "", skillRuns = () => "";
+const unlockCmd = () => "lfg ui --unlock", ssTagList = () => "", ssCtxHtml = () => "";
+const ssWherePicker = () => "<select id=ss-where></select>";
+const ssLive = st => ["working", "needs-you", "starting", "idle"].includes(st);
+const SS_MODES = [["default", "Ask first", ""], ["acceptEdits", "Accept edits", ""], ["plan", "Plan only", ""]];
+const localStorage = { getItem: () => null };
+const state = { sess: { unlocked: true }, navSess: [] };
+const strip = h => h.replace(/<[^>]+>/g, "|").split("|").map(x => x.trim()).filter(Boolean);
+const menu = h => strip(h.slice(h.indexOf('<div class="sess-menu"'), h.indexOf("</div></span>")));
+const ph = h => (h.match(/placeholder="([^"]*)"/) || [])[1];
+const btn = h => (h.match(/id="ss-send">([^<]*)</) || [])[1];
+"""
+
+    def run_js(self, script):
+        import json
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node isn't installed")
+        here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "lib", "lfgcore")
+        with open(os.path.join(here, "ui_assets", "app.js")) as f:
+            js = f.read()
+        code = "\n".join(js[js.index(a):js.index(b)] for a, b in self.BLOCKS)
+        out = subprocess.run([node, "-e", self.STUBS + code + "\n" + script], capture_output=True, text=True,
+                             check=True).stdout
+        return json.loads(out)
+
+    SHARED = ["Copy resume command", "What it changed", "Run a skill…", "Rules", "Remind it of my style", "Rename",
+              "Change group", "Labels…", "Hide", "Delete"]
+
+    def test_header_has_star_end_and_the_shared_menu_after_fork_compact_export(self):
+        out = self.run_js(r"""
+const studio = { id: "a", title: "Chat", source: "lfg", state: "working", cost: 1,
+  row: { resume: "cd x && claude --resume a", folder: "Epic", starred: true } };
+const term = { id: "b", title: "Term", source: "terminal", state: "saved", row: { resume: "r" } };
+const h = ssHead(studio), t = ssHead(term);
+state.sess.unlocked = false; const locked = ssHead(term);
+console.log(JSON.stringify({ menu: menu(h), termMenu: menu(t),
+  star: /class="star on"/.test(h), end: /data-ss-end/.test(h), termEnd: /data-ss-end/.test(t),
+  busyDelete: /data-sess-trash="a" disabled title="End it first"/.test(h),
+  termDelete: /data-sess-trash="b" title=/.test(t),
+  oldMenu: /data-menu="(rename|resume)"|class="ss-menu"|data-ss-more/.test(h + t),
+  rename: /data-ss-rename/.test(h), lockedRename: /data-ss-rename/.test(locked),
+  live: studio.row.live, kind: studio.row.kind, termLive: term.row.live, kept: studio.row.starred,
+  order: [h.indexOf("ss-cost"), h.indexOf('class="star'), h.indexOf("data-ss-end"), h.indexOf("data-sess-menu")] }));
+""")
+        self.assertEqual(out["menu"], ["Fork session", "Compact conversation", "Export as Markdown"] + self.SHARED)
+        self.assertEqual(out["termMenu"][3:], self.SHARED[:6] + ["Add to a group…"] + self.SHARED[7:])
+        self.assertTrue(out["star"])
+        self.assertTrue(out["end"])
+        self.assertFalse(out["termEnd"])
+        self.assertTrue(out["busyDelete"])
+        self.assertTrue(out["termDelete"])
+        self.assertFalse(out["oldMenu"])
+        self.assertTrue(out["rename"])
+        self.assertFalse(out["lockedRename"])
+        self.assertEqual([out["live"], out["kind"], out["termLive"], out["kept"]], [True, "studio", False, True])
+        self.assertEqual(out["order"], sorted(out["order"]))  # cost, star, End, then the menu
+        self.assertNotIn(-1, out["order"])
+
+    def test_reply_box_per_state(self):
+        out = self.run_js(r"""
+const c = o => { const h = ssComposer(o); return [ph(h), btn(h), /data-seg="mode"/.test(h), /ss-where/.test(h)]; };
+console.log(JSON.stringify({ live: c({ live: true, studio: true }), livetTerm: c({ live: true }),
+  savedStudio: c({ studio: true }), savedTerm: c({}), fresh: c({ isNew: true }),
+  fork: c({ live: true, studio: true, fork: { at: "", label: "" } }) }));
+""")
+        msg = "Message this studio. / for skills, @ for files"
+        self.assertEqual(out["live"], [msg, "Send", True, False])
+        self.assertEqual(out["livetTerm"], [msg, "Send", True, False])
+        self.assertEqual(out["savedStudio"], [msg, "Send", True, False])
+        self.assertEqual(out["savedTerm"], ["Write to continue this session here", "Continue here", False, False])
+        self.assertEqual(out["fresh"], ["Describe the task. / for skills, @ for files and folders", "Start", True,
+                                        True])
+        self.assertEqual(out["fork"][:2], ["What should the new session do?", "Start fork"])
+        self.assertFalse(out["fork"][3])
+
+    def test_where_you_left_off_panel_uses_the_shared_menu(self):
+        out = self.run_js(r"""
+const s = { id: "c", name: "Fix it", activity: "working", modified: "", resume: "r", folder: "Epic", via_ticket: true };
+state.navSess = [{ id: "c", kind: "studio", live: true, state: "working" }];
+const h = contPanel(s, true);
+console.log(JSON.stringify({ menu: menu(h), loose: (h.match(/class="btn small"[^>]*data-sess-/g) || []).length,
+  open: /href="#studio\/c"[^>]*>Open</.test(h), star: /data-sess-star/.test(h), group: /in Epic \(via ticket\)/.test(h),
+  busyDelete: /data-sess-trash="c" disabled title="End it first"/.test(h) }));
+""")
+        self.assertEqual(out["menu"], self.SHARED)
+        self.assertEqual(out["loose"], 0)
+        self.assertTrue(out["open"])
+        self.assertTrue(out["star"])
+        self.assertTrue(out["group"])
+        self.assertTrue(out["busyDelete"])
+
+
+class SessionRowOfTest(unittest.TestCase):
+    """The open session's header reads its list settings once, from sessions.row_of."""
+
+    SID = "00000042-0000-0000-0000-000000000000"
+
+    def setUp(self):
+        import json
+        from lfgcore import claudesess as CS
+        from lfgcore import sessions as SS
+        self.CS, self.SS = CS, SS
+        home, lfg = tempfile.mkdtemp(prefix="lfg-ro-home-"), tempfile.mkdtemp(prefix="lfg-ro-lfg-")
+        projects = os.path.join(home, ".claude", "projects")
+        for p in (mock.patch.object(CS.C, "HOME", home), mock.patch.object(CS.C, "LFG_HOME", lfg),
+                  mock.patch.object(CS, "PROJECTS", projects), mock.patch.object(SS, "PROJECTS", projects),
+                  mock.patch.object(CS, "_LIVE", {})):
+            p.start()
+            self.addCleanup(p.stop)
+        self.repo = os.path.realpath(tempfile.mkdtemp(prefix="lfg-ro-r-"))
+        os.makedirs(os.path.join(self.repo, ".git"))
+        d = os.path.join(projects, self.repo.replace("/", "-"))
+        os.makedirs(d)
+        ev = {"type": "user", "cwd": self.repo, "gitBranch": "feat", "entrypoint": "cli",
+              "timestamp": "2026-10-19T10:00:00Z", "message": {"role": "user", "content": "fix the export"}}
+        with open(os.path.join(d, self.SID + ".jsonl"), "w") as f:
+            f.write(json.dumps(ev) + "\n")
+
+    def test_row_carries_star_group_labels_and_resume_only_when_asked(self):
+        self.SS.star(self.SID)
+        self.SS.make_group("Epic")
+        self.SS.file_into(self.SID, "Epic")
+        self.SS.set_labels(self.SID, ["urgent"])
+        d = self.CS.detail("r1", self.repo, self.SID, row=True)
+        row = d["row"]
+        self.assertTrue(row["starred"])
+        self.assertFalse(row["hidden"])
+        self.assertEqual(row["folder"], "Epic")
+        self.assertEqual([x["name"] for x in row["labels"]], ["urgent"])
+        self.assertIn("claude --resume " + self.SID, row["resume"])
+        self.assertIn("Epic", d["group_info"])
+        self.assertEqual([x["name"] for x in d["label_list"]], ["urgent"])
+        self.assertNotIn("row", self.CS.detail("r1", self.repo, self.SID))  # a refresh does not pay for it
+
+    def test_no_transcript_yet(self):
+        row = self.SS.row_of("00000043-0000-0000-0000-000000000000")
+        self.assertEqual((row["resume"], row["folder"], row["starred"]), ("", "", False))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2432,15 +2432,8 @@ body.rail .ns-n { position: absolute; top: 1px; right: 3px; min-width: 15px; hei
 .ctx-legend .ctx-c { width: 10px; flex: none; }
 .ctx-pc { width: 40px; text-align: right; }
 .ss-head-a { position: relative; }
-.ss-more .ico { width: 16px; height: 16px; }
-.ss-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 230px; padding: 5px; border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--surface); box-shadow: 0 12px 32px -12px rgba(0, 0, 0, .35); display: grid; }
-.ss-menu button { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--text-2);
-  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
-.ss-menu button:hover { background: var(--hover); color: var(--text); }
-.ss-menu button .ico { width: 15px; height: 15px; color: var(--muted); }
-.ss-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
-.ss-menu .bad { color: var(--red); }
+.ss-head-a .star { background: none; border: 0; padding: 0 2px; font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer; }
+.ss-head-a .star.on { color: #e3b341; } .ss-head-a .star:disabled, .sess-actions .star:disabled { cursor: default; opacity: .6; }
 .ss-note { align-self: center; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .ss-note::before, .ss-note::after { content: ""; width: 40px; height: 1px; background: var(--line); }
 .ss-ai .ss-msg-a { grid-column: 2; }
