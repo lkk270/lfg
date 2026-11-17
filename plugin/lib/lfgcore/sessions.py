@@ -1102,9 +1102,34 @@ def remove_worktree(path):
     return {"path": path, "branch": st["branch"]}
 
 
+RUN_QUIET_SECS = 120  # a background run whose transcript changed this recently is still going
+
+
+def _still_running(rows):
+    """Why a worktree must stay: a studio still running in LFG (not ended) or a background run in progress, for
+    the sessions `rows` that ran in it; "" when none."""
+    from . import claudesess as CS
+    for r in rows:
+        live = CS._LIVE.get(r["id"])
+        if live and live.state != "ended":
+            return "a studio is still running here"
+    now = time.time()
+    for r in rows:
+        if r.get("entrypoint") == "sdk-cli" and r["id"] not in CS._LIVE and now - r.get("mtime", 0) < RUN_QUIET_SECS:
+            return "a background run is still going here"
+    return ""
+
+
 def group_cleanup(repo, group):
     """For "Done with this": the group's sessions and the worktrees they ran in, each with what removing it loses.
-    Scripted sessions count too (LFG's studios and background runs), as the Studio list shows them in the group."""
-    rows = [r for r in listing(hidden=True, scripted=True)["sessions"] if r["repo"] == repo and r["group"] == group]
+    Scripted sessions count too (LFG's studios and background runs), as the Studio list shows them in the group.
+    A worktree a studio or background run is still using is kept (`safe` false), as one with unsaved work is."""
+    rows = [r for r in listing(hidden=True, scripted=True, with_path=True)["sessions"]
+            if r["repo"] == repo and r["group"] == group]
     paths = sorted({r["cwd"] for r in rows if r["worktree"] and r["cwd"]})
-    return {"sessions": [r["id"] for r in rows if not r["hidden"]], "worktrees": [worktree_state(p) for p in paths]}
+    out = []
+    for p in paths:
+        st = worktree_state(p)
+        busy = _still_running([r for r in rows if r["cwd"] == p])
+        out.append(dict(st, safe=False, why=busy) if busy else st)
+    return {"sessions": [r["id"] for r in rows if not r["hidden"]], "worktrees": out}

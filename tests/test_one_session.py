@@ -443,6 +443,28 @@ class StudioListTest(unittest.TestCase):
         self.assertEqual(set(out["sessions"]), {studio, run})
         self.assertEqual([w["path"] for w in out["worktrees"]], [wt])
 
+    def test_done_keeps_the_worktree_of_a_running_studio(self):
+        studio = "88888888-0000-0000-0000-000000000000"
+        wt = self.repo1 + ".worktrees/feat-y"
+        self.write(studio, wt, "feat-y", "studio in a worktree", "sdk-cli")
+        self.live[studio] = self.stub(studio, "idle")
+        state = self.SS.group_cleanup(os.path.basename(self.repo1), "feat-y")["worktrees"][0]
+        self.assertEqual((state["path"], state["safe"], state["why"]), (wt, False, "a studio is still running here"))
+        self.live[studio].state = "ended"  # an ended studio is offered again
+        state = self.SS.group_cleanup(os.path.basename(self.repo1), "feat-y")["worktrees"][0]
+        self.assertNotEqual(state["why"], "a studio is still running here")
+
+    def test_done_keeps_the_worktree_of_a_background_run_in_progress(self):
+        run = "99999999-0000-0000-0000-000000000000"
+        wt = self.repo1 + ".worktrees/feat-x"
+        self.write(run, wt, "feat-x", "Read only. Call list_teams", "sdk-cli")
+        state = self.SS.group_cleanup(os.path.basename(self.repo1), "feat-x")["worktrees"][0]
+        self.assertEqual((state["safe"], state["why"]), (False, "a background run is still going here"))
+        path = os.path.join(self.projects, wt.replace("/", "-"), run + ".jsonl")
+        os.utime(path, (1000000000, 1000000000))  # quiet for years: finished
+        state = self.SS.group_cleanup(os.path.basename(self.repo1), "feat-x")["worktrees"][0]
+        self.assertNotEqual(state["why"], "a background run is still going here")
+
 
 class ListPageTest(unittest.TestCase):
     """The Studio list page's row, menu and old addresses, run as the real app.js code in Node."""
