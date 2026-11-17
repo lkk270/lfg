@@ -3108,6 +3108,14 @@ function sessionTrashDrawer(s, ctx) {
     if (r.ok) setTimeout(() => { closeDrawer(); (ctx.trashed || ctx.refresh)(); }, 700);
   };
 }
+/* a skill run's Copy resume command and Stop after this pass */
+function wireSkillRuns(root) {
+  $$("[data-copy]", root).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+    setTimeout(() => (b.textContent = "Copy resume command"), 1500);
+  });
+  $$("[data-run-stop]", root).forEach(b => b.onclick = async () => { b.disabled = true; const r = await save("skill_stop", { id: b.dataset.runStop }); if (!r.ok) return alertMsg(b, r); b.textContent = "Stopping after this pass"; });
+}
 /* Wires the menu and the star inside `root`. ctx = { rows: [sessions], info: {group: ...}, labels: [...], refresh() } */
 function wireSessMenu(root, ctx) {
   const find = id => (ctx.rows || []).find(x => x.id === id) || { id };
@@ -3121,10 +3129,7 @@ function wireSessMenu(root, ctx) {
   $$("[data-sess-copy]", root).forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.sessCopy); prefToast("Resume command copied. Paste it in any terminal."); } catch (e) { window.prompt("Copy this:", b.dataset.sessCopy); }
   });
-  $$("[data-copy]", root).forEach(b => b.onclick = async () => {  // a skill run's resume command
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
-    setTimeout(() => (b.textContent = "Copy resume command"), 1500);
-  });
+  wireSkillRuns(root);
   $$("[data-sess-changes]", root).forEach(b => b.onclick = async () => { const [sid, name] = JSON.parse(b.dataset.sessChanges); sessionChanges(sid, name, await isUnlocked()); });
   $$("[data-sess-skill]", root).forEach(b => b.onclick = () => { const [sid, name] = JSON.parse(b.dataset.sessSkill); sessionSkill(sid, name); });
   $$("[data-sess-rules]", root).forEach(b => b.onclick = () => sessionRules(b.dataset.sessRules, find(b.dataset.sessRules)));
@@ -3143,7 +3148,6 @@ function wireSessMenu(root, ctx) {
     ctx.refresh();
   });
   $$("[data-sess-trash]", root).forEach(b => b.onclick = () => sessionTrashDrawer(find(b.dataset.sessTrash), ctx));
-  $$("[data-run-stop]", root).forEach(b => b.onclick = async () => { b.disabled = true; const r = await save("skill_stop", { id: b.dataset.runStop }); if (!r.ok) return alertMsg(b, r); b.textContent = "Stopping after this pass"; });
   /* starring changes the star and moves the row to the top of its list in place: no reload, no flicker */
   $$("[data-sess-star]", root).forEach(b => b.onclick = async e => {
     e.preventDefault(); e.stopPropagation();
@@ -6081,7 +6085,7 @@ async function route(opts) {
   const bar = soft ? null : setTimeout(() => document.body.classList.add("routing"), 120);  // a slow page shows the bar
   let html;
   TID = 0; tPage = true;
-  try { html = await PAGES[key](decodeURIComponent(arg)); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); } finally { tPage = false; }
+  try { html = await PAGES[key](decodeURIComponent(arg), { soft }); } catch (e) { html = unavailable({ why: "Couldn't load this page: " + e.message }); } finally { tPage = false; }
   if (bar) { clearTimeout(bar); if (seq === renderSeq) document.body.classList.remove("routing"); }
   if (seq !== renderSeq) return;
   if (soft && html === lastHtml && location.hash === lastHash) return applyGoto(view);  // nothing changed: leave the page alone
@@ -6180,11 +6184,17 @@ const SS_MODES = [["default", "Ask first", "Asks before edits and commands"], ["
 const ssLive = st => ["working", "needs-you", "starting", "idle"].includes(st);
 const money = v => v == null ? "" : v < 0.01 ? "<$0.01" : usd(v);
 let ssPoll = null;
+/* The list's worktrees (studio_where runs git in every worktree) are read on a first load, on Refresh and the
+   10-minute refresh, and after a merge or a removed worktree sets this; any other redraw reuses them. */
+let ssWhereStale = false;
 
-PAGES.studio = async arg => {
+PAGES.studio = async (arg, opts) => {
   if (!arg) {  // the list: every session, and the worktrees they work in
     let scope = ssScope();
-    let [list, where, unlocked, sr] = await Promise.all([api("studio", { scope, ...(state.showHidden ? { hidden: "1" } : {}) }), state.repo ? api("studio_where").catch(() => null) : null, isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
+    const prev = state.sess || {};
+    const keepWhere = !!(opts && opts.soft) && !state.fresh && !ssWhereStale && !!prev.list && !!prev.where && prev.whereRepo === state.repo;
+    let [list, where, unlocked, sr] = await Promise.all([api("studio", { scope, ...(state.showHidden ? { hidden: "1" } : {}) }), !state.repo ? null : keepWhere ? prev.where : api("studio_where").catch(() => null), isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
+    ssWhereStale = false;
     if (list.available === false) return unavailable(list);
     const want = state.ssGotoSid;
     state.ssGotoSid = null;
@@ -6193,12 +6203,11 @@ PAGES.studio = async arg => {
       const row = wide && (wide.sessions || []).find(x => x.id === want);
       if (row) { scope = "all"; localStorage.setItem(SS_SCOPE_KEY, "all"); if (row.hidden) state.showHidden = true; list = state.showHidden ? wide : await api("studio", { scope: "all" }); }
     }
-    state.sess = { list, d: null, id: null, where };
+    state.sess = { list, d: null, id: null, where, whereRepo: state.repo, unlocked };
     state.sessions = list;
     if (scope === "repo") state.navSess = list.sessions || [];
-    const runs = {};
-    (sr.runs || []).forEach(j => (runs[j.session] || (runs[j.session] = [])).push(j));
-    if ((sr.runs || []).some(j => ["running", "starting"].includes(j.status))) pageTimer("sess-runs", 4000, () => { if (location.hash === "#studio") softRoute(); });
+    const runs = ssRunsBySession(sr.runs);
+    if (ssRunsBusy(sr.runs)) pageTimer("sess-runs", 4000, ssRunsTick);
     return `<div class="ss-page">${ssList(list, unlocked, runs)}${ssWorktrees(where)}</div>`;
   }
   if (arg === "new") {  // a new studio: the same screen as any session, empty, with the composer at the bottom
@@ -6261,6 +6270,22 @@ function ssShowRow(sid) {
   localStorage.setItem(SESS_STARRED_KEY, "");
   setLabelFilter([]);
 }
+/* Skill runs on the list's rows: while one runs, only the run lines under the rows are redrawn every 4 seconds. */
+const ssRunsBySession = list => { const runs = {}; (list || []).forEach(j => (runs[j.session] || (runs[j.session] = [])).push(j)); return runs; };
+const ssRunsBusy = list => (list || []).some(j => ["running", "starting"].includes(j.status));
+async function ssRunsTick() {
+  if (location.hash !== "#studio" || !(state.sess || {}).list) return;
+  const sr = await api("skillruns", { runs_only: "1" }).catch(() => null);
+  const box = $(".ss-allbox");
+  if (!sr || location.hash !== "#studio" || !box) return;
+  const runs = ssRunsBySession(sr.runs);
+  $$(".sess-row[data-sid]", box).forEach(row => {
+    const html = skillRuns(runs[row.dataset.sid], state.sess.unlocked), el = $(".skill-runs", row), main = $(".sess-main", row);
+    if (el) { if (html) morphOuter(el, html); else el.remove(); } else if (html && main) main.insertAdjacentHTML("beforeend", html);
+  });
+  wireSkillRuns(box);
+  if (ssRunsBusy(sr.runs)) pageTimer("sess-runs", 4000, ssRunsTick);
+}
 /* Old addresses of the list (#sessions, with or without a scope, and #studio/all) become #studio, keeping the scope
    and "show hidden" they asked for. */
 function ssRedirect() {
@@ -6274,13 +6299,22 @@ function ssRedirect() {
 }
 /* The Studio list: every session, studio chat or terminal, by group or by time. Sessions in no group sit under their
    repo, then their ticket or branch; ones not starred and untouched for a week fold away. */
+const ssText = s => [s.title, s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd, s.model_label, ...(s.skills || []), ...(s.issues || []), ...(s.labels || []).map(l => l.name)].join(" ").toLowerCase();
+/* the search box: every word typed is somewhere in the session's names, ticket, branch, repo and the like */
+function ssMatch(s, q) {
+  const words = String(q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const text = ssText(s);
+  return words.every(w => text.includes(w));
+}
+/* The list is drawn the same whatever is typed in the search box; ssFindInPlace then hides what doesn't match, so
+   typing never asks the server again. */
 function ssList(list, unlocked, runs) {
   const all = list.sessions || [], scope = ssScope(), f = state.ssFilter || "mine";
   const view = localStorage.getItem("lfg.ss.view") === "time" ? "time" : "group";
-  const q = (state.ssFind || "").trim().toLowerCase(), lf = liveLabelFilter(list.label_list), starredOnly = sessStarredOn();
+  const lf = liveLabelFilter(list.label_list), starredOnly = sessStarredOn();
   const isBg = s => s.kind === "background";
-  const text = s => [s.title, s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd, s.model_label, ...(s.skills || []), ...(s.issues || []), ...(s.labels || []).map(l => l.name)].join(" ").toLowerCase();
-  const hit = s => (f === "all" || (f === "background") === isBg(s)) && labelHit(s, lf) && (!q || q.split(/\s+/).every(w => text(s).includes(w)));
+  const hit = s => (f === "all" || (f === "background") === isBg(s)) && labelHit(s, lf);
   const rows = sessShown(all, hit, starredOnly);
   const ctx = { unlocked, info: list.group_info, runs, showGroup: view === "time" };
   const when = s => s.updated || s.modified || "";
@@ -6290,13 +6324,13 @@ function ssList(list, unlocked, runs) {
   const newest = (a, b) => (when(a) < when(b) ? 1 : -1);
   const listOf = ss => {
     const sorted = [...ss].sort((a, b) => (!!b.starred - !!a.starred) || (ssLive(b.state) - ssLive(a.state)) || newest(a, b));
-    const live = q ? sorted : sorted.filter(s => !quiet(s)), old = q ? [] : sorted.filter(quiet);
+    const live = sorted.filter(s => !quiet(s)), old = sorted.filter(quiet);
     return `${live.length ? box(live) : ""}${fold(old)}`;
   };
   const busyIn = nd => nd.rows.filter(sessBusy).length + nd.children.reduce((t, c) => t + busyIn(c), 0);
   const byGroup = () => {
-    const tree = groupTree(rows, list.group_info, lf, { hideEmpty: !!q || starredOnly || f === "background" });
-    const grouped = tree.length ? `<div class="ss-grp">Your groups</div><div class="ss-tree">${treeHtml(tree, { unlocked, listOf, tags: name => groupTags(name, list.group_info), open: nd => !!q || lf.length > 0 || nd.count > 0, note: nd => { const b = busyIn(nd); return b ? ` · ${n(b)} working` : ""; } })}</div>` : "";
+    const tree = groupTree(rows, list.group_info, lf, { hideEmpty: starredOnly || f === "background" });
+    const grouped = tree.length ? `<div class="ss-grp">Your groups</div><div class="ss-tree">${treeHtml(tree, { unlocked, listOf, tags: name => groupTags(name, list.group_info), open: nd => lf.length > 0 || nd.count > 0, note: nd => { const b = busyIn(nd); return b ? ` · ${n(b)} working` : ""; } })}</div>` : "";
     const byRepo = new Map();
     for (const s of rows) {
       if (s.folder) continue;  // in the group tree
@@ -6308,13 +6342,13 @@ function ssList(list, unlocked, runs) {
       g.get(sub).push(s);
     }
     const recent = s => s.starred || ssLive(s.state) || Date.now() - Date.parse(when(s)) < 3 * 864e5;
-    const sub = (repo, name, ss) => `<details class="item grp-node" ${q || byRepo.size === 1 || ss.some(recent) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(when([...ss].sort(newest)[0]))}</span>${repo !== "Outside a repo" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done</button>` : ""}</summary>${listOf(ss)}</details>`;
+    const sub = (repo, name, ss) => `<details class="item grp-node" ${byRepo.size === 1 || ss.some(recent) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(when([...ss].sort(newest)[0]))}</span>${repo !== "Outside a repo" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done</button>` : ""}</summary>${listOf(ss)}</details>`;
     const loose = [...byRepo].map(([repo, g]) => `<div class="ss-grp">${esc(repo)}</div><div class="ss-tree">${[...g].map(([name, ss]) => sub(repo, name, ss)).join("")}</div>`).join("");
     return grouped + loose;
   };
   const byTime = () => {
     const day = s => { const d = (Date.now() - new Date(when(s) || 0)) / 864e5; return ssLive(s.state) ? "Live here" : d < 1 ? "Today" : d < 7 ? "This week" : d < 31 ? "This month" : "Earlier"; };
-    const sorted = [...rows].sort(newest), shown = q ? sorted : sorted.filter(s => !quiet(s)), old = q ? [] : sorted.filter(quiet), at = {};
+    const sorted = [...rows].sort(newest), shown = sorted.filter(s => !quiet(s)), old = sorted.filter(quiet), at = {};
     shown.forEach(s => (at[day(s)] = at[day(s)] || []).push(s));
     return ["Live here", "Today", "This week", "This month", "Earlier"].filter(g => at[g]).map(g => `<div class="ss-grp">${g}</div>${box(at[g])}`).join("") + fold(old);
   };
@@ -6329,12 +6363,12 @@ function ssList(list, unlocked, runs) {
     ${nHid || state.showHidden ? `<button type="button" class="btn small ss-hid${state.showHidden ? " on" : ""}" data-ss-hidden aria-pressed="${!!state.showHidden}" title="Sessions you hid stay out of this list until you show them">Show hidden <span class="n">${n(nHid)}</span></button>` : ""}
     ${unlocked ? `<button type="button" class="btn small" data-grp-new title="Make a group to put sessions in, inside another group if you like">New group…</button>` : ""}
     <span class="seg">${chip("mine", "Yours", all.filter(s => !isBg(s)).length)}${chip("background", "Background", all.filter(isBg).length)}${chip("all", "All", all.length)}</span>
-    <span class="muted small nowrap">${plural(rows.length, "session")}${rows.length !== all.length ? ` of ${n(all.length)}` : ""}</span></div>`;
+    <span class="muted small nowrap" data-ss-count data-total="${rows.length}" data-all="${all.length}">${plural(rows.length, "session")}${rows.length !== all.length ? ` of ${n(all.length)}` : ""}</span></div>`;
   const body = rows.length || view === "group" ? (view === "group" ? byGroup() : byTime()) : "";
   return `<section class="ss-allbox"><div class="ss-all-h"><h1>Studio</h1><a class="btn primary small" href="#studio/new" data-ss-newbtn>New studio</a><input type="search" id="ss-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.ssFind || "")}" autocomplete="off">
       <span class="seg" title="Show your groups, or everything by when it was last used">${vchip("group", "By group")}${vchip("time", "By time")}</span></div>
     ${tabs}${lock}${filters}
-    <div class="ss-scrollarea">${body || empty(...sessEmptyText(all, q, starredOnly))}</div></section>`;
+    <div class="ss-scrollarea">${body || empty(...sessEmptyText(all, "", starredOnly))}<div data-ss-nomatch hidden>${empty(...sessEmptyText(all, "x", false))}</div></div></section>`;
 }
 /* "Done" on a ticket or branch: hide its sessions and delete the worktrees they used that hold nothing unsaved. */
 async function sessionDoneDrawer(repo, group, ctx) {
@@ -6356,10 +6390,38 @@ async function sessionDoneDrawer(repo, group, ctx) {
     for (const box of $$("[data-wt]:checked")) {
       const r = await save("worktree_remove", { path: box.dataset.wt });
       out.push(r.ok ? `deleted ${box.dataset.wt.split("/").pop()}` : r.why);
+      ssWhereStale = true;
     }
     msg.textContent = out.join(" · ") || "Nothing selected.";
     setTimeout(() => { closeDrawer(); ctx.refresh(); }, 1600);
   };
+}
+/* Hides the rows that don't match the search, and the groups, sections and folds left with nothing to show; opens
+   the ones that hold a match. Clearing the search closes again what it opened. */
+function ssFindInPlace(root, rows, q) {
+  const area = $(".ss-scrollarea", root);
+  if (!area) return;
+  const on = !!String(q || "").trim(), byId = new Map((rows || []).map(s => [s.id, s]));
+  let shown = 0;
+  $$(".sess-row[data-sid]", area).forEach(row => {
+    const s = byId.get(row.dataset.sid), hit = !on || !s || ssMatch(s, q);
+    row.hidden = !hit; shown += hit;
+  });
+  const has = el => $$(".sess-row[data-sid]", el).some(r => !r.hidden);
+  [...$$("details", area)].reverse().forEach(d => {  // innermost first
+    const any = has(d);
+    d.hidden = on && !any;
+    if (on && any && !d.open) { d.open = true; d._ssFindOpened = true; }
+    if (!on && d._ssFindOpened) { d.open = false; d._ssFindOpened = false; }
+  });
+  $$(".box.ss-list", area).forEach(b => { b.hidden = on && !has(b); });
+  $$(".ss-grp", area).forEach(h => { const next = h.nextElementSibling; const empty = on && !!next && !has(next); h.hidden = empty; if (next) next.hidden = empty; });
+  const none = $("[data-ss-nomatch]", area); if (none) none.hidden = !on || shown > 0;
+  const cnt = $("[data-ss-count]", root);
+  if (cnt) {
+    const total = on ? shown : +cnt.dataset.total, all = +cnt.dataset.all;
+    cnt.textContent = `${plural(total, "session")}${total !== all ? ` of ${n(all)}` : ""}`;
+  }
 }
 function wireSessList(root, list) {
   const ctx = { rows: list.sessions || [], info: list.group_info || {}, labels: list.label_list || [], refresh: () => softRoute() };
@@ -6369,7 +6431,12 @@ function wireSessList(root, list) {
   $$("[data-grp-new]", root).forEach(b => b.onclick = () => newGroupDrawer(ctx));
   $$("[data-sess-done]", root).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); const [repo, group] = JSON.parse(b.dataset.sessDone); sessionDoneDrawer(repo, group, ctx); });
   const find = $("#ss-find", root);
-  if (find && once(find, "find")) { let t; find.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { state.ssFind = find.value; softRoute(); }, 250); }); }
+  if (find && once(find, "find")) {
+    const apply = () => { state.ssFind = find.value; ssFindInPlace(root, ctx.rows, find.value); };
+    find.addEventListener("input", apply);
+    find.addEventListener("search", apply);  // Enter, and the box's own clear button
+  }
+  ssFindInPlace(root, ctx.rows, state.ssFind || "");  // a redraw draws every row: hide again what doesn't match
   wireGroupsAndLabels(root, ctx, ctx.rows);
   wireSessMenu(root, ctx);
   fillSessWork(root);
@@ -6671,7 +6738,7 @@ const SS_MODEL_BUSY = "Wait for the answer to finish, then change the model.";
 function ssModelBtn(d, unlocked) {
   const models = d.models || [];
   if (!models.length) return "";
-  const cur = d.model || "", label = cur ? d.model_label || cur : "Default";
+  const cur = d.model || "", label = d.model_label || cur || "Claude Code default";  // the row's words: a default names what it runs on
   const busy = ["working", "starting", "needs-you"].includes(d.state) || (d.pending || []).length;
   const why = !unlocked ? `Locked: run ${unlockCmd()} in your terminal to change it here` : busy ? SS_MODEL_BUSY
     : d.source === "lfg" || ssLive(d.state) ? "The model this studio runs on. A change applies from your next message."
@@ -7159,6 +7226,7 @@ function wireStudio(root) {
       if (!confirm(r.why + "\n\nThis creates a merge commit on the base branch.")) { route({ soft: true }); return; }
       r = await go(body.into ? "wt_merge_all" : "wt_merge", Object.assign({ merge_commit: true }, body), btn, "Merging…");
     }
+    ssWhereStale = true;
     if (r.ok) { const done = r.done || [r]; alert(done.length ? done.map(x => `${x.name}: ${x.commits ? `${x.commits} commit${x.commits === 1 ? "" : "s"} into ${x.into} (${x.how})` : "nothing to merge"}${x.removed ? ", removed" : ""}`).join("\n") : "Nothing to merge."); }
     route({ soft: true });
   };
@@ -7228,6 +7296,7 @@ function wireStudio(root) {
     clearTimeout(ssPoll);
     if (!/^#studio\//.test(location.hash) || state.sess.id !== S.id) return;
     const n = await api("studio_session", { id: S.id });
+    if (state.sess !== S || state.sess.d !== d) return;  // the page was drawn again meanwhile (a soft route): its own poll takes over
     if (!n || n.available === false) return;
     drawAct(n);  // steps and times change without the conversation changing
     const nsig = sigOf(n);

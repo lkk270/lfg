@@ -1149,10 +1149,10 @@ def detail(rid, root, sid, limit=None, row=False):
     from . import sessions as SS
     title = SS.display_title(sid, SS.prefs()["names"], mine.get("title"), meta["title"], _one_line(meta["first"]),
                              "New session")
-    model = chosen_model(mine, l_.model if l_ else None, meta["model"])
+    model, own = chosen_model(mine, l_.model if l_ else None, meta["model"]), models_list.own_model()
     out = {"available": True, "id": sid, "items": items, "title": title,
             "branch": (l_.branch if l_ else None) or meta["branch"], "model": model,
-            "model_label": models_list.label(model), "models": models_list.choices(models_list.own_model()),
+            "model_label": models_list.shown(model, meta["model"], own), "models": models_list.choices(own),
             "mode": (l_.mode if l_ else mine.get("mode")) or "default",
             "modes": MODES, "source": "lfg" if mine.get("lfg") else
             {"claude-desktop": "desktop", "cli": "terminal"}.get(meta["entry"], "background"),

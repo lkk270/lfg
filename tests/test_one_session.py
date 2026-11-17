@@ -41,6 +41,13 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual([m["id"] for m in M.choices()[1:]], IDS)
         self.assertEqual(M.choices("opus")[0]["label"], "Claude Code default (opus)")
 
+    def test_shown_names_what_the_default_runs_on(self):
+        from lfgcore import models as M
+        self.assertEqual(M.shown("claude-haiku-5-5", "claude-sonnet-5-5", "opus"), "Haiku 5.5")  # a pick wins
+        self.assertEqual(M.shown("", "claude-sonnet-5-5", "opus"), "Claude Code default (Sonnet 5.5)")  # last reply
+        self.assertEqual(M.shown("", "", "opus"), "Claude Code default (opus)")  # as the picker names it
+        self.assertEqual(M.shown("", "", ""), "Claude Code default")
+
     def test_review_uses_the_same_list(self):
         from lfgcore import models as M
         from lfgcore import review as R
@@ -223,7 +230,7 @@ class ModelSwitchTest(unittest.TestCase):
         self.assertEqual((d["model"], d["model_label"]), ("opus", "Opus"))  # what you picked, for its next run
         CS.set_model(self.SID, "")
         d = CS.detail("r1", self.root, self.SID)
-        self.assertEqual((d["model"], d["model_label"]), ("", "Claude Code default"))
+        self.assertEqual((d["model"], d["model_label"]), ("", "Claude Code default (Sonnet 5.5)"))  # what it ran on
 
     def test_where_carries_the_model_list(self):
         self.assertEqual([m["id"] for m in self.CS.where("r1", None)["models"]], [""] + IDS)
@@ -375,7 +382,14 @@ class StudioListTest(unittest.TestCase):
         self.CS.set_model(self.A, "claude-haiku-5-5")  # for when it continues here
         self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Haiku 5.5")
         self.CS.set_model(self.A, "")
-        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Claude Code default")
+        self.assertEqual(self.rows(scope="all")[self.A]["model_label"], "Claude Code default (Sonnet 5.5)")
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        with open(settings, "w") as f:
+            f.write('{"model": "opus"}')
+        self.CS.set_model(self.B, "")  # a studio with no reply yet: what Claude Code's settings pick
+        self.assertEqual(self.rows(scope="all")[self.B]["model_label"], "Claude Code default (opus)")
+        self.live[self.LIVE_ONLY] = self.stub(self.LIVE_ONLY, "working", "")
+        self.assertEqual(self.rows()[self.LIVE_ONLY]["model_label"], "Claude Code default (opus)")
 
     def test_a_scripted_session_is_background(self):
         sid = "55555555-0000-0000-0000-000000000000"
@@ -398,6 +412,30 @@ class StudioListTest(unittest.TestCase):
         self.assertEqual({r["id"] for r in background}, set(ids[5:]))  # the five oldest are dropped
         for sid in (self.A, self.B, self.C_, self.D):
             self.assertIn(sid, rows)
+
+    def test_a_running_studio_cannot_go_to_the_trash(self):
+        from lfgcore import settings as S
+        from lfgcore import ui
+        path = os.path.join(self.projects, self.repo1.replace("/", "-"), self.B + ".jsonl")
+        os.utime(path, (1000000000, 1000000000))  # idle for years: only the running check can refuse it
+        self.live[self.B] = self.stub(self.B, "idle")
+        with self.assertRaises(S.Invalid) as cm:
+            ui.save("session_trash", {"id": self.B})
+        self.assertIn("End it first", str(cm.exception))
+        self.assertTrue(os.path.exists(path))
+        self.live[self.B].state = "ended"
+        with mock.patch.object(self.SS.os, "rename") as mv:
+            ui.save("session_trash", {"id": self.B})
+        self.assertTrue(mv.called)
+
+    def test_done_cleans_up_studios_and_background_runs_in_the_group(self):
+        studio, run = "66666666-0000-0000-0000-000000000000", "77777777-0000-0000-0000-000000000000"
+        wt = self.repo1 + ".worktrees/feat-z"  # gone already: the group and worktree come from the path
+        self.write(studio, wt, "feat-z", "studio in a worktree", "sdk-cli")
+        self.write(run, self.repo1, "feat-z", "Read only. Call list_teams", "sdk-cli")
+        out = self.SS.group_cleanup(os.path.basename(self.repo1), "feat-z")
+        self.assertEqual(set(out["sessions"]), {studio, run})
+        self.assertEqual([w["path"] for w in out["worktrees"]], [wt])
 
 
 class ListPageTest(unittest.TestCase):
@@ -587,7 +625,7 @@ const h = one({});
 const out = { idle: pick(h), order: [h.indexOf("data-ss-model"), h.indexOf("ss-cost")],
   working: pick(one({ state: "working" })), starting: pick(one({ state: "starting" })),
   needs: pick(one({ state: "needs-you" })), asking: pick(one({ pending: [{ id: "p" }] })),
-  dflt: pick(one({ model: "", model_label: "Claude Code default" })),
+  dflt: pick(one({ model: "", model_label: "Claude Code default (Sonnet 5.5)" })),
   legacy: pick(one({ model: "opus", model_label: "Opus" })),
   term: pick(one({ source: "terminal", state: "saved", model: "claude-haiku-5-5", model_label: "Haiku 5.5" })),
   none: /data-ss-model/.test(one({ models: undefined })) };
@@ -605,7 +643,8 @@ console.log(JSON.stringify(out));
         for k in ("working", "starting", "needs", "asking"):
             self.assertTrue(out[k]["off"], k)
             self.assertEqual(out[k]["title"], busy, k)
-        self.assertEqual((out["dflt"]["label"], out["dflt"]["cur"]), ("Default ▾", [""]))
+        # the same words as the row: what the default runs on, never just "Default"
+        self.assertEqual((out["dflt"]["label"], out["dflt"]["cur"]), ("Claude Code default (Sonnet 5.5) ▾", [""]))
         # an older alias names the button and matches no option; the list is still whole
         self.assertEqual((out["legacy"]["label"], out["legacy"]["cur"], out["legacy"]["opts"]), ("Opus ▾", [], labels))
         self.assertFalse(out["term"]["off"])
@@ -651,6 +690,136 @@ console.log(JSON.stringify({ menu: menu(h), loose: (h.match(/class="btn small"[^
         self.assertTrue(out["star"])
         self.assertTrue(out["group"])
         self.assertTrue(out["busyDelete"])
+
+
+def run_app_js(test, blocks, script, pre=""):
+    """Runs `pre`, then slices of app.js (each from its start marker to its end marker), then `script` in Node;
+    returns the JSON the script prints."""
+    import json
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        test.skipTest("node isn't installed")
+    here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "lib", "lfgcore")
+    with open(os.path.join(here, "ui_assets", "app.js")) as f:
+        js = f.read()
+    code = "\n".join(js[js.index(a):js.index(b, js.index(a))] for a, b in blocks)
+    cp = subprocess.run([node, "-e", pre + "\n" + code + "\n" + script], capture_output=True, text=True)
+    if cp.returncode:
+        test.fail(cp.stderr[-2000:])
+    return json.loads(cp.stdout)
+
+
+class ListRedrawTest(unittest.TestCase):
+    """The Studio list redraws without asking the server for more than it needs."""
+
+    def test_search_filters_without_the_server_and_the_drawn_list_does_not_depend_on_it(self):
+        out = run_app_js(self, [("/* The Studio list: every session", '/* "Done" on a ticket')], r"""
+const state = {}, store = {}, localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
+const esc = s => String(s ?? ""), plural = (k, w) => k + " " + w, n = x => x, ago = () => "now", homePath = p => p;
+const ssScope = () => "repo", repoName = () => "api", unlockCmd = () => "", empty = (a, b) => a;
+const liveLabelFilter = () => [], labelHit = () => true, sessStarredOn = () => false, sessStarredCount = () => 0;
+const sessShown = (all, hit) => all.filter(hit), groupTree = () => [], treeHtml = () => "", groupTags = () => "";
+const labelFilterChips = () => "", ssLive = () => false, sessBusy = () => false, sessRow = s => `<row ${s.id}>`;
+const sessEmptyText = () => ["none", ""];
+const now = new Date().toISOString();
+const list = { sessions: [
+  { id: "a", title: "Fix the export", repo: "api", branch: "lee/ato-1-export", modified: now },
+  { id: "b", title: "Rename things", repo: "api", branch: "main", ticket: "ATO-2", modified: now }] };
+const plain = ssList(list, true, {});
+state.ssFind = "export"; const searched = ssList(list, true, {});
+const noBox = h => h.replace(/id="ss-find"[^>]*>/, "");  // the box itself carries what was typed
+console.log(JSON.stringify({ same: noBox(plain) === noBox(searched), rows: (plain.match(/<row /g) || []).length,
+  hits: list.sessions.filter(s => ssMatch(s, "export")).map(s => s.id),
+  words: list.sessions.filter(s => ssMatch(s, "ato-2 RENAME")).map(s => s.id),
+  all: list.sessions.filter(s => ssMatch(s, "  ")).map(s => s.id),
+  count: /data-ss-count/.test(plain), nomatch: /data-ss-nomatch[^>]*hidden/.test(plain) }));
+""")
+        self.assertTrue(out["same"])  # typing redraws nothing: the rows are filtered where they are
+        self.assertEqual(out["rows"], 2)
+        self.assertEqual(out["hits"], ["a"])
+        self.assertEqual(out["words"], ["b"])
+        self.assertEqual(out["all"], ["a", "b"])
+        self.assertTrue(out["count"])
+        self.assertTrue(out["nomatch"])
+
+    def test_a_soft_redraw_keeps_the_worktrees_it_read(self):
+        out = run_app_js(self, [("PAGES.studio = async", "/* tags: one look")], pre="const PAGES = {};", script=r"""
+const state = { repo: "r1" }, calls = [];
+const api = async what => {
+  calls.push(what);
+  if (what === "studio") return { sessions: [] };
+  return what === "skillruns" ? { runs: [] } : { branch: "main", n: calls.length };
+};
+const ssScope = () => "repo", isUnlocked = async () => true, ssList = () => "", ssWorktrees = () => "";
+const pageTimer = () => {}, location = { hash: "#studio" };
+const ssRunsBySession = () => ({}), ssRunsBusy = () => false, ssRunsTick = () => {};
+let ssWhereStale = false;
+(async () => {
+  const out = {};
+  const where = async soft => {
+    calls.length = 0; await PAGES.studio("", { soft });
+    return calls.filter(c => c === "studio_where").length;
+  };
+  out.first = await where(false);
+  out.soft = await where(true);
+  const kept = state.sess.where;
+  out.again = await where(true);
+  out.kept = state.sess.where === kept;
+  state.fresh = true; out.fresh = await where(true); state.fresh = false;  // Refresh, or the 10-minute refresh
+  ssWhereStale = true; out.stale = await where(true);                      // after a merge or a removed worktree
+  out.staleAfter = await where(true);
+  state.repo = "r2"; out.otherRepo = await where(true);
+  out.button = await where(false);
+  console.log(JSON.stringify(out));
+})();
+""")
+        self.assertEqual(out, {"first": 1, "soft": 0, "again": 0, "kept": True, "fresh": 1, "stale": 1,
+                               "staleAfter": 0, "otherRepo": 1, "button": 1})
+
+
+class OpenSessionPollTest(unittest.TestCase):
+    """The open session's poll: a poll still in flight when the page was drawn again does nothing."""
+
+    def test_a_poll_from_a_replaced_page_does_not_touch_the_header(self):
+        import json
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node isn't installed")
+        here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "lib", "lfgcore")
+        with open(os.path.join(here, "ui_assets", "app.js")) as f:
+            js = f.read()
+        start = js.index("  async function refresh() {\n    clearTimeout(ssPoll);")
+        body = js[start:js.index("  if (ssLive(d.state)) ssPoll = setTimeout(refresh, 1200);", start)]
+        script = r"""
+let ssPoll = null, sig = "old", heads = [];
+const location = { hash: "#studio/a" }, setTimeout = () => 0, clearTimeout = () => {};
+const conv = { classList: { toggle() {} }, scrollTop: 0, scrollHeight: 0 }, head = {}, send = null;
+const morph = (el, html) => { if (el === head) heads.push(html); }, ssConv = () => "", ssHead = x => x.row.group;
+const wireConv = () => {}, wireHead = () => {}, wireOut = () => {}, loadCtx = () => {}, drawAct = () => {};
+const atBottom = () => false, busyBg = () => false, ssLive = () => false, ssSendLabel = () => "";
+const sigOf = n => n.state;
+let answer; const api = () => new Promise(r => { answer = r; });
+const d = { state: "idle", row: { group: "old group" } }, S = { id: "a", d };
+const state = { sess: S };
+""" + body + r"""
+(async () => {
+  const p = refresh();
+  state.sess = { id: "a", d: { state: "idle", row: { group: "new group" } } };  // Change group soft-routed meanwhile
+  answer({ state: "working" }); await p;
+  const out = { replaced: heads.slice(), oldRow: d.row.group, oldState: d.state };
+  state.sess = S; heads = []; const q = refresh(); answer({ state: "ended" }); await q;
+  out.same = heads.slice();
+  console.log(JSON.stringify(out));
+})();
+"""
+        out = json.loads(subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(out["replaced"], [])  # no stale header drawn
+        self.assertEqual((out["oldRow"], out["oldState"]), ("old group", "idle"))
+        self.assertEqual(out["same"], ["old group"])  # a poll for the page still shown draws as before
 
 
 class SessionRowOfTest(unittest.TestCase):

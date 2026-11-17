@@ -31,6 +31,17 @@ def label(model_id):
     return " ".join(model_id.removeprefix("claude-").replace("-", " ").split())
 
 
+def shown(model_id, said="", own=""):
+    """The name a session's model goes by: the picked model's, else Claude Code's default with what it runs on, which
+    is the model of its last reply (`said`), else the one Claude Code's settings pick (`own`, named as the picker
+    names it)."""
+    if model_id:
+        return label(model_id)
+    if said:
+        return "Claude Code default (%s)" % label(said)
+    return "Claude Code default" + (" (%s)" % own if own else "")
+
+
 def valid(model_id):
     """True for "", a listed model id or an older alias."""
     return not model_id or model_id in dict(MODELS) or model_id in ALIASES
