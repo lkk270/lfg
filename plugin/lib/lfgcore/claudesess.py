@@ -423,6 +423,24 @@ def _summary_cache():
     return C.read_json(C.lfg_path("sessions", "list-cache.json"), {}) or {}
 
 
+def summary_for(cache, p, root, st=None):
+    """(the cached summary of one transcript, True when it was rebuilt). Keyed on version, mtime and size, so a hit
+    costs one stat. `cache` is updated in place; the caller writes it."""
+    st = st or os.stat(p)
+    key = "v%d:%s:%d:%d" % (SUMMARY_VERSION, p, st.st_mtime, st.st_size)  # a new version rebuilds them all
+    s = cache.get(p)
+    if s and s.get("key") == key:
+        return s, False
+    items, meta = read(p, limit=1)
+    s = {"key": key, "title": meta["title"] or _title(meta["first"]) or "Untitled session",
+         "worktree_name": _wt_name(root, meta["cwd"]),
+         "branch": meta["branch"], "entry": meta["entry"], "model": meta["model"], "skills": meta["skills"],
+         "updated": meta["updated"], "cost": _cost(p), "worktree": "-worktrees-" in os.path.dirname(p),
+         "files": len(meta["files"]), "issues": meta["issues"]}
+    cache[p] = s
+    return s, True
+
+
 def listing(rid, root):
     """Every Claude Code session for this project (its checkout and LFG's worktrees of it), newest first, with what
     each is about, where it came from, its branch, cost, and whether it's live here right now."""
@@ -438,16 +456,8 @@ def listing(rid, root):
               for sid, names in prefs["labels"].items()}
     for p in sorted(files, key=lambda p: -os.path.getmtime(p))[:200]:
         st = os.stat(p)
-        key = "v%d:%s:%d:%d" % (SUMMARY_VERSION, p, st.st_mtime, st.st_size)  # a new version rebuilds them all
-        s = cache.get(p)
-        if not s or s.get("key") != key:
-            items, meta = read(p, limit=1)
-            s = {"key": key, "title": meta["title"] or _title(meta["first"]) or "Untitled session",
-                 "worktree_name": _wt_name(root, meta["cwd"]),
-                 "branch": meta["branch"], "entry": meta["entry"], "model": meta["model"], "skills": meta["skills"],
-                 "updated": meta["updated"], "cost": _cost(p), "worktree": "-worktrees-" in os.path.dirname(p),
-                 "files": len(meta["files"]), "issues": meta["issues"]}
-            cache[p], changed = s, True
+        s, fresh = summary_for(cache, p, root, st)
+        changed = changed or fresh
         sid = os.path.basename(p)[:-6]
         live = _LIVE.get(sid)
         mine = idx.get(sid) or {}

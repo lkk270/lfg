@@ -273,11 +273,12 @@ def group_info():
                 "tickets": list(p["group_tickets"].get(g, []))} for g in sorted(_group_set(p))}
 
 
-def listing(days=None, scripted=False, hidden=False, only=None, loose=False, also=()):
+def listing(days=None, scripted=False, hidden=False, only=None, loose=False, also=(), with_path=False):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
     by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`. `only`: a main
     checkout; keeps the sessions that ran in it or one of its worktrees. `loose`: only the sessions started outside
     any git repo (your home folder, ~/code, a scratch folder), whatever `only` says. `loose_count` counts those.
+    `with_path`: keep each row's transcript path, size and mtime.
     `also`: ids of scripted sessions to show anyway (LFG's own studios run as `claude -p`)."""
     p = prefs()
     want = os.path.realpath(only) if only else ""
@@ -320,7 +321,7 @@ def listing(days=None, scripted=False, hidden=False, only=None, loose=False, als
             or ("(no branch)" if r["root"] else "Not in a repo")
         r["resume"] = resume_command(r)
         r["modified"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(s["mtime"]))
-        for k in ("path", "size", "mtime", "sidechain_only"):
+        for k in ("sidechain_only",) if with_path else ("path", "size", "mtime", "sidechain_only"):
             r.pop(k, None)
         rows.append(r)
     rows.sort(key=lambda r: r["modified"], reverse=True)

@@ -1,9 +1,13 @@
 """One list request for Studio: the Sessions page's rows plus what only a running studio knows (live state, model,
 kind). Opening a row costs nothing extra: the list is the Sessions listing joined with the live studios."""
+import os
+
 from . import claudesess as CS
+from . import common as C
 from . import models
 from . import sessions as SS
 
+SUMMARISED = 300  # rows (newest first) whose transcript summary is built or refreshed per request
 SCOPES = ("repo", "all", "loose")
 STATE = {"starting": "working", "working": "working", "needs-you": "needs-you", "idle": "idle", "ended": "ended"}
 ENTRY_KIND = {"cli": "terminal", "claude-desktop": "desktop"}
@@ -14,12 +18,6 @@ def _kind(row, mine):
     if mine.get("lfg"):
         return "studio"
     return ENTRY_KIND.get(row.get("entrypoint"), "background")
-
-
-def _summaries():
-    """What the old Studio list kept per transcript (model, skills, issues), read from its cache, never re-parsed."""
-    cache = CS._summary_cache()
-    return {k.rsplit("/", 1)[-1][:-6]: v for k, v in cache.items() if k.endswith(".jsonl")}
 
 
 def _prs(rid):
@@ -36,6 +34,7 @@ def _pr_of(by_branch, branch):
 
 
 def _row(row, idx, live, summary, prs):
+    row = {k: v for k, v in row.items() if k not in ("path", "size", "mtime")}
     sid = row["id"]
     mine, lv = idx.get(sid) or {}, live.get(sid)
     kind = _kind(row, mine)
@@ -44,7 +43,7 @@ def _row(row, idx, live, summary, prs):
                 live=bool(lv), model=model, model_label=models.label(model),
                 title=mine.get("title") or row.get("title") or row.get("name") or "Untitled session",
                 mode=lv.mode if lv else mine.get("mode"), pr=_pr_of(prs, row.get("branch")),
-                skills=summary.get("skills") or [], issues=summary.get("issues") or [],
+                files=summary.get("files") or 0, skills=summary.get("skills") or [], issues=summary.get("issues") or [],
                 updated=row.get("modified"), via="pr" if row.get("via_pr") else "ticket" if row.get("via_ticket")
                 else "", worktree_name=row.get("worktree") or None)
 
@@ -66,14 +65,23 @@ def listing(rid, root, hidden=False, scope="repo"):
     if scope not in SCOPES:
         scope = "repo"
     idx = CS._index()
-    # LFG's own studios run as `claude -p` (sdk-cli), which the Sessions page hides as scripted: ask for them by id
-    studios = {sid for sid, e in idx.items() if isinstance(e, dict) and e.get("lfg")}
+    # scripted (`claude -p`) sessions too: LFG's own studios and its background runs
     only = root if scope == "repo" and root else None
-    base = SS.listing(hidden=hidden, also=studios, only=only, loose=scope == "loose")
+    base = SS.listing(hidden=hidden, scripted=True, with_path=True, only=only, loose=scope == "loose")
     if scope == "repo" and not root:
         base = dict(base, sessions=[])
-    live, summaries, prs = dict(CS._LIVE), _summaries(), _prs(rid)
-    rows = [_row(r, idx, live, summaries.get(r["id"], {}), prs) for r in base["sessions"]]
+    live, prs, cache, fresh = dict(CS._LIVE), _prs(rid), CS._summary_cache(), False
+    rows = []
+    for n, r in enumerate(base["sessions"]):
+        if n >= SUMMARISED:  # older rows only use a summary that is already cached
+            summary, built = cache.get(r["path"]) or {}, False
+        else:
+            summary, built = CS.summary_for(cache, r["path"], r.get("root") or "")
+        fresh = fresh or built
+        rows.append(_row(r, idx, live, summary, prs))
+    if fresh:
+        C.ensure_dir(C.lfg_path("sessions"))
+        C.write_json(C.lfg_path("sessions", "list-cache.json"), {k: v for k, v in cache.items() if os.path.exists(k)})
     seen = {r["id"] for r in rows}
     p = SS.prefs()
     labels = {sid: [{"name": n, "color": p["label_colors"].get(n.lower(), "gray")} for n in names]

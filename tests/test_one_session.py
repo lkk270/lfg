@@ -161,10 +161,6 @@ class ModelSwitchTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-5-5")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StudioListTest(unittest.TestCase):
     A, B, C_, D = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2, 3, 4))
     LIVE_ONLY = "99999999-0000-0000-0000-000000000000"
@@ -268,3 +264,35 @@ class StudioListTest(unittest.TestCase):
         d = SL.listing("r1", self.repo1)
         for k in ("sessions", "group_info", "label_list", "models", "modes"):
             self.assertIn(k, d)
+
+    def append(self, sid, cwd, *events):
+        path = os.path.join(self.projects, cwd.replace("/", "-"), sid + ".jsonl")
+        with open(path, "a") as f:
+            f.write("\n".join(self.json.dumps(e) for e in events) + "\n")
+
+    def test_model_skills_files_and_issues_come_from_a_fresh_transcript(self):
+        self.append(self.A, self.repo1, {"type": "assistant", "cwd": self.repo1, "message": {
+            "model": "claude-sonnet-5-5", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": self.repo1 + "/a.py"}},
+                {"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": self.repo1 + "/b.py"}}]}},
+                    {"type": "user", "cwd": self.repo1, "message": {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+                        {"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}})
+        row = self.rows(scope="all")[self.A]
+        self.assertEqual((row["model"], row["model_label"]), ("claude-sonnet-5-5", "Sonnet 5.5"))
+        self.assertEqual(row["files"], 2)
+        for k in ("skills", "issues"):
+            self.assertIn(k, row)
+        self.append(self.A, self.repo1, {"type": "assistant", "cwd": self.repo1, "message": {
+            "model": "claude-haiku-5-5", "content": []}})
+        self.assertEqual(self.rows(scope="all")[self.A]["model"], "claude-haiku-5-5")  # a changed file is re-read
+
+    def test_a_scripted_session_is_background(self):
+        sid = "55555555-0000-0000-0000-000000000000"
+        self.write(sid, self.repo1, "main", "Read only. Call list_teams", "sdk-cli")
+        row = self.rows(scope="all")[sid]
+        self.assertEqual((row["kind"], row["source"]), ("background", "background"))
+
+
+if __name__ == "__main__":
+    unittest.main()
