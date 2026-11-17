@@ -15,6 +15,7 @@ import shutil
 import time
 
 from . import common as C
+from . import models as models_list
 
 # ---------------------------------------------------------------- edit key
 
@@ -71,8 +72,7 @@ FIELDS = [
      (1024, 65535)),
     ("review.model", "Model for reviews", "choice", "The model every review, re-review, chat and fix runs on. "
                                                     "Default is whatever Claude Code itself uses.",
-     ("", "claude-fable-5-2", "claude-fable-5-1", "claude-mythos-5-2",
-      "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")),
+     ("",) + tuple(i for i, _ in models_list.MODELS)),
     ("ui.port", "Dashboard port", "int", "Used the next time you run lfg ui.", (1024, 65535)),
     ("replies.lfg_tag", "Say whether LFG was used", "bool", "In LFG repos, Claude starts each reply with the LFG "
                                                            "skill or tools it used, or why it didn't use LFG.", None),

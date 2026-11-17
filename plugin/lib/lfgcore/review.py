@@ -14,6 +14,7 @@ import re
 import time
 
 from . import common as C
+from . import models as models_list
 from . import sessions as SS
 
 SEVERITIES = ("blocker", "major", "minor", "nitpick", "note")
@@ -1099,16 +1100,12 @@ def _alive(pid):
         return False
 
 
-MODELS = [("claude-fable-5-2", "Fable 5.2"), ("claude-fable-5-1", "Fable 5.1"),
-          ("claude-mythos-5-2", "Mythos 5.2"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"),
-          ("claude-haiku-5-5", "Haiku 5.5")]
+MODELS = models_list.MODELS
 
 
 def models():
     """The models a review can run on, with names a person knows. "" is Claude Code's own default (its settings)."""
-    own = (C.read_json(os.path.join(C.HOME, ".claude", "settings.json"), {}) or {}).get("model") or ""
-    return [{"id": "", "label": "Claude Code default" + (" (%s)" % own if own else "")}] + [
-        {"id": i, "label": lb} for i, lb in MODELS]
+    return models_list.choices(models_list.own_model())
 
 
 def chosen_model():

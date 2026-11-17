@@ -6169,7 +6169,7 @@ class ReviewTest(unittest.TestCase):
         with self.assertRaises(ui.S.Invalid):
             ui.save("review_model", {"model": "gpt-5"})
         self.assertEqual(R.models()[1], {"id": "claude-fable-5-2", "label": "Fable 5.2"})
-        self.assertEqual(R.models()[2], {"id": "claude-fable-5-1", "label": "Fable 5.1"})  # 5.1 stays selectable
+        self.assertEqual(R.models()[3], {"id": "claude-fable-5-1", "label": "Fable 5.1"})  # 5.1 stays selectable
 
     def test_fable_5_2_is_a_choice_in_reviews_and_settings_and_is_priced(self):
         self.assertIn("claude-fable-5-2", [m["id"] for m in R.models()])

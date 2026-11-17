@@ -24,12 +24,12 @@ import threading
 import uuid
 
 from . import common as C
+from . import models as models_list
 from . import notify as N
 from . import sessions as US
 
 PROJECTS = os.path.join(C.HOME, ".claude", "projects")
 MODES = {"default": "Ask before edits", "acceptEdits": "Accept edits", "plan": "Plan only"}
-MODELS = ("opus", "sonnet", "haiku")
 MAX_ITEMS = 600
 SUMMARY_VERSION = 7
 _LIVE, _LOCK = {}, threading.RLock()
@@ -467,8 +467,8 @@ def listing(rid, root):
     if changed:
         C.ensure_dir(C.lfg_path("sessions"))
         C.write_json(C.lfg_path("sessions", "list-cache.json"), {k: v for k, v in cache.items() if os.path.exists(k)})
-    return {"sessions": out, "modes": MODES, "models": list(MODELS), "group_info": SS.group_info(),
-            "label_list": SS.label_list()}
+    return {"sessions": out, "modes": MODES, "models": models_list.choices(models_list.own_model()),
+            "group_info": SS.group_info(), "label_list": SS.label_list()}
 
 
 LFG_PROMPTS = [  # LFG's own background runs, by how their prompt starts: a readable title instead
@@ -908,7 +908,8 @@ def start(rid, root, text, model=None, mode="default", title="", where=None, att
     if not C.which("claude"):
         raise Invalid("Claude Code (claude) isn't on PATH")
     text = _check(text, attachments)
-    model = model if model in MODELS else None  # none: Claude Code's own default, as the project's setup decides
+    # none: Claude Code's own default, as the project's setup decides
+    model = model if model and models_list.valid(model) else None
     mode = mode if mode in MODES else "default"
     sid = str(uuid.uuid4())
     title = _one_line(title or text or "Image")[:90]
