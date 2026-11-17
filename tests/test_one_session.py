@@ -163,3 +163,108 @@ class ModelSwitchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StudioListTest(unittest.TestCase):
+    A, B, C_, D = ("%08d-0000-0000-0000-000000000000" % i for i in (1, 2, 3, 4))
+    LIVE_ONLY = "99999999-0000-0000-0000-000000000000"
+
+    def setUp(self):
+        import json
+        from lfgcore import claudesess as CS
+        from lfgcore import sessions as SS
+        self.CS, self.SS, self.json = CS, SS, json
+        self.home = tempfile.mkdtemp(prefix="lfg-sl-home-")
+        self.lfg = tempfile.mkdtemp(prefix="lfg-sl-lfg-")
+        self.projects = os.path.join(self.home, ".claude", "projects")
+        self.live = {}
+        for p in (mock.patch.object(CS.C, "HOME", self.home), mock.patch.object(CS.C, "LFG_HOME", self.lfg),
+                  mock.patch.object(CS, "PROJECTS", self.projects), mock.patch.object(SS, "PROJECTS", self.projects),
+                  mock.patch.object(CS, "_LIVE", self.live)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.repo1, self.repo2, self.loose = (os.path.realpath(tempfile.mkdtemp(prefix="lfg-sl-r-")) for _ in range(3))
+        for r in (self.repo1, self.repo2):
+            os.makedirs(os.path.join(r, ".git"))
+        self.write(self.A, self.repo1, "feat-a", "terminal prompt", "cli")
+        self.write(self.B, self.repo1, "feat-b", "studio prompt", "sdk-cli")
+        self.write(self.C_, self.repo2, "main", "other repo prompt", "claude-desktop")
+        self.write(self.D, self.loose, "", "loose prompt", "cli")
+        idx = {self.B: {"lfg": True, "model": "opus", "title": "Studio chat"}}
+        os.makedirs(os.path.join(self.lfg, "sessions"), exist_ok=True)
+        with open(os.path.join(self.lfg, "sessions", "index.json"), "w") as f:
+            f.write(json.dumps(idx))
+
+    def write(self, sid, cwd, branch, prompt, entry):
+        d = os.path.join(self.projects, cwd.replace("/", "-"))
+        os.makedirs(d, exist_ok=True)
+        ev = {"type": "user", "cwd": cwd, "gitBranch": branch, "entrypoint": entry,
+              "timestamp": "2026-10-19T10:00:00Z", "message": {"role": "user", "content": prompt}}
+        with open(os.path.join(d, sid + ".jsonl"), "w") as f:
+            f.write(self.json.dumps(ev) + "\n")
+
+    def stub(self, sid, state="idle", model="claude-x-9", rid="r1"):
+        return mock.MagicMock(sid=sid, rid=rid, state=state, model=model, mode="default", title="Fresh chat",
+                              branch="main", started=1.0)
+
+    def rows(self, **kw):
+        from lfgcore import studiolist as SL
+        return {r["id"]: r for r in SL.listing("r1", self.repo1, **kw)["sessions"]}
+
+    def test_kind_and_model_and_old_keys(self):
+        rows = self.rows(scope="all")
+        self.assertEqual(rows[self.A]["kind"], "terminal")
+        self.assertEqual(rows[self.B]["kind"], "studio")
+        self.assertEqual(rows[self.C_]["kind"], "desktop")
+        self.assertEqual((rows[self.B]["model"], rows[self.B]["model_label"]), ("opus", "Opus"))
+        self.assertEqual(rows[self.A]["state"], "saved")
+        self.assertFalse(rows[self.A]["live"])
+        self.assertEqual(rows[self.B]["title"], "Studio chat")
+        for k in ("id", "name", "repo", "cwd", "resume", "starred", "hidden", "folder", "via_pr", "via_ticket",
+                  "labels", "branch", "worktree", "modified", "prompts", "loose", "source", "skills", "issues"):
+            self.assertIn(k, rows[self.B], k)
+        self.assertEqual(rows[self.B]["source"], "lfg")
+        self.assertEqual(rows[self.A]["source"], "terminal")
+
+    def test_live_state_and_unknown_model(self):
+        self.live[self.A] = self.stub(self.A, "needs-you", "claude-x-9")
+        self.live[self.B] = self.stub(self.B, "starting", "")
+        rows = self.rows(scope="all")
+        self.assertEqual((rows[self.A]["state"], rows[self.A]["live"]), ("needs-you", True))
+        self.assertEqual(rows[self.A]["model_label"], "x 9")
+        self.assertEqual(rows[self.B]["state"], "working")
+        self.assertEqual(rows[self.B]["model"], "opus")  # the index wins
+
+    def test_scopes(self):
+        self.assertEqual(set(self.rows()), {self.A, self.B})
+        self.assertEqual(set(self.rows(scope="repo")), {self.A, self.B})
+        self.assertEqual(set(self.rows(scope="all")), {self.A, self.B, self.C_, self.D})
+        self.assertEqual(set(self.rows(scope="loose")), {self.D})
+
+    def test_hidden(self):
+        os.makedirs(os.path.join(self.lfg, "state"), exist_ok=True)
+        with open(os.path.join(self.lfg, "state", "sessions.json"), "w") as f:
+            f.write(self.json.dumps({"hidden": [self.A], "starred": [self.B], "folders": {"Epic": [self.B]},
+                                     "labels": {self.B: ["bug"]}}))
+        self.assertNotIn(self.A, self.rows(scope="all"))
+        rows = self.rows(scope="all", hidden=True)
+        self.assertTrue(rows[self.A]["hidden"])
+        self.assertTrue(rows[self.B]["starred"])
+        self.assertEqual(rows[self.B]["folder"], "Epic")
+        self.assertEqual([x["name"] for x in rows[self.B]["labels"]], ["bug"])
+
+    def test_live_studio_without_a_transcript_comes_first(self):
+        from lfgcore import studiolist as SL
+        self.live[self.LIVE_ONLY] = self.stub(self.LIVE_ONLY, "working")
+        self.live["other"] = self.stub("other", "idle", rid="r2")
+        out = SL.listing("r1", self.repo1)["sessions"]
+        self.assertEqual(out[0]["id"], self.LIVE_ONLY)
+        self.assertEqual((out[0]["kind"], out[0]["state"], out[0]["live"]), ("studio", "working", True))
+        self.assertEqual(out[0]["model_label"], "x 9")
+        self.assertNotIn("other", [r["id"] for r in out])
+
+    def test_payload_keeps_the_old_keys(self):
+        from lfgcore import studiolist as SL
+        d = SL.listing("r1", self.repo1)
+        for k in ("sessions", "group_info", "label_list", "models", "modes"):
+            self.assertIn(k, d)
