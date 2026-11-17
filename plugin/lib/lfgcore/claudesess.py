@@ -501,6 +501,11 @@ def _one_line(text):
 class Live:
     """One running `claude -p` in stream-json mode, kept open by `lfg ui` between your messages."""
 
+    # Claude Code answers a `set_model` control request, and the next reply uses the new model (probe:
+    # docs/superpowers/plans/2026-11-16-set-model-probe.md). When False, the model changes by restarting the process.
+    _native_set_model = True
+    model_pending = False
+
     def __init__(self, sid, rid, root, model, mode, title, resume, fork_of=None, fork_at=None, review=None):
         self.sid, self.rid, self.root, self.model, self.mode, self.title = sid, rid, root, model, mode, title
         self.state, self.pending, self.allowed = "starting", {}, set()
@@ -703,6 +708,8 @@ class Live:
     def say(self, text, attachments=None, turn=None):
         """`turn`: what a message about a review is ({"pr", "n", "fid", "qid", "q", "edits"}), kept until its reply."""
         content = _content(text, attachments)
+        if self.model_pending and self.state == "idle" and not self.pending:
+            return self._restart_with_model().say(text, attachments, turn)
         if self.state in ("working", "needs-you") or self.pending:
             self.queued.append(content)  # Claude is mid-turn or waiting on you: it goes in when this turn ends
             self._qmeta.append(turn)
@@ -762,6 +769,31 @@ class Live:
                      "request": {"subtype": "set_permission_mode", "mode": mode}})
         self.mode = mode
         _remember(self.sid, mode=mode)
+
+    def set_model(self, model):
+        """Change the model for the next messages: at once when Claude Code supports it, else the process restarts
+        with it when the next message is sent."""
+        if self.state in ("working", "starting", "needs-you") or self.pending:
+            raise Invalid("Wait for the answer to finish, then change the model.")
+        if not models_list.valid(model):
+            raise Invalid("not a model")
+        if model and self._native_set_model:
+            self._write({"type": "control_request", "request_id": "model-" + uuid.uuid4().hex[:8],
+                         "request": {"subtype": "set_model", "model": model}})
+            self.model_pending = False
+        else:  # "" is Claude Code's own default, which has no name to send
+            self.model_pending = True
+        self.model = model or None
+        _remember(self.sid, model=self.model)
+
+    def _restart_with_model(self):
+        """Stop this process and resume the session in a new one that starts with the stored model."""
+        self.stop()
+        with _LOCK:
+            new = _LIVE[self.sid] = Live(self.sid, self.rid, self.root, self.model, self.mode, self.title,
+                                         resume=True, review=self.review)
+        self.model_pending = False
+        return new
 
     def _send_queued(self, content):
         self.error = None
@@ -899,6 +931,18 @@ def image(sid, root, line, index):
                 return {"src": "data:%s;base64,%s" % (src["media_type"], src["data"])}
             break
     raise Invalid("that image isn't in the transcript")
+
+
+def set_model(sid, model):
+    """Change a session's model: on the running one, or for the next time a saved one is continued."""
+    if not models_list.valid(model):
+        raise Invalid("not a model")
+    l_ = _LIVE.get(sid)
+    if l_ and l_.state != "ended":
+        l_.set_model(model)
+    else:
+        _remember(sid, model=model or None)
+    return {"id": sid, "model": model}
 
 
 def start(rid, root, text, model=None, mode="default", title="", where=None, attachments=None):

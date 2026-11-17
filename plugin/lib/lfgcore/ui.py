@@ -856,6 +856,8 @@ def session_action(what, body):
         if what == "sess_mode":
             CS.live(sid).set_mode(str(body.get("mode") or ""))
             return {"saved": True}
+        if what == "sess_model":
+            return CS.set_model(sid, str(body.get("model") or ""))
         if what == "sess_interrupt":
             CS.live(sid).interrupt()
             return {"saved": True}
