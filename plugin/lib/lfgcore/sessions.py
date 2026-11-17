@@ -809,9 +809,9 @@ def delete_label(name):
 # Requests are priced as transcripts are read and the dollars kept in the usage index: after changing a price, bump
 # USAGE_V so every transcript is priced again.
 # Fable 5.2 ($8 in, $40 out, $0.20 cache read) is from Anthropic's pricing page
-# (platform.claude.com/docs/en/about-claude/pricing).
+# (platform.claude.com/docs/en/about-claude/pricing). Mythos 5.2 is the same model at the same prices.
 PRICES = {
-    "claude-fable-5-2": (8.0, 40.0, 0.20),
+    "claude-fable-5-2": (8.0, 40.0, 0.20), "claude-mythos-5-2": (8.0, 40.0, 0.20),
     "claude-fable-5-1": (10.0, 50.0, 0.25), "claude-mythos-5-1": (10.0, 50.0, 0.25),
     "claude-fable-5": (10.0, 50.0, 1.00), "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-opus-5": (5.0, 25.0, 0.50),
     "claude-opus-4-8": (5.0, 25.0, 0.50), "claude-opus-4-7": (5.0, 25.0, 0.50), "claude-opus-4-6": (5.0, 25.0, 0.50),
@@ -822,7 +822,7 @@ PRICES = {
 # Models whose price goes up when one request's prompt (input + cache read + cache write) is over a size.
 LONG_PROMPT = {"claude-haiku-5-5": (100_000, (0.50, 2.50, 0.05))}
 FIELDS = ("input", "output", "cache_read", "cache_write_5m", "cache_write_1h")
-USAGE_V = 5  # 5: Fable 5.2 got a price; earlier transcripts of it were kept unpriced
+USAGE_V = 6  # 6: Mythos 5.2 got a price (5: Fable 5.2); earlier transcripts of them were kept unpriced
 
 
 def cost(model, t):

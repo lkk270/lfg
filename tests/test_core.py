@@ -4215,6 +4215,14 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, cache_write_5m=1000000)), 10.0)
         self.assertEqual(self.SS.cost("claude-fable-5-2", dict(z, cache_write_1h=1000000)), 16.0)
 
+    def test_mythos_5_2_is_priced_like_fable_5_2(self):
+        z = dict.fromkeys(self.SS.FIELDS, 0)
+        self.assertEqual(self.SS.cost("claude-mythos-5-2", dict(z, input=1000000)), 8.0)
+        self.assertEqual(self.SS.cost("claude-mythos-5-2", dict(z, output=1000000)), 40.0)
+        self.assertEqual(self.SS.cost("claude-mythos-5-2", dict(z, cache_read=1000000)), 0.2)
+        self.assertEqual(self.SS.cost("claude-mythos-5-2", dict(z, cache_write_5m=1000000)), 10.0)
+        self.assertEqual(self.SS.cost("claude-mythos-5-2", dict(z, cache_write_1h=1000000)), 16.0)
+
     def test_haiku_5_5_prompts_over_100k_cost_more_each_on_its_own(self):
         # Two requests: 60K in (cheap tier) and 150K in (long tier). Together the day is over 100K, but only the
         # second request is.
@@ -6169,6 +6177,18 @@ class ReviewTest(unittest.TestCase):
         self.assertIn("claude-fable-5-2", choices)
         self.assertIn("claude-fable-5-1", choices)
         self.assertEqual(ui.save("review_model", {"model": "claude-fable-5-2"})["changed"], ["review.model"])
+        self.addCleanup(ui.save, "review_model", {"model": ""})  # the config is shared with the other tests
+
+    def test_mythos_5_2_is_a_choice_in_reviews_and_settings_and_the_others_stay(self):
+        ids = [m["id"] for m in R.models()]
+        self.assertIn("claude-mythos-5-2", ids)
+        self.assertEqual(R.models()[ids.index("claude-mythos-5-2")]["label"], "Mythos 5.2")
+        for keep in ("claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5",
+                     "claude-haiku-5-5"):
+            self.assertIn(keep, ids)
+        choices = next(f[4] for f in ui.S.FIELDS if f[0] == "review.model")
+        self.assertIn("claude-mythos-5-2", choices)
+        self.assertEqual(ui.save("review_model", {"model": "claude-mythos-5-2"})["changed"], ["review.model"])
         self.addCleanup(ui.save, "review_model", {"model": ""})  # the config is shared with the other tests
 
     def test_a_backend_and_frontend_reviewed_together_get_a_review_each_linked_and_resumable(self):
