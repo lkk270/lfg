@@ -401,6 +401,10 @@ def api(view, q):
             BR.maybe_summarize(key, data=data)  # in the background: the page never waits for it
         return data
     rid = _rid(q)
+    if view == "studio" and not rid:  # no repo picked: the list still has every session, or those outside a repo
+        from . import studiolist as SL
+        return SL.listing("", None, hidden=_arg(q, "hidden") in ("1", "true"),
+                          scope="loose" if _arg(q, "scope") == "loose" else "all")
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
                                            "on the first session."}

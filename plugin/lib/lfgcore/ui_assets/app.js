@@ -636,7 +636,7 @@ function wireOnboarding(root) {
     if (r.ok) {
       state.pages = r.pages || NAV.map(p => p[0]);
       renderNav("studio");
-      state.pendingTour = "page-sessions";
+      state.pendingTour = "page-studio";
       location.hash = "#studio";
     } else {
       saveBtn.disabled = false; saveBtn.textContent = "Start with these";
@@ -649,7 +649,7 @@ function wireOnboarding(root) {
     if (r.ok) {
       state.pages = NAV.map(p => p[0]);
       renderNav("studio");
-      state.pendingTour = "page-sessions";
+      state.pendingTour = "page-studio";
       location.hash = "#studio";
     } else {
       skipBtn.disabled = false;
@@ -1506,7 +1506,7 @@ async function offerTours() {
 }
 
 // ------------------------------------------------------------------ pages
-const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["corrections", "Corrections"], ["home", "Home"], ["studio", "Studio"], ["sessions", "Sessions"], ["continue", "Where you left off"], ["todos", "Todos"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["insights", "Insights"], ["docs", "Docs"],
+const NAV = [["prefs", "Preferences"], ["talk", "How Claude talks"], ["corrections", "Corrections"], ["home", "Home"], ["studio", "Studio"], ["continue", "Where you left off"], ["todos", "Todos"], ["environment", "Environment"], ["runs", "Runs"], ["issues", "Issues"], ["checks", "Checks"], ["prs", "PR reviews"], ["code", "Code"], ["insights", "Insights"], ["docs", "Docs"],
   ["knowledge", "Knowledge"], ["usage", "Usage"], ["skills", "Skills"], ["integrations", "Integrations"], ["settings", "Settings"], ["help", "Help"]];
 const TITLES = Object.fromEntries(NAV);
 TITLES.onboarding = "Welcome"; TITLES.lfg = "Home";
@@ -2077,11 +2077,10 @@ const PAGE_TOURS = {
   studio: [
     { sel: "#nav", title: "Your dashboard", body: () => "Everything LFG does, by what you're doing: <b>Your work</b> (runs, todos, reviews, checks), <b>This project</b> (code, insights, docs) and <b>LFG</b> itself (usage, skills, settings)." },
     { sel: "#repo", title: "Pick a project", body: () => "Every page shows the project picked here, and the branch below it narrows runs and checks to one branch." },
-    { sel: "#ss-comp", title: "Studio", body: () => "Run Claude Code here: describe the task, <code>/</code> for skills, <code>@</code> for files, drop in screenshots. Sessions from your terminal and the desktop app show up too. In the terminal, <code>/rename</code> gives a session a readable name here." },
+    { sel: ".ss-all-h", title: "Studio", body: () => "Every Claude Code session, whether you started it here, in a terminal or in the desktop app. Open one to read it and keep going here; the <b>⋯</b> menu has everything else. <b>New studio</b> starts one. In the terminal, <code>/rename</code> gives a session a readable name here." },
     { sel: "#bell", title: "Notifications", body: () => "When a check finishes, a run needs a decision or a review is ready, it shows up here." },
     { sel: "#tour-btn", title: "A tour on every page", body: () => "Press <b>Tour</b> on any page to see what it's for." },
   ],
-  sessions: [{ title: "Sessions", body: () => "Every Claude Code session on this computer, from the terminal, the desktop app or here. Star the ones to keep, and group them by project or PR." }, { title: "Give a session a name", body: () => "In Claude Code, type <code>/rename</code> and a name. This page then shows that name instead of the first thing you asked, so you can find the session later." }],
   todos: [{ sel: "[data-td-add]", title: "Add a todo", body: () => "Type and press Enter. It's tagged with the project you're in." }, { sel: ".td-st", title: "Status", body: () => "Click the coloured tag to move it along: to do, in progress, done." }, { sel: ".td-a", title: "Linear and notes", body: () => "Turn any todo into a Linear ticket, or add notes." }],
   runs: [{ title: "Runs", body: () => "Every request you give LFG becomes a run: brief, plan, build, checks, review and ship, with each stage's files." }, { sel: ".runs-bar", title: "Find a run", body: () => "Search by what it was for, its branch or its issue." }],
   review: [{ title: "Reviews", body: () => "Review pull requests and AI chats here. Open one to see the diff, the comments and a chat beside it." }, { sel: ".rv-top", title: "Start a review", body: () => "Pick a pull request or a chat. LFG reads the diff and its callers before it says anything." }, { title: "Talk to the diff", body: () => "In a review, click a line number to ask about that line, or <b>Discuss</b> on a comment to argue with it. Mark each comment <b>Will fix</b> or <b>Not now</b>." }],
@@ -2799,12 +2798,12 @@ function wirePrefsPage(root) {
   if (b) b.onclick = async () => { b.disabled = true; const r = await save("prefs_install", {}); if (!r.ok) { b.disabled = false; return alertMsg(b, r); } softRoute(); };
   wirePrefs(root, softRoute);
 }
-async function sessionRules(sid) {
-  const s = (state.sessions.sessions || []).find(x => x.id === sid) || {};
+async function sessionRules(sid, row) {
+  const s = row || ((state.sessions || {}).sessions || []).find(x => x.id === sid) || {};
   const draw = async () => {
     const [P, unlocked] = await Promise.all([api("prefs", { session: sid }), isUnlocked()]);
     const n = Object.keys(P.overrides || {}).length;
-    openDrawer(`Rules: ${s.name || sid}`, `<div class="readable"><p class="muted">Starts from your defaults (Preferences). What you change here is for this session only and reaches it with your next message.${n ? ` <b>${plural(n, "rule")} differ${n === 1 ? "s" : ""} from your defaults.</b> <button class="btn small" id="sr-reset">Back to defaults</button>` : ""}</p>
+    openDrawer(`Rules: ${s.title || s.name || sid}`, `<div class="readable"><p class="muted">Starts from your defaults (Preferences). What you change here is for this session only and reaches it with your next message.${n ? ` <b>${plural(n, "rule")} differ${n === 1 ? "s" : ""} from your defaults.</b> <button class="btn small" id="sr-reset">Back to defaults</button>` : ""}</p>
       ${(P.installed || {}).hooks ? "" : `<div class="callout warn">Your rules aren't switched on yet, so a session can't get its own. Switch them on under Preferences.</div>`}
       ${prefControls(P, P.values, P.defaults, sid, unlocked)}</div>`);
     wirePrefs($("#drawer-body"), draw);
@@ -2813,7 +2812,7 @@ async function sessionRules(sid) {
   };
   draw();
 }
-/* Groups and labels, shared by the Sessions page and Studio's list. A group holds sessions (a studio chat is one) and
+/* Groups and labels, used by Studio's list. A group holds sessions (a studio chat is one) and
    other groups; labels cut across them. Both live in LFG only: nothing on disk moves. */
 const LABEL_COLORS = ["gray", "green", "yellow", "red", "blue", "purple", "pink", "orange"];
 const LABEL_FILTER_KEY = "lfg.labels.filter";
@@ -2858,10 +2857,10 @@ function groupPath(name, info) {
 }
 /* nested <details>, one per group; `h` supplies what differs between the two lists */
 function treeHtml(nodes, h) {
-  return nodes.map(n => `<details class="item grp-node" data-grp-node="${esc(n.name)}" ${h.open(n) ? "open" : ""}><summary><span class="grow"><b>${esc(n.name)}</b> ${h.tags(n.name)}</span><span class="muted small nowrap">${n.count ? plural(n.count, "session") : "nothing in it yet"}</span>${h.unlocked ? ` <button class="btn small" data-grp-manage="${esc(n.name)}" title="Rename it, move it, follow a ticket, or delete it">Manage</button>` : ""}</summary>${n.rows.length ? h.listOf(n.rows) : ""}${n.children.length ? `<div class="grp-kids">${treeHtml(n.children, h)}</div>` : ""}</details>`).join("");
+  return nodes.map(n => `<details class="item grp-node" data-grp-node="${esc(n.name)}" ${h.open(n) ? "open" : ""}><summary><span class="grow"><b>${esc(n.name)}</b> ${h.tags(n.name)}</span><span class="muted small nowrap">${n.count ? plural(n.count, "session") + (h.note ? h.note(n) : "") : "nothing in it yet"}</span>${h.unlocked ? ` <button class="btn small" data-grp-manage="${esc(n.name)}" title="Rename it, move it, follow a ticket, or delete it">Manage</button>` : ""}</summary>${n.rows.length ? h.listOf(n.rows) : ""}${n.children.length ? `<div class="grp-kids">${treeHtml(n.children, h)}</div>` : ""}</details>`).join("");
 }
 const groupTags = (name, info) => { const g = (info || {})[name] || {}; return [...(g.prs || []).map(pr => `<a class="tag mono" href="#prs/${esc(pr.replace("#", "/"))}" title="This group follows ${esc(pr)}: every session that mentions it joins">${esc(pr)}</a>`), ...(g.tickets || []).map(t => `<span class="tag mono" title="This group follows ${esc(t)}: every session whose branch, title or first message names it joins">${esc(t)}</span>`)].join(" "); };
-const labelFilterBar = (list, filter) => !(list || []).length && !filter.length ? "" : `<div class="lbl-filter"><span class="muted small">Labels</span> ${list.map(l => `<button class="chip lbl c-${esc(l.color)}${filter.includes(l.name.toLowerCase()) ? " on" : ""}" data-lbl-filter="${esc(l.name.toLowerCase())}" aria-pressed="${filter.includes(l.name.toLowerCase())}" title="Show only what has this label. Pick several to narrow it down.">${esc(l.name)} <span class="n">${l.count}</span></button>`).join("")} <button class="btn small" data-lbl-manage>Manage labels</button>${filter.length ? ` <a href="#" data-lbl-clear>Clear</a>` : ""}</div>`;
+const labelFilterChips = (list, filter) => !(list || []).length && !filter.length ? "" : `<span class="muted small">Labels</span> ${(list || []).map(l => `<button class="chip lbl c-${esc(l.color)}${filter.includes(l.name.toLowerCase()) ? " on" : ""}" data-lbl-filter="${esc(l.name.toLowerCase())}" aria-pressed="${filter.includes(l.name.toLowerCase())}" title="Show only what has this label. Pick several to narrow it down.">${esc(l.name)} <span class="n">${l.count}</span></button>`).join("")} <button class="btn small" data-lbl-manage>Manage labels</button>${filter.length ? ` <a href="#" data-lbl-clear>Clear</a>` : ""}`;
 /* the groups that can't be a group's new parent: itself and everything under it */
 function groupBelow(name, info) {
   const out = new Set([name]);
@@ -2993,76 +2992,177 @@ function wireGroupsAndLabels(root, ctx, rows) {
   $$("[data-grp-manage]", root).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); groupManagerDrawer(b.dataset.grpManage, ctx); });
   $$("[data-sess-labels]", root).forEach(b => b.onclick = () => sessionLabelsDrawer(rows.find(x => x.id === b.dataset.sessLabels) || { id: b.dataset.sessLabels }, ctx));
 }
-/* "Starred only" on the Sessions page: remembered like the page's other filters. */
+/* "Starred only" on the Studio list: remembered like the list's other filters. */
 const SESS_STARRED_KEY = "lfg.sessions.starred";
 const sessStarredOn = () => localStorage.getItem(SESS_STARRED_KEY) === "1";
 const sessStarredCount = all => (all || []).filter(s => s.starred).length;
 /* the sessions to show: those matching the search, and only the starred ones when that filter is on */
 const sessShown = (all, hit, only) => (all || []).filter(s => hit(s) && (!only || s.starred));
-/* what the page says when nothing is shown: [title, body] */
-function sessEmptyText(all, q, only, projectsDir) {
+/* what the list says when nothing is shown: [title, body] */
+function sessEmptyText(all, q, only) {
   if (only && !sessStarredCount(all)) return ["No starred sessions yet: star one to keep it here", ""];
-  return ["No sessions match", q ? "Try a ticket number, a branch or a repo name." : "No Claude Code sessions found in " + projectsDir];
+  return ["No sessions match", q ? "Try a ticket number, a branch or a repo name." : "Start one with New studio. Sessions from your terminal and the desktop app show up here too."];
 }
-/* Sessions: every Claude Code session on this machine, grouped repo → ticket/branch (or your folder). */
-PAGES.sessions = async () => {
-  const loose = localStorage.getItem("lfg.sessions.loose") === "1";
-  const [d, unlocked, sr] = await Promise.all([api("sessions", { ...(state.showHidden ? { hidden: "1" } : {}), ...scopeArgs("sessions"), ...(loose ? { loose: "1" } : {}) }), isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
-  state.sessions = d;
-  const runsOf = {};
-  (sr.runs || []).forEach(j => (runsOf[j.session] || (runsOf[j.session] = [])).push(j));
-  if ((sr.runs || []).some(j => ["running", "starting"].includes(j.status))) pageTimer("sess-runs", 4000, () => { if (location.hash.startsWith("#sessions")) softRoute(); });
-  const q = (state.sessionFind || "").toLowerCase();
-  const filt = liveLabelFilter(d.label_list);
-  const hit = s => labelHit(s, filt) && (!q || [s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd].join(" ").toLowerCase().includes(q));
-  const starredOnly = sessStarredOn(), nStarred = sessStarredCount(d.sessions);
-  const rows = sessShown(d.sessions, hit, starredOnly);
-  const byRepo = new Map();
-  for (const s of rows) {
-    if (s.folder) continue; // sessions in a group are shown in the group tree
-    // outside any repo: one heading, then the folder it was started in (~/code, ~/Downloads, ...)
-    const repo = s.loose ? "Outside a repo" : s.repo || "Other";
-    if (!byRepo.has(repo)) byRepo.set(repo, new Map());
-    const g = byRepo.get(repo);
-    const sub = s.loose ? homePath(s.cwd) || "(folder unknown)" : s.group;
-    if (!g.has(sub)) g.set(sub, []);
-    g.get(sub).push(s);
-  }
-  const line = s => `<li class="sess" data-sid="${esc(s.id)}"><button class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${unlocked ? "" : "disabled"} title="${s.starred ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away"}" aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button><div class="grow"><div class="title">${esc(s.name)}${s.named ? "" : ' <span class="tag" title="You haven\'t named it (/rename in Claude Code, or Rename here); this name is made up from its ticket, branch and first message">not named</span>'} ${labelChips(s)}</div>
-      <div class="meta">${ago(s.modified)} · ${plural(s.prompts, "message")}${s.worktree ? ` · worktree <span class="mono">${esc(s.worktree)}</span>` : ""}${s.branch && s.group !== s.branch ? ` · <span class="mono">${esc(s.branch)}</span>` : ""}${s.app ? " · desktop app" : ""}${s.cost != null ? ` · ${usd(s.cost)}` : ""}${s.folder_exists ? "" : ` · <span class="bad-tx">its folder is gone</span>`}</div>
-      ${Date.now() - Date.parse(s.modified) < 6 * 36e5 ? `<div class="sess-work" data-sess-work="${esc(s.id)}" data-fill></div>` : ""}
-      <details class="more" data-sess-recent="${esc(s.id)}"><summary class="small">Recent messages and what it used</summary><div class="sess-recent small muted"><span class="loading-inline">Loading…</span></div></details>${skillRuns(runsOf[s.id], unlocked)}</div>
-      <div class="sess-actions"><button class="btn small primary" data-copy="${esc(s.resume)}" title="${esc(s.resume)}">Copy resume command</button>
-      <button class="btn small" data-sess-changes='${esc(JSON.stringify([s.id, s.name]))}' title="Every file this session edited, as diffs, from its own transcript. Pick lines to ask about them or have it change them">What it changed</button>
-      <button class="btn small" data-sess-skill='${esc(JSON.stringify([s.id, s.name]))}' ${unlocked ? "" : "disabled"} title="Run a skill or an instruction on this session, once or in a loop; Claude knows everything said in it">Run a skill…</button>
-      <button class="btn small" data-sess-rules="${esc(s.id)}">Rules</button>
-      <button class="btn small" data-sess-remind="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once">Remind it of my style</button>
-      <button class="btn small" data-sess-name="${esc(s.id)}" ${unlocked ? "" : "disabled"}>Rename</button>
-      ${s.folder ? `<span class="tag" title="${s.via_pr ? "Joined because it mentions a PR this group follows" : s.via_ticket ? "Joined because it names a ticket this group follows" : "Your group"}">${esc(s.folder)}${s.via_pr ? " · via PR" : s.via_ticket ? " · via ticket" : ""} <a href="#" data-sess-ungroup='${esc(JSON.stringify([s.id, s.via_pr || s.via_ticket ? s.folder : ""]))}' title="Take it out of this group" aria-label="Take it out of ${esc(s.folder)}">✕</a></span>` : ""}
-      <button class="btn small" data-sess-folder="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Group sessions your own way, e.g. an epic, then its milestones. Only LFG stores this; nothing on disk moves.">${s.folder ? "Change group" : "Add to a group…"}</button>
-      <button class="btn small" data-sess-labels="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Labels cut across groups, e.g. orchestrator or needs review">Labels…</button>
-      <button class="btn small" data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}' ${unlocked ? "" : "disabled"}>${s.hidden ? "Show again" : "Hide"}</button>
-      <button class="btn small" data-sess-trash="${esc(s.id)}" ${unlocked ? "" : "disabled"} title="Move this session's file to the Trash">Delete</button></div></li>`;
-  /* starred first; sessions not starred and untouched for a week fold away, so the ones you still care about stand out */
-  const quiet = s => !s.starred && Date.now() - Date.parse(s.modified) > 7 * 864e5;
-  const listOf = ss => {
-    const sorted = [...ss].sort((a, b) => (b.starred - a.starred) || (a.modified < b.modified ? 1 : -1));
-    const live = q ? sorted : sorted.filter(s => !quiet(s)), old = q ? [] : sorted.filter(quiet);
-    return `${live.length ? `<ul class="items sess-list">${live.map(line).join("")}</ul>` : ""}${old.length ? `<details class="more sess-old"><summary>${plural(old.length, "older session")}, not starred and untouched for a week</summary><ul class="items sess-list">${old.map(line).join("")}</ul></details>` : ""}`;
+/* One session as a row, the same for a studio chat and a terminal session: a star, its title and labels, a few small
+   chips (kind, repo, model, working or idle, time), Open, and the ... menu. ctx = { unlocked, info (the groups),
+   runs ({id: skill runs}), showGroup (name its group, when the list isn't drawn by group) } */
+const SESS_KIND = { studio: ["Studio", "talk"], terminal: ["Terminal", "terminal"], desktop: ["Desktop app", "desktop"], background: ["Background", "agent"] };
+const sessBusy = s => ["working", "needs-you", "starting"].includes(s.state);
+const sessCanDelete = s => !s.live || ["saved", "ended"].includes(s.state);
+const STAR_TIP = on => on ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away";
+const sessStar = (s, unlocked) => `<button type="button" class="star${s.starred ? " on" : ""}" data-sess-star='${esc(JSON.stringify([s.id, !s.starred]))}' ${unlocked ? "" : "disabled"} title="${STAR_TIP(s.starred)}" aria-label="${s.starred ? "Unstar" : "Star"}">${s.starred ? "★" : "☆"}</button>`;
+function sessRow(s, ctx) {
+  const [kind, ico] = SESS_KIND[s.kind] || SESS_KIND.terminal;
+  const [tone, st] = s.state === "needs-you" ? ["warn", "needs you"] : sessBusy(s) ? ["ok", "working"] : ["", "idle"];
+  const where = s.loose ? homePath(s.cwd) : s.repo, model = s.model || s.kind === "studio" ? s.model_label : "";
+  const meta = [s.worktree ? `worktree <span class="mono">${esc(s.worktree)}</span>` : "", s.branch && s.branch !== "HEAD" && s.branch !== s.worktree ? `<span class="mono">${esc(s.branch)}</span>` : "",
+    s.cost ? money(s.cost) : "", ctx.showGroup && s.folder ? `in ${esc(groupPath(s.folder, ctx.info))}` : "", s.folder_exists === false ? '<span class="bad-tx">its folder is gone</span>' : ""].filter(Boolean).join(" · ");
+  const recent = Date.now() - Date.parse(s.modified || s.updated) < 6 * 36e5;
+  return `<div class="sess-row${s.hidden ? " is-hidden" : ""}" data-key="${esc(s.id)}" data-sid="${esc(s.id)}">${sessStar(s, ctx.unlocked)}
+    <div class="sess-main"><div class="sess-title"><span title="${esc(s.title || s.name)}">${esc(s.title || s.name)}</span>${labelChips(s)}</div>
+      <div class="sess-chips"><span class="tg sess-kind">${icon(ico)}${kind}</span>${where ? `<span class="tg">${esc(where)}</span>` : ""}${model ? `<span class="tg">${esc(model)}</span>` : ""}<span class="sess-st">${dot(tone)} ${st}</span><span>${ago(s.updated || s.modified)}</span></div>
+      ${meta ? `<div class="sess-meta">${meta}</div>` : ""}${recent ? `<div class="sess-work" data-sess-work="${esc(s.id)}" data-fill></div>` : ""}${skillRuns((ctx.runs || {})[s.id], ctx.unlocked)}</div>
+    <a class="btn small" href="#studio/${esc(s.id)}">Open</a>${sessMenu(s, ctx)}</div>`;
+}
+/* Every action on a session, in one menu: the list row, an open session's header and Where you left off all use it.
+   ctx.unlocked: false greys out what changes something. */
+function sessMenu(s, ctx) {
+  const name = s.title || s.name || s.id, ref = esc(JSON.stringify([s.id, name]));
+  const lock = ctx.unlocked ? "" : ` disabled title="Locked: run ${esc(unlockCmd())} in your terminal to change it here"`;
+  const item = (attrs, label, cls) => `<button type="button" role="menuitem"${cls ? ` class="${cls}"` : ""} ${attrs}>${label}</button>`;
+  const del = !ctx.unlocked ? lock : sessCanDelete(s) ? ' title="Move its file to the Trash"' : ' disabled title="End it first"';
+  return `<span class="sess-menu-wrap"><button type="button" class="icon-btn" data-sess-menu data-keep="aria-expanded" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(name)}">⋯</button>
+    <div class="sess-menu" role="menu" data-keep="hidden style" hidden>
+      ${item(s.resume ? `data-sess-copy="${esc(s.resume)}" title="${esc(s.resume)}"` : 'disabled title="It has no transcript yet"', "Copy resume command")}
+      ${item(`data-sess-changes='${ref}' title="Every file it edited, as diffs, from its own transcript"`, "What it changed")}
+      ${item(`data-sess-skill='${ref}'${lock || ' title="Run a skill or an instruction on it, once or in a loop"'}`, "Run a skill…")}
+      ${item(`data-sess-rules="${esc(s.id)}" title="Your rules for this session only"`, "Rules")}
+      ${item(`data-sess-remind="${esc(s.id)}"${lock || ' title="Its next message carries your &quot;How Claude talks to you&quot; rules again, once"'}`, "Remind it of my style")}
+      <hr>
+      ${item(`data-sess-name="${esc(s.id)}"${lock}`, "Rename")}
+      ${item(`data-sess-folder="${esc(s.id)}"${lock || ' title="Group sessions your own way, e.g. an epic, then its milestones. Only LFG stores this."'}`, s.folder ? "Change group" : "Add to a group…")}
+      ${item(`data-sess-labels="${esc(s.id)}"${lock || ' title="Labels cut across groups, e.g. orchestrator or needs review"'}`, "Labels…")}
+      <hr>
+      ${item(`data-sess-hide='${esc(JSON.stringify([s.id, !s.hidden]))}'${lock || (s.hidden ? "" : ' title="Out of this list; Show hidden brings it back"')}`, s.hidden ? "Show again" : "Hide")}
+      ${item(`data-sess-trash="${esc(s.id)}"${del}`, "Delete", "danger")}
+    </div></span>`;
+}
+/* The menu opens beside its button, fixed to the window so a scrolling list can't cut it off, and above the button
+   when there is no room below. A click elsewhere, Escape, scrolling or picking an item closes it. */
+function sessMenuClose() {
+  $$(".sess-menu:not([hidden])").forEach(m => { m.hidden = true; const b = m.previousElementSibling; if (b) b.setAttribute("aria-expanded", "false"); });
+}
+function sessMenuOpen(b, m) {
+  m.hidden = false; b.setAttribute("aria-expanded", "true");
+  const view = b.closest("#view"), z = (view && parseFloat(getComputedStyle(view).zoom)) || 1;  // text size zooms #view
+  const r = b.getBoundingClientRect(), h = m.offsetHeight * z, w = m.offsetWidth * z;
+  const top = r.bottom + 4 + h > innerHeight - 8 && r.top - 4 - h > 8 ? r.top - 4 - h : Math.max(8, Math.min(r.bottom + 4, innerHeight - h - 8));
+  m.style.top = Math.round(top / z) + "px";
+  m.style.left = Math.round(Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) / z) + "px";
+  const first = $("button:not([disabled])", m);
+  if (first) first.focus({ preventScroll: true });
+}
+document.addEventListener("click", e => { if (!e.target.closest(".sess-menu, [data-sess-menu]")) sessMenuClose(); });
+document.addEventListener("keydown", e => {
+  const m = $(".sess-menu:not([hidden])");
+  if (!m) return;
+  if (e.key === "Escape") { sessMenuClose(); m.previousElementSibling.focus(); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  const items = $$("button:not([disabled])", m), i = items.indexOf(document.activeElement);
+  const next = items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
+  if (next) next.focus();
+});
+window.addEventListener("scroll", e => { if (!(e.target.closest && e.target.closest(".sess-menu"))) sessMenuClose(); }, true);
+window.addEventListener("resize", sessMenuClose);
+/* A session's rename: a studio keeps its title in Studio's own index, any other session gets a name in LFG only. */
+function sessionRenameDrawer(s, ctx) {
+  const studio = s.kind === "studio", cur = s.title || s.name || "";
+  openDrawer("Rename session", `<div class="readable"><p>Shown in LFG only; Claude Code's own title is left alone.${studio ? "" : ` Leave it empty to go back to the automatic name: <i>${esc(s.auto_name || "")}</i>.`}</p>
+    <input type="text" id="sess-val" class="wide" value="${esc(studio ? cur : s.name !== s.auto_name ? s.name || "" : "")}" placeholder="${esc(studio ? "Name this session" : s.auto_name || "")}">
+    <div class="set-actions"><button class="btn primary" id="sess-save">Save</button><span class="save-msg" id="sess-msg"></span></div></div>`);
+  const go = async () => {
+    const v = $("#sess-val").value;
+    const r = studio ? await save("sess_rename", { id: s.id, title: v }) : await save("session_name", { id: s.id, name: v });
+    saidMsg($("#sess-msg"), r, "Saved.");
+    if (r.ok) setTimeout(() => { closeDrawer(); if (studio) loadNavSessions(); ctx.refresh(); }, 400);
   };
-  const tree = groupTree(rows, d.group_info, filt, { hideEmpty: !!q || starredOnly });
-  const treeSec = tree.length ? [section("Your groups", treeHtml(tree, { unlocked, listOf, tags: name => groupTags(name, d.group_info), open: n => !!q || filt.length > 0 || n.count > 0 }), plural(rows.filter(s => s.folder).length, "session"))] : [];
-  const groups = [...treeSec, ...[...byRepo].map(([repo, g]) => section(repo, [...g].map(([name, ss]) => `<details class="item" ${q || byRepo.size === 1 || !ss.length || ss.some(s => s.starred || Date.now() - Date.parse(s.modified) < 3 * 864e5) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${ss.length ? `${plural(ss.length, "session")} · ${ago(ss[0].modified)}` : "nothing in it yet"}</span>${repo !== "Outside a repo" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done with this</button>` : ""}</summary>${listOf(ss)}</details>`).join(""), plural([...g.values()].flat().length, "session")))];
-  const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>${esc(unlockCmd())}</code> in your terminal to change them here. Copy works either way.</div>`;
-  const tab = (on, label, act, title) => `<a href="#" class="tab ${on ? "on" : ""}" data-sess-scope="${act}" title="${esc(title)}">${label}</a>`;
-  const tabs = `<div class="tabs page-tabs">${state.repo ? tab(!loose && !allRepos("sessions"), esc(repoName()), "repo", "Sessions in this repo and its worktrees") : ""}${tab(!loose && allRepos("sessions"), "All repos", "all", "Every session, in a repo or not")}${tab(loose, `Outside a repo${d.loose_count ? ` <span class="n">${n(d.loose_count)}</span>` : ""}`, "loose", "Sessions started in a folder that isn't a git repo: your home folder, ~/code, a scratch folder")}</div>`;
-  return `${head("Sessions", `Every Claude Code session on this machine, whichever folder you started it in. Copy a resume command and paste it in any terminal: it opens the right folder and picks the session back up.`)}
-    ${tabs}
-    ${lock}
-    <div class="table-tools"><input type="search" id="sess-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.sessionFind || "")}"><button class="btn small sess-starred${starredOnly ? " on" : ""}" data-sess-starred aria-pressed="${starredOnly}" title="Show only the sessions you starred">★ Starred only <span class="n">${nStarred}</span></button>${unlocked ? `<button class="btn small" data-grp-new title="Make a group to put sessions and studio chats in, inside another group if you like">New group…</button>` : ""}<span class="count">${plural(rows.length, "session")}${q || starredOnly || filt.length ? ` of ${d.sessions.length}` : ""}</span>${d.hidden_count ? `<label class="small"><input type="checkbox" id="sess-hidden" ${state.showHidden ? "checked" : ""}> Show ${plural(d.hidden_count, "hidden session")}</label>` : ""}</div>
-    ${labelFilterBar(d.label_list, filt)}
-    ${rows.length || groups.length ? groups.join("") : empty(...sessEmptyText(d.sessions, q, starredOnly, esc(d.projects_dir)))}`;
-};
+  $("#sess-save").onclick = go;
+  $("#sess-val").onkeydown = e => { if (e.key === "Enter") go(); };
+  $("#sess-val").focus();
+}
+function sessionTrashDrawer(s, ctx) {
+  openDrawer("Delete this session?", `<div class="readable"><p><b>${esc(s.title || s.name || s.id)}</b></p><p>Its file goes to the macOS Trash, so you can still get it back from there. It disappears from <code>/resume</code>. If you only want it out of this list, use Hide instead.</p>
+    <div class="set-actions"><button class="btn primary" id="sess-trash-go">Move to Trash</button><span class="save-msg" id="sess-trash-msg"></span></div></div>`);
+  $("#sess-trash-go").onclick = async () => {
+    const r = await save("session_trash", { id: s.id });
+    saidMsg($("#sess-trash-msg"), r, "Moved to the Trash.");
+    if (r.ok) setTimeout(() => { closeDrawer(); ctx.refresh(); }, 700);
+  };
+}
+/* Wires the menu and the star inside `root`. ctx = { rows: [sessions], info: {group: ...}, labels: [...], refresh() } */
+function wireSessMenu(root, ctx) {
+  const find = id => (ctx.rows || []).find(x => x.id === id) || { id };
+  $$("[data-sess-menu]", root).forEach(b => b.onclick = e => {
+    e.preventDefault(); e.stopPropagation();
+    const m = b.nextElementSibling, open = m.hidden;
+    sessMenuClose();
+    if (open) sessMenuOpen(b, m);
+  });
+  $$(".sess-menu", root).forEach(m => { if (once(m, "close")) m.addEventListener("click", e => { if (e.target.closest("button:not([disabled])")) sessMenuClose(); }); });
+  $$("[data-sess-copy]", root).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.sessCopy); prefToast("Resume command copied. Paste it in any terminal."); } catch (e) { window.prompt("Copy this:", b.dataset.sessCopy); }
+  });
+  $$("[data-copy]", root).forEach(b => b.onclick = async () => {  // a skill run's resume command
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
+    setTimeout(() => (b.textContent = "Copy resume command"), 1500);
+  });
+  $$("[data-sess-changes]", root).forEach(b => b.onclick = async () => { const [sid, name] = JSON.parse(b.dataset.sessChanges); sessionChanges(sid, name, await isUnlocked()); });
+  $$("[data-sess-skill]", root).forEach(b => b.onclick = () => { const [sid, name] = JSON.parse(b.dataset.sessSkill); sessionSkill(sid, name); });
+  $$("[data-sess-rules]", root).forEach(b => b.onclick = () => sessionRules(b.dataset.sessRules, find(b.dataset.sessRules)));
+  $$("[data-sess-remind]", root).forEach(b => b.onclick = async () => {
+    const r = await save("pref_remind", { session: b.dataset.sessRemind });
+    if (!r.ok) return prefToast(r.why || "Couldn't set the reminder.", true);
+    prefToast("Its next message carries your style rules again, once.");
+  });
+  $$("[data-sess-name]", root).forEach(b => b.onclick = () => sessionRenameDrawer(find(b.dataset.sessName), ctx));
+  $$("[data-sess-folder]", root).forEach(b => b.onclick = () => sessionGroupDrawer(find(b.dataset.sessFolder), ctx));
+  $$("[data-sess-labels]", root).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); sessionLabelsDrawer(find(b.dataset.sessLabels), ctx); });
+  $$("[data-sess-hide]", root).forEach(b => b.onclick = async () => {
+    const [id, on] = JSON.parse(b.dataset.sessHide);
+    const r = await save("session_hide", { ids: [id], on });
+    if (!r.ok) return prefToast(r.why || "Couldn't change it.", true);
+    ctx.refresh();
+  });
+  $$("[data-sess-trash]", root).forEach(b => b.onclick = () => sessionTrashDrawer(find(b.dataset.sessTrash), ctx));
+  $$("[data-run-stop]", root).forEach(b => b.onclick = async () => { b.disabled = true; const r = await save("skill_stop", { id: b.dataset.runStop }); if (!r.ok) return alertMsg(b, r); b.textContent = "Stopping after this pass"; });
+  /* starring changes the star and moves the row to the top of its list in place: no reload, no flicker */
+  $$("[data-sess-star]", root).forEach(b => b.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    const [id, on] = JSON.parse(b.dataset.sessStar);
+    b.disabled = true;
+    const r = await save("session_star", { id, on });
+    b.disabled = false;
+    if (!r.ok) return alertMsg(b, r);
+    const s = (ctx.rows || []).find(x => x.id === id);
+    if (s) s.starred = on;
+    b.classList.toggle("on", on);
+    b.textContent = on ? "★" : "☆";
+    b.setAttribute("aria-label", on ? "Unstar" : "Star");
+    b.title = STAR_TIP(on);
+    b.dataset.sessStar = JSON.stringify([id, !on]);
+    const row = b.closest(".sess-row"), list = row && row.parentNode;
+    if (on && list) list.prepend(row);
+    const cnt = $(".sess-starred .n", document); if (cnt) cnt.textContent = sessStarredCount(ctx.rows);
+  });
+}
+/* What each recent session has running besides the conversation (subagents, background commands), filled in after
+   the list draws; while any of it runs the list looks again every 15 seconds. */
+function fillSessWork(root) {
+  const work = $$("[data-sess-work]", root);
+  work.forEach(async el => { const d = await api("sessionwork", { id: el.dataset.sessWork }).catch(() => null); if (document.body.contains(el)) morph(el, sessionWork(d)); });
+  if (work.length) pageTimer("sess-work", 15000, () => { if (document.body.contains(root) && $$("[data-sess-work] .dot.on", root).length) softRoute(); });
+}
 /* Skills run on a session from here: what's running, what each run said last, and what it used. */
 const RUN_ST = { starting: ["Starting", "on"], running: ["Running", "on"], done: ["Done", "ok"], failed: ["Failed", "bad"] };
 function skillRuns(runs, unlocked) {
@@ -3184,137 +3284,10 @@ async function sessionSkill(sid, name) {
 }
 /* A path with the home folder as ~ */
 const homePath = p => (p || "").replace(/^\/(Users|home)\/[^/]+/, "~");
+/* the session actions on Where you left off's panel: the same handlers as the Studio list's menu */
 function wireSessions(root) {
-  $$("[data-sess-scope]", root).forEach(a => a.onclick = e => {
-    e.preventDefault();
-    const v = a.dataset.sessScope;
-    localStorage.setItem("lfg.sessions.loose", v === "loose" ? "1" : "");
-    if (v !== "loose") localStorage.setItem("lfg.allrepos.sessions", v === "all" ? "1" : "");
-    route();
-  });
-  $$("[data-sess-starred]", root).forEach(b => b.onclick = () => { localStorage.setItem(SESS_STARRED_KEY, sessStarredOn() ? "" : "1"); route(); });
-  $$("[data-sess-skill]", root).forEach(b => b.onclick = () => { const [sid, name] = JSON.parse(b.dataset.sessSkill); sessionSkill(sid, name); });
-  $$("[data-sess-changes]", root).forEach(b => b.onclick = async () => { const [sid, name] = JSON.parse(b.dataset.sessChanges); sessionChanges(sid, name, await isUnlocked()); });
-  const work = $$("[data-sess-work]", root);
-  work.forEach(async el => { const d = await api("sessionwork", { id: el.dataset.sessWork }).catch(() => null); if (document.body.contains(el)) morph(el, sessionWork(d)); });
-  if (work.length) pageTimer("sess-work", 15000, () => { if (document.body.contains(root) && $$("[data-sess-work] .dot.on", root).length) softRoute(); });
-  $$("[data-run-stop]", root).forEach(b => b.onclick = async () => { b.disabled = true; const r = await save("skill_stop", { id: b.dataset.runStop }); if (!r.ok) return alertMsg(b, r); b.textContent = "Stopping after this pass"; });
-  const find = $("#sess-find", root);
-  if (find) {
-    let t;
-    find.oninput = () => { clearTimeout(t); t = setTimeout(() => { state.sessionFind = find.value; route().then(() => { const f = $("#sess-find"); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }); }, 250); };
-  }
-  $$("[data-copy]", root).forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { window.prompt("Copy this:", b.dataset.copy); }
-    setTimeout(() => (b.textContent = "Copy resume command"), 1500);
-  });
-  const groupsCtx = () => ({ info: state.sessions.group_info || {}, labels: state.sessions.label_list || [], refresh: () => route() });
-  const setGroup = async (sid, folder, msgEl, from) => {
-    const cur = (state.sessions.sessions || []).find(x => x.id === sid) || {};
-    const r = await save("session_folder", { id: sid, folder, from: from || (cur.via_pr || cur.via_ticket ? cur.folder : "") });
-    if (msgEl) saidMsg(msgEl, r, folder ? `Added to ${folder}.` : "Taken out.");
-    if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 400);
-    return r;
-  };
-  const ask = (sid, kind) => {
-    const s = (state.sessions.sessions || []).find(x => x.id === sid) || {};
-    if (kind === "name") {
-      openDrawer("Rename session", `<div class="readable"><p>Shown in LFG only; Claude Code's own title is left alone. Leave it empty to go back to the automatic name: <i>${esc(s.auto_name || "")}</i>.</p>
-        <input type="text" id="sess-val" class="wide" value="${esc(s.name !== s.auto_name ? s.name : "")}" placeholder="${esc(s.auto_name || "")}">
-        <div class="set-actions"><button class="btn primary" id="sess-save">Save</button><span class="save-msg" id="sess-msg"></span></div></div>`);
-      const go = async () => { const r = await save("session_name", { id: sid, name: $("#sess-val").value }); saidMsg($("#sess-msg"), r, "Saved."); if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 400); };
-      $("#sess-save").onclick = go;
-      $("#sess-val").onkeydown = e => { if (e.key === "Enter") go(); };
-      $("#sess-val").focus();
-      return;
-    }
-    sessionGroupDrawer(s, groupsCtx());
-  };
-  $$("[data-sess-ungroup]", root).forEach(a => a.onclick = e => { e.preventDefault(); const [sid, from] = JSON.parse(a.dataset.sessUngroup); setGroup(sid, "", null, from); });
-  $$("[data-grp-new]", root).forEach(b => b.onclick = () => newGroupDrawer(groupsCtx()));
-  wireGroupsAndLabels(root, groupsCtx(), state.sessions.sessions || []);
-  /* Starring changes the star and moves the session to the top of its list in place: no reload, no flicker. */
-  $$("[data-sess-star]", root).forEach(b => b.onclick = async () => {
-    const [id, on] = JSON.parse(b.dataset.sessStar);
-    b.disabled = true;
-    const r = await save("session_star", { id, on });
-    b.disabled = false;
-    if (!r.ok) return alertMsg(b, r);
-    const s = (state.sessions.sessions || []).find(x => x.id === id);
-    if (s) s.starred = on;
-    b.classList.toggle("on", on);
-    b.textContent = on ? "★" : "☆";
-    b.setAttribute("aria-label", on ? "Unstar" : "Star");
-    b.title = on ? "Starred: kept at the top of its group. Click to unstar" : "Star a session you still care about: it stays at the top of its group and is never folded away";
-    b.dataset.sessStar = JSON.stringify([id, !on]);
-    const li = b.closest("li.sess"), list = li && li.parentNode;
-    if (on && list) list.prepend(li);
-    const cnt = $(".sess-starred .n", root); if (cnt) cnt.textContent = sessStarredCount(state.sessions.sessions);
-  });
-  const hid = $("#sess-hidden", root);
-  if (hid) hid.onchange = () => { state.showHidden = hid.checked; route(); };
-  $$("[data-sess-hide]", root).forEach(b => b.onclick = async () => {
-    const [id, on] = JSON.parse(b.dataset.sessHide);
-    b.disabled = true;
-    const r = await save("session_hide", { ids: [id], on });
-    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
-    route();
-  });
-  $$("[data-sess-trash]", root).forEach(b => b.onclick = () => {
-    const s = (state.sessions.sessions || []).find(x => x.id === b.dataset.sessTrash) || {};
-    openDrawer("Delete this session?", `<div class="readable"><p><b>${esc(s.name)}</b></p><p>Its file goes to the macOS Trash, so you can still get it back from there. It disappears from <code>/resume</code>. If you only want it out of this list, use Hide instead.</p>
-      <div class="set-actions"><button class="btn primary" id="sess-trash-go">Move to Trash</button><span class="save-msg" id="sess-trash-msg"></span></div></div>`);
-    $("#sess-trash-go").onclick = async () => {
-      const r = await save("session_trash", { id: s.id });
-      saidMsg($("#sess-trash-msg"), r, "Moved to the Trash.");
-      if (r.ok) setTimeout(() => { closeDrawer(); route(); }, 700);
-    };
-  });
-  $$("[data-sess-done]", root).forEach(b => b.onclick = async e => {
-    e.preventDefault(); e.stopPropagation();
-    const [repo, group] = JSON.parse(b.dataset.sessDone);
-    openDrawer(`Done with ${group}`, '<div class="skeleton"></div>');
-    const d = await api("sessiondone", { repo, group });
-    const wts = d.worktrees || [];
-    const wtRow = w => `<li><label class="row"><input type="checkbox" data-wt="${esc(w.path)}" ${w.safe ? "checked" : "disabled"}><span class="grow"><span class="mono small">${esc(w.path)}</span><div class="meta">${w.safe ? `nothing would be lost${w.branch ? `; the branch <span class="mono">${esc(w.branch)}</span> is kept` : ""}` : `<span class="bad-tx">kept: ${esc(w.why)}</span>`}</div>${(w.dirty || []).length ? `<pre class="small">${esc(w.dirty.join("\n"))}</pre>` : ""}${(w.unpushed || []).length ? `<pre class="small">${esc(w.unpushed.join("\n"))}</pre>` : ""}</span></label></li>`;
-    openDrawer(`Done with ${group}`, `<div class="readable">
-      <label class="row"><input type="checkbox" id="done-hide" checked><span>Hide its ${plural(d.sessions.length, "session")} from this page. Their files stay, so <code>/resume</code> still works, and "Show hidden" brings them back.</span></label>
-      ${wts.length ? `<div class="k">Worktrees these sessions used</div><p class="muted small">Only ones with nothing uncommitted or unpushed can be deleted. Files git ignores there (node_modules, copied .env files) go with them.</p><ul class="items box">${wts.map(wtRow).join("")}</ul>` : `<p class="muted">None of these sessions ran in a worktree.</p>`}
-      <div class="set-actions"><button class="btn primary" id="done-go">Clean up</button><span class="save-msg" id="done-msg"></span></div></div>`);
-    $("#done-go").onclick = async () => {
-      const go = $("#done-go"), msg = $("#done-msg"), out = [];
-      go.disabled = true;
-      if ($("#done-hide").checked && d.sessions.length) {
-        const r = await save("session_hide", { ids: d.sessions, on: true });
-        out.push(r.ok ? `hid ${plural(d.sessions.length, "session")}` : `couldn't hide: ${r.why}`);
-      }
-      for (const box of $$("[data-wt]:checked")) {
-        const r = await save("worktree_remove", { path: box.dataset.wt });
-        out.push(r.ok ? `deleted ${box.dataset.wt.split("/").pop()}` : r.why);
-      }
-      msg.textContent = out.join(" · ") || "Nothing selected.";
-      setTimeout(() => { closeDrawer(); route(); }, 1600);
-    };
-  });
-  $$("[data-sess-name]", root).forEach(b => b.onclick = () => ask(b.dataset.sessName, "name"));
-  $$("[data-sess-rules]", root).forEach(b => b.onclick = () => sessionRules(b.dataset.sessRules));
-  $$("[data-sess-recent]", root).forEach(d => d.ontoggle = async () => {
-    if (!d.open || d.dataset.loaded) return;
-    d.dataset.loaded = "1";
-    const r = await api("sessionrecent", { id: d.dataset.sessRecent });
-    const box = $(".sess-recent", d);
-    box.innerHTML = r.available === false ? esc(r.why) : usedTags(r.used) + ((r.turns || []).length
-      ? r.turns.map(t => `<div class="sess-turn ${t.who}"><b>${t.who === "you" ? "You" : "Claude"}</b> <span class="muted">${ago(t.at)}</span><div class="pre-wrap">${esc(t.text)}${t.text.length >= 400 ? "…" : ""}</div></div>`).join("")
-      : "No messages yet.");
-  });
-  $$("[data-sess-remind]", root).forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    const r = await save("pref_remind", { session: b.dataset.sessRemind });
-    if (!r.ok) { b.disabled = false; return alertMsg(b, r); }
-    b.textContent = "Reminder set";
-    b.title = "Your style rules go out with the next message you send in that session";
-  });
-  $$("[data-sess-folder]", root).forEach(b => b.onclick = () => ask(b.dataset.sessFolder, "folder"));
+  const d = state.sessions || {};
+  wireSessMenu(root, { rows: d.sessions || [], info: d.group_info || {}, labels: d.label_list || [], refresh: () => route() });
 }
 /* Where you left off: what you were last working on (epics, milestones, big tickets) across every repo, and a
    briefing for each. Built by LFG from your sessions, tickets and PRs; nothing to fill in. The session actions are
@@ -5654,11 +5627,10 @@ function alertMsg(el, d) {
   saidMsg(m, d);
 }
 
-const NAV_GROUPS = [["Your work", ["home", "sessions", "continue", "todos", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "insights", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "corrections", "usage", "skills", "integrations", "settings", "help"]]];
+const NAV_GROUPS = [["Your work", ["home", "continue", "todos", "environment", "runs", "issues", "checks", "prs"]], ["This project", ["code", "insights", "docs", "knowledge"]], ["LFG", ["prefs", "talk", "corrections", "usage", "skills", "integrations", "settings", "help"]]];
 /* 24px line icons, drawn for these pages (stroke = currentColor) */
 const ICON = {
   home: "M3 10.5 12 3l9 7.5M5 9v11h5v-6h4v6h5V9",
-  sessions: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5",
   continue: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
   environment: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   prefs: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
@@ -5703,6 +5675,7 @@ const ICON = {
   more: "M5 12h.01M12 12h.01M19 12h.01",
   download: "M12 4v11M7 10l5 5 5-5M5 20h14",
   terminal: "M4 5h16v14H4zM7.5 10l2.5 2-2.5 2M12 15h4",
+  desktop: "M3 5h18v11H3zM8 20h8M12 16v4",
   pin: "M9 4h6l-1 6 3 3H7l3-3zM12 13v7",
   agent: "M12 3v3M7 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM9.5 11.5v1M14.5 11.5v1M9.5 15.5h5",
 };
@@ -5849,7 +5822,7 @@ function renderNav(active) {
 function navSessions(active) {
   const open = localStorage.getItem("lfg.nav.sessions") !== "0";
   const list = (state.navSess || []).filter(x => x.source !== "background");
-  const cur = active === "studio" ? (location.hash.split("/")[1] || "") : "";  // "" = new, "all" = the list
+  const cur = active === "studio" ? (location.hash.split("/")[1] || "") : "";  // "" = the list, "new" = a new studio
   const tabs = tabsOf("studio"), tabbed = new Set(tabs.map(t => t.id)), rest = list.filter(x => !tabbed.has(x.id));
   const live = rest.filter(x => ssLive(x.state)).slice(0, 5), recent = rest.filter(x => !ssLive(x.state)).slice(0, Math.max(0, 5 - live.length - tabs.length));
   const nLive = list.filter(x => ssLive(x.state));
@@ -5857,8 +5830,8 @@ function navSessions(active) {
   const row = x => `<a class="ns-item${x.id === cur ? " on" : ""}" href="#studio/${esc(x.id)}" title="${esc(x.title)}">${nsDot(x.state)}<span class="ns-t">${esc(x.title)}</span><span class="ns-w">${ssLive(x.state) ? "" : when(x.updated)}</span></a>`;
   const others = live.map(row).join("") + recent.map(row).join("");
   return `<div class="ns${open ? " open" : ""}"><div class="ns-head"><a class="${active === "studio" && !cur ? "on" : ""}" href="#studio" title="Studio: Claude Code sessions, here">${icon("studio")}<span>Studio</span>${nLive.length ? `<span class="ns-n${nLive.some(x => x.state === "needs-you") ? " warn" : ""}">${nLive.length}</span>` : ""}</a>
-    <button class="ns-btn" data-ns-new title="New session" aria-label="New session">+</button><button class="ns-btn ns-tog" data-ns-toggle aria-expanded="${open}" aria-label="Show Studio sessions">${icon("chev")}</button></div>
-    <div class="ns-body">${tabs.map(t => tabNavRow("studio", t, "ns-item ns-tab")).join("")}${tabs.length && others ? '<div class="ns-sep"></div>' : ""}${others}${list.length || tabs.length ? `<a class="ns-all${cur === "all" ? " on" : ""}" href="#studio/all">All sessions</a>` : '<span class="ns-empty">No sessions yet</span>'}</div></div>`;
+    <button class="ns-btn" data-ns-new title="New studio" aria-label="New studio">+</button><button class="ns-btn ns-tog" data-ns-toggle aria-expanded="${open}" aria-label="Show Studio sessions">${icon("chev")}</button></div>
+    <div class="ns-body">${tabs.map(t => tabNavRow("studio", t, "ns-item ns-tab")).join("")}${tabs.length && others ? '<div class="ns-sep"></div>' : ""}${others}${list.length || tabs.length ? `<a class="ns-all${active === "studio" && !cur ? " on" : ""}" href="#studio">All sessions</a>` : '<span class="ns-empty">No sessions yet</span>'}</div></div>`;
 }
 async function loadNavSessions() {
   if (!state.repo) return;
@@ -5876,7 +5849,7 @@ setRail(localStorage.getItem("lfg.side") === "rail");
 document.addEventListener("click", e => { if (e.target.closest("#side-tog")) setRail(!document.body.classList.contains("rail")); });
 document.addEventListener("keydown", e => { if (e.key === "\\" && (e.metaKey || e.ctrlKey) && !e.altKey) { e.preventDefault(); setRail(!document.body.classList.contains("rail")); } });
 document.addEventListener("click", e => { if (e.target.closest("[data-stop]")) e.stopPropagation(); }, true);  // a link in a clickable row opens only itself
-const newStudio = () => { state.ssFresh = true; if (location.hash === "#studio") route(); else location.hash = "#studio"; };
+const newStudio = () => { state.ssFresh = true; if (location.hash === "#studio/new") route(); else location.hash = "#studio/new"; };
 const closeTabMenu = () => { const m = $(".prtab-menu"); if (m) m.remove(); };
 document.addEventListener("click", e => {
   const add = e.target.closest("[data-tab-add]"), pick = e.target.closest("[data-tab-new]");
@@ -6088,6 +6061,7 @@ function uiRestore(view, snap) {
 function softRoute() { return route({ soft: true }); }
 async function route(opts) {
   const soft = !!(opts && opts.soft);
+  ssRedirect();
   let [page, ...rest] = (location.hash.slice(1) || "home").split("/");
   page = { overview: "home", reviews: "checks", security: "checks", architecture: "code", health: "code", brain: "knowledge", tools: "settings" }[page] || page;
   const key = PAGES[page] ? page : "home";
@@ -6136,7 +6110,6 @@ function wireView(key, view) {
   $$("[data-href]", view).forEach(li => li.onclick = () => (location.hash = li.dataset.href));
   if (key === "docs") wireDocs();
   if (key === "prs") { wirePrs(view); wireScoreCharts(view); }
-  if (key === "sessions") wireSessions(view);
   if (key === "continue") wireContinue(view);
   if (key === "knowledge") wireKnowledge(view);
   if (key === "prefs") wirePrefsPage(view);
@@ -6157,7 +6130,7 @@ function wireView(key, view) {
   if (key === "insights") wireInsights(view);
 }
 /* What shows while a page loads the first time: its shape, shimmering, and what it's waiting on when that's slow. */
-const SLOW = { prs: "Asking GitHub for your pull requests…", usage: "Adding up every session's usage…", environment: "Checking your setup…", sessions: "Reading your sessions…" };
+const SLOW = { prs: "Asking GitHub for your pull requests…", usage: "Adding up every session's usage…", environment: "Checking your setup…", studio: "Reading your sessions…" };
 function skeletonPage(key, detail) {
   const line = (w, h = 14, mt = 10) => `<div class="skeleton" style="width:${w};height:${h}px;margin-top:${mt}px"></div>`;
   const rows = n => `<div class="sk-box">${Array.from({ length: n }, (_, i) => `<div class="sk-row"><div class="skeleton" style="width:${[46, 38, 52, 30, 42][i % 5]}%"></div><div class="skeleton" style="width:12%"></div><div class="skeleton" style="width:9%"></div></div>`).join("")}</div>`;
@@ -6209,18 +6182,22 @@ const money = v => v == null ? "" : v < 0.01 ? "<$0.01" : usd(v);
 let ssPoll = null;
 
 PAGES.studio = async arg => {
-  if (arg === "all") {  // every session for the project, and the worktrees they work in
-    const [list, where, unlocked] = await Promise.all([api("studio"), api("studio_where"), isUnlocked()]);
-    (list.sessions || []).forEach(x => { x.via_pr = x.via === "pr"; x.via_ticket = x.via === "ticket"; });
+  if (!arg) {  // the list: every session, and the worktrees they work in
+    const scope = ssScope();
+    const [list, where, unlocked, sr] = await Promise.all([api("studio", { scope, ...(state.showHidden ? { hidden: "1" } : {}) }), state.repo ? api("studio_where").catch(() => null) : null, isUnlocked(), api("skillruns", { runs_only: "1" }).catch(() => ({ runs: [] }))]);
+    if (list.available === false) return unavailable(list);
     state.sess = { list, d: null, id: null, where };
-    state.navSess = list.sessions || [];
-    crumbs("studio", "All sessions", "#studio/all");
-    return `<div class="ss-page">${ssWorktrees(where)}${ssAll(list, unlocked)}</div>`;
+    state.sessions = list;
+    if (scope === "repo") state.navSess = list.sessions || [];
+    const runs = {};
+    (sr.runs || []).forEach(j => (runs[j.session] || (runs[j.session] = [])).push(j));
+    if ((sr.runs || []).some(j => ["running", "starting"].includes(j.status))) pageTimer("sess-runs", 4000, () => { if (location.hash === "#studio") softRoute(); });
+    return `<div class="ss-page">${ssList(list, unlocked, runs)}${ssWorktrees(where)}</div>`;
   }
-  if (!arg) {  // a new session: the same screen as any session, empty, with the composer at the bottom
+  if (arg === "new") {  // a new studio: the same screen as any session, empty, with the composer at the bottom
     const [sug, where] = await Promise.all([api("studio_suggest"), api("studio_where")]);
     state.sess = { d: null, id: null, sug, where };
-    crumbs("studio", "New session", "#studio");
+    crumbs("studio", "New studio", "#studio/new");
     return `${tabStrip("studio")}<div class="ss-one">${ssNew(sug)}</div>`;
   }
   const ch = arg.match(/^([0-9a-f-]{36})\/changes$/);
@@ -6250,35 +6227,135 @@ function ssTagList(x, full) {  // full: the session's own header, where tags can
 
 function ssNew(sug) {
   const list = (sug && sug.suggestions || []).slice(0, 4);
-  return `<header class="ss-head"><div class="grow"><h1 class="ss-title">New session</h1>
+  return `<header class="ss-head"><div class="grow"><h1 class="ss-title">New studio</h1>
       <div class="ss-tags"><span class="tg">${esc(repoName())}</span><span class="brtag" id="ss-branch" title="The branch Claude will work on"></span><span class="tg wt" id="ss-wt-tag" hidden></span></div></div></header>
     <div class="ss-conv ss-empty">${list.length ? `<div class="ss-quick"><span class="muted small">Suggestions</span>${list.map((x, i) => `<button class="chip ss-sug ${x.tone || ""}" data-sug="${i}" title="${esc(x.title)}"><span class="ss-sug-k">${esc(x.skill)}</span>${esc(x.title.length > 56 ? x.title.slice(0, 54) + "…" : x.title)}</button>`).join("")}</div>` : ""}</div>
     ${ssComposer({ isNew: true })}`;
 }
 
-function ssAll(list, unlocked) {
-  const f = state.ssFilter || "mine", all = list.sessions || [], lf = liveLabelFilter(list.label_list);
-  const view = localStorage.getItem("lfg.ss.view") === "group" ? "group" : "time";
-  const pick = all.filter(s => (f === "all" || (f === "background" ? s.source === "background" : s.source !== "background")) && labelHit(s, lf));
-  const day = t => { const d = (Date.now() - new Date(t || 0)) / 864e5; return d < 1 ? "Today" : d < 7 ? "This week" : d < 31 ? "This month" : "Earlier"; };
-  const groups = {}; pick.forEach(s => (groups[ssLive(s.state) ? "Live here" : day(s.updated)] = groups[ssLive(s.state) ? "Live here" : day(s.updated)] || []).push(s));
-  const row = s => `<a class="ss-row" href="#studio/${esc(s.id)}" data-title="${esc((s.title + " " + (s.branch || "") + " " + (s.skills || []).join(" ") + " " + (s.issues || []).join(" ")).toLowerCase())}">
-      <span class="grow"><span class="ss-row-t">${esc(s.title)}${labelChips(s)}</span><span class="ss-tags">${ssTagList(s)}${s.folder ? `<span class="tg" title="${s.via === "pr" ? "Joined because it mentions a PR this group follows" : s.via === "ticket" ? "Joined because it names a ticket this group follows" : "Your group"}">${esc(groupPath(s.folder, list.group_info))}</span>` : ""}</span></span>
-      ${unlocked ? `<span class="ss-row-act"><button type="button" class="btn small" data-ss-group="${esc(s.id)}">Add to a group…</button><button type="button" class="btn small" data-sess-labels="${esc(s.id)}">Labels…</button></span>` : ""}
-      <span class="ss-row-m"><span>${ago(s.updated)}</span>${s.cost ? `<span class="ss-row-c">${money(s.cost)}</span>` : ""}</span></a>`;
-  const chip = (k, l, n) => `<button class="pill${f === k ? " on" : ""}" data-ss-filter="${k}">${l} <span class="muted">${n}</span></button>`;
-  const vchip = (k, l) => `<button class="pill${view === k ? " on" : ""}" data-ss-view="${k}">${l}</button>`;
-  const listOf = rs => `<div class="box ss-list">${rs.map(row).join("")}</div>`;
-  const byTime = () => ["Live here", "Today", "This week", "This month", "Earlier"].filter(g => groups[g]).map(g => `<div class="ss-grp">${g}</div>${listOf(groups[g])}`).join("");
-  const byGroup = () => {
-    const tree = groupTree(pick, list.group_info, lf, { hideEmpty: true }), loose = pick.filter(s => !s.folder);
-    return `${tree.length ? `<div class="ss-grp">Groups</div><div class="ss-tree">${treeHtml(tree, { unlocked, listOf, tags: name => groupTags(name, list.group_info), open: () => true })}</div>` : ""}${loose.length ? `<div class="ss-grp">Unsorted</div>${listOf(loose)}` : ""}`;
+/* The Studio list's scope: this repo, every repo, or sessions outside any repo. The Sessions page's own choice is read
+   the first time. */
+const SS_SCOPE_KEY = "lfg.studio.scope";
+function ssScope() {
+  let v = localStorage.getItem(SS_SCOPE_KEY);
+  if (!["repo", "all", "loose"].includes(v)) {
+    v = localStorage.getItem("lfg.sessions.loose") === "1" ? "loose" : localStorage.getItem("lfg.allrepos.sessions") === "1" ? "all" : "repo";
+    localStorage.setItem(SS_SCOPE_KEY, v);
+  }
+  return v === "repo" && !state.repo ? "all" : v;
+}
+/* Old addresses of the list (#sessions, with or without a scope, and #studio/all) become #studio, keeping the scope
+   and "show hidden" they asked for. */
+function ssRedirect() {
+  const m = location.hash.match(/^#(sessions|studio\/all)(?:[/?](.*))?$/);
+  if (!m) return;
+  const asks = (m[2] || "").split(/[/&?]/).map(x => x.replace(/=1$/, ""));
+  const scope = ["loose", "all", "repo"].find(x => asks.includes(x));
+  if (scope) localStorage.setItem(SS_SCOPE_KEY, scope); else ssScope();
+  if (asks.includes("hidden")) state.showHidden = true;
+  history.replaceState(null, "", "#studio");
+}
+/* The Studio list: every session, studio chat or terminal, by group or by time. Sessions in no group sit under their
+   repo, then their ticket or branch; ones not starred and untouched for a week fold away. */
+function ssList(list, unlocked, runs) {
+  const all = list.sessions || [], scope = ssScope(), f = state.ssFilter || "mine";
+  const view = localStorage.getItem("lfg.ss.view") === "time" ? "time" : "group";
+  const q = (state.ssFind || "").trim().toLowerCase(), lf = liveLabelFilter(list.label_list), starredOnly = sessStarredOn();
+  const isBg = s => s.kind === "background";
+  const text = s => [s.title, s.name, s.repo, s.worktree, s.branch, s.ticket, s.folder, s.first, s.cwd, s.model_label, ...(s.skills || []), ...(s.issues || []), ...(s.labels || []).map(l => l.name)].join(" ").toLowerCase();
+  const hit = s => (f === "all" || (f === "background") === isBg(s)) && labelHit(s, lf) && (!q || q.split(/\s+/).every(w => text(s).includes(w)));
+  const rows = sessShown(all, hit, starredOnly);
+  const ctx = { unlocked, info: list.group_info, runs, showGroup: view === "time" };
+  const when = s => s.updated || s.modified || "";
+  const quiet = s => !s.starred && !ssLive(s.state) && Date.now() - Date.parse(when(s)) > 7 * 864e5;
+  const box = ss => `<div class="box ss-list">${ss.map(s => sessRow(s, ctx)).join("")}</div>`;
+  const fold = old => old.length ? `<details class="more sess-old"><summary>${plural(old.length, "older session")}, not starred and untouched for a week</summary>${box(old)}</details>` : "";
+  const newest = (a, b) => (when(a) < when(b) ? 1 : -1);
+  const listOf = ss => {
+    const sorted = [...ss].sort((a, b) => (!!b.starred - !!a.starred) || (ssLive(b.state) - ssLive(a.state)) || newest(a, b));
+    const live = q ? sorted : sorted.filter(s => !quiet(s)), old = q ? [] : sorted.filter(quiet);
+    return `${live.length ? box(live) : ""}${fold(old)}`;
   };
-  return `<section class="ss-allbox"><div class="ss-all-h"><h1>All sessions</h1><a class="btn primary small" href="#studio" data-ss-newbtn>New session</a><input type="search" id="ss-find" placeholder="Search by title, branch, skill or issue" autocomplete="off">
-      <span class="seg">${chip("mine", "Yours", all.filter(s => s.source !== "background").length)}${chip("background", "Background", all.filter(s => s.source === "background").length)}${chip("all", "All", all.length)}</span>
-      <span class="seg" title="Sort the list by when it was last used, or by your groups">${vchip("time", "By time")}${vchip("group", "By group")}</span>${unlocked ? `<button class="btn small" data-grp-new title="Make a group, inside another group if you like">New group…</button>` : ""}</div>
-    ${labelFilterBar(list.label_list, lf)}
-    <div class="ss-scrollarea">${(view === "group" ? byGroup() : byTime()) || empty("No sessions yet", "Start one from New session. Sessions from your terminal and the desktop app show up here too.")}</div></section>`;
+  const busyIn = nd => nd.rows.filter(sessBusy).length + nd.children.reduce((t, c) => t + busyIn(c), 0);
+  const byGroup = () => {
+    const tree = groupTree(rows, list.group_info, lf, { hideEmpty: !!q || starredOnly || f === "background" });
+    const grouped = tree.length ? `<div class="ss-grp">Your groups</div><div class="ss-tree">${treeHtml(tree, { unlocked, listOf, tags: name => groupTags(name, list.group_info), open: nd => !!q || lf.length > 0 || nd.count > 0, note: nd => { const b = busyIn(nd); return b ? ` · ${n(b)} working` : ""; } })}</div>` : "";
+    const byRepo = new Map();
+    for (const s of rows) {
+      if (s.folder) continue;  // in the group tree
+      const repo = s.loose ? "Outside a repo" : s.repo || "Other";
+      const sub = s.loose ? homePath(s.cwd) || "(folder unknown)" : s.group || s.branch || "Other";
+      if (!byRepo.has(repo)) byRepo.set(repo, new Map());
+      const g = byRepo.get(repo);
+      if (!g.has(sub)) g.set(sub, []);
+      g.get(sub).push(s);
+    }
+    const recent = s => s.starred || ssLive(s.state) || Date.now() - Date.parse(when(s)) < 3 * 864e5;
+    const sub = (repo, name, ss) => `<details class="item grp-node" ${q || byRepo.size === 1 || ss.some(recent) ? "open" : ""}><summary><span class="grow"><b>${esc(name)}</b></span><span class="muted small nowrap">${plural(ss.length, "session")} · ${ago(when([...ss].sort(newest)[0]))}</span>${repo !== "Outside a repo" && unlocked ? ` <button class="btn small" data-sess-done='${esc(JSON.stringify([repo, name]))}' title="Hide these sessions and clean up their worktrees">Done</button>` : ""}</summary>${listOf(ss)}</details>`;
+    const loose = [...byRepo].map(([repo, g]) => `<div class="ss-grp">${esc(repo)}</div><div class="ss-tree">${[...g].map(([name, ss]) => sub(repo, name, ss)).join("")}</div>`).join("");
+    return grouped + loose;
+  };
+  const byTime = () => {
+    const day = s => { const d = (Date.now() - new Date(when(s) || 0)) / 864e5; return ssLive(s.state) ? "Live here" : d < 1 ? "Today" : d < 7 ? "This week" : d < 31 ? "This month" : "Earlier"; };
+    const sorted = [...rows].sort(newest), shown = q ? sorted : sorted.filter(s => !quiet(s)), old = q ? [] : sorted.filter(quiet), at = {};
+    shown.forEach(s => (at[day(s)] = at[day(s)] || []).push(s));
+    return ["Live here", "Today", "This week", "This month", "Earlier"].filter(g => at[g]).map(g => `<div class="ss-grp">${g}</div>${box(at[g])}`).join("") + fold(old);
+  };
+  const chip = (k, l, c) => `<button type="button" class="pill${f === k ? " on" : ""}" data-ss-filter="${k}" aria-pressed="${f === k}">${l} <span class="muted">${n(c)}</span></button>`;
+  const vchip = (k, l) => `<button type="button" class="pill${view === k ? " on" : ""}" data-ss-view="${k}" aria-pressed="${view === k}">${l}</button>`;
+  const tab = (k, label, title) => `<a href="#" class="tab${scope === k ? " on" : ""}" data-ss-scope="${k}" title="${esc(title)}">${label}</a>`;
+  const tabs = `<div class="tabs page-tabs">${state.repo ? tab("repo", esc(repoName()), "Sessions in this repo and its worktrees") : ""}${tab("all", "All repos", "Every session, in a repo or not")}${tab("loose", `Outside a repo${list.loose_count ? ` <span class="n">${n(list.loose_count)}</span>` : ""}`, "Sessions started in a folder that isn't a git repo: your home folder, ~/code, a scratch folder")}</div>`;
+  const lock = unlocked ? "" : `<div class="callout warn">Rename, groups and delete are locked. Run <code>${esc(unlockCmd())}</code> in your terminal to change them here. Copy works either way.</div>`;
+  const nStar = sessStarredCount(all), nHid = list.hidden_count || 0;
+  const filters = `<div class="lbl-filter ss-filters">${labelFilterChips(list.label_list, lf)}<span class="grow"></span>
+    <button type="button" class="btn small sess-starred${starredOnly ? " on" : ""}" data-sess-starred aria-pressed="${starredOnly}" title="Show only the sessions you starred">★ Starred <span class="n">${n(nStar)}</span></button>
+    ${nHid || state.showHidden ? `<button type="button" class="btn small ss-hid${state.showHidden ? " on" : ""}" data-ss-hidden aria-pressed="${!!state.showHidden}" title="Sessions you hid stay out of this list until you show them">Show hidden <span class="n">${n(nHid)}</span></button>` : ""}
+    ${unlocked ? `<button type="button" class="btn small" data-grp-new title="Make a group to put sessions in, inside another group if you like">New group…</button>` : ""}
+    <span class="seg">${chip("mine", "Yours", all.filter(s => !isBg(s)).length)}${chip("background", "Background", all.filter(isBg).length)}${chip("all", "All", all.length)}</span>
+    <span class="muted small nowrap">${plural(rows.length, "session")}${rows.length !== all.length ? ` of ${n(all.length)}` : ""}</span></div>`;
+  const body = rows.length || view === "group" ? (view === "group" ? byGroup() : byTime()) : "";
+  return `<section class="ss-allbox"><div class="ss-all-h"><h1>Studio</h1><a class="btn primary small" href="#studio/new" data-ss-newbtn>New studio</a><input type="search" id="ss-find" placeholder="Search names, tickets, branches, repos…" value="${esc(state.ssFind || "")}" autocomplete="off">
+      <span class="seg" title="Show your groups, or everything by when it was last used">${vchip("group", "By group")}${vchip("time", "By time")}</span></div>
+    ${tabs}${lock}${filters}
+    <div class="ss-scrollarea">${body || empty(...sessEmptyText(all, q, starredOnly))}</div></section>`;
+}
+/* "Done" on a ticket or branch: hide its sessions and delete the worktrees they used that hold nothing unsaved. */
+async function sessionDoneDrawer(repo, group, ctx) {
+  openDrawer(`Done with ${group}`, '<div class="skeleton"></div>');
+  const d = await api("sessiondone", { repo, group });
+  const wts = d.worktrees || [];
+  const wtRow = w => `<li><label class="row"><input type="checkbox" data-wt="${esc(w.path)}" ${w.safe ? "checked" : "disabled"}><span class="grow"><span class="mono small">${esc(w.path)}</span><div class="meta">${w.safe ? `nothing would be lost${w.branch ? `; the branch <span class="mono">${esc(w.branch)}</span> is kept` : ""}` : `<span class="bad-tx">kept: ${esc(w.why)}</span>`}</div>${(w.dirty || []).length ? `<pre class="small">${esc(w.dirty.join("\n"))}</pre>` : ""}${(w.unpushed || []).length ? `<pre class="small">${esc(w.unpushed.join("\n"))}</pre>` : ""}</span></label></li>`;
+  openDrawer(`Done with ${group}`, `<div class="readable">
+    <label class="row"><input type="checkbox" id="done-hide" checked><span>Hide its ${plural(d.sessions.length, "session")} from this list. Their files stay, so <code>/resume</code> still works, and "Show hidden" brings them back.</span></label>
+    ${wts.length ? `<div class="k">Worktrees these sessions used</div><p class="muted small">Only ones with nothing uncommitted or unpushed can be deleted. Files git ignores there (node_modules, copied .env files) go with them.</p><ul class="items box">${wts.map(wtRow).join("")}</ul>` : `<p class="muted">None of these sessions ran in a worktree.</p>`}
+    <div class="set-actions"><button class="btn primary" id="done-go">Clean up</button><span class="save-msg" id="done-msg"></span></div></div>`);
+  $("#done-go").onclick = async () => {
+    const go = $("#done-go"), msg = $("#done-msg"), out = [];
+    go.disabled = true;
+    if ($("#done-hide").checked && d.sessions.length) {
+      const r = await save("session_hide", { ids: d.sessions, on: true });
+      out.push(r.ok ? `hid ${plural(d.sessions.length, "session")}` : `couldn't hide: ${r.why}`);
+    }
+    for (const box of $$("[data-wt]:checked")) {
+      const r = await save("worktree_remove", { path: box.dataset.wt });
+      out.push(r.ok ? `deleted ${box.dataset.wt.split("/").pop()}` : r.why);
+    }
+    msg.textContent = out.join(" · ") || "Nothing selected.";
+    setTimeout(() => { closeDrawer(); ctx.refresh(); }, 1600);
+  };
+}
+function wireSessList(root, list) {
+  const ctx = { rows: list.sessions || [], info: list.group_info || {}, labels: list.label_list || [], refresh: () => softRoute() };
+  $$("[data-ss-scope]", root).forEach(a => a.onclick = e => { e.preventDefault(); localStorage.setItem(SS_SCOPE_KEY, a.dataset.ssScope); softRoute(); });
+  $$("[data-sess-starred]", root).forEach(b => b.onclick = () => { localStorage.setItem(SESS_STARRED_KEY, sessStarredOn() ? "" : "1"); softRoute(); });
+  $$("[data-ss-hidden]", root).forEach(b => b.onclick = () => { state.showHidden = !state.showHidden; softRoute(); });
+  $$("[data-grp-new]", root).forEach(b => b.onclick = () => newGroupDrawer(ctx));
+  $$("[data-sess-done]", root).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); const [repo, group] = JSON.parse(b.dataset.sessDone); sessionDoneDrawer(repo, group, ctx); });
+  const find = $("#ss-find", root);
+  if (find && once(find, "find")) { let t; find.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { state.ssFind = find.value; softRoute(); }, 250); }); }
+  wireGroupsAndLabels(root, ctx, ctx.rows);
+  wireSessMenu(root, ctx);
+  fillSessWork(root);
 }
 
 function ssComposer(o) {
@@ -6957,15 +7034,7 @@ function wireStudio(root) {
   // the list: filter and search
   $$("[data-ss-filter]", root).forEach(b => b.onclick = () => { state.ssFilter = b.dataset.ssFilter; route({ soft: true }); });
   $$("[data-ss-view]", root).forEach(b => b.onclick = () => { localStorage.setItem("lfg.ss.view", b.dataset.ssView); route({ soft: true }); });
-  if (S.list && !S.id) {  // groups and labels on the list: the same drawers as the Sessions page
-    const ctx = { info: S.list.group_info || {}, labels: S.list.label_list || [], refresh: () => route({ soft: true }) };
-    wireGroupsAndLabels(root, ctx, S.list.sessions || []);
-    $$("[data-ss-group]", root).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); sessionGroupDrawer((S.list.sessions || []).find(x => x.id === b.dataset.ssGroup) || { id: b.dataset.ssGroup }, ctx); });
-    $$("[data-sess-labels]", root).forEach(b => { const go = b.onclick; b.onclick = e => { e.preventDefault(); e.stopPropagation(); go(e); }; });
-    $$("[data-grp-new]", root).forEach(b => b.onclick = () => newGroupDrawer(ctx));
-  }
-  const find = $("#ss-find", root);
-  if (find) { find.oninput = () => { const q = find.value.trim().toLowerCase(); $$(".ss-row", root).forEach(a => { a.hidden = !!q && !q.split(/\s+/).every(w => a.dataset.title.includes(w)); }); }; if (find.value) find.oninput(); }  // a redraw keeps your search applied
+  if (S.list && !S.id) wireSessList(root, S.list);
   // the composer
   const ta = $("#ss-text", root), send = $("#ss-send", root), ac = $("#ss-ac", root);
   const fresh = ta && once(ta, "studio");  // a redraw that keeps the text box wires it again: listeners and focus only once
@@ -7022,7 +7091,7 @@ function wireStudio(root) {
   }
   if (!S.id && $("#ss-branch", root)) {  // the checked-out branch can change under us: keep it current
     const tick = async () => {
-      if (location.hash !== "#studio") return;
+      if (location.hash !== "#studio/new") return;
       const w = await api("studio_where").catch(() => null);
       if (w && w.branch !== (state.sess.where || {}).branch) { state.sess.where = w; const o = $('#ss-where option[value="here"]'); if (o) o.textContent = `Here · ${w.branch}`; tag(); }
       ssPoll = setTimeout(tick, 5000);
@@ -7030,7 +7099,7 @@ function wireStudio(root) {
     ssPoll = setTimeout(tick, 5000);
   }
   // worktrees: new session there, merge back, merge all
-  $$("[data-wt-session]", root).forEach(b => b.onclick = () => { state.ssStartIn = b.dataset.wtSession; location.hash = "#studio"; });
+  $$("[data-wt-session]", root).forEach(b => b.onclick = () => { state.ssStartIn = b.dataset.wtSession; location.hash = "#studio/new"; });
   if (state.ssStartIn && wsel) { const o = $(`#ss-where option[value="wt:${CSS.escape(state.ssStartIn)}"]`, root); if (o) { wsel.value = o.value; wsel.onchange(); } state.ssStartIn = null; }
   const merge = async (body, btn, label) => {
     let r = await go(body.into ? "wt_merge_all" : "wt_merge", body, btn, "Merging…");
@@ -7304,7 +7373,7 @@ const NOTICE_PLACE = { findings: ".pr-pass-body", fix: ".pr-fixbar" };
 function noticeGo(x) {
   if ((x.place || "").startsWith("session:")) {  // a skill run finished: open the session it ran on
     state.goto = `[data-sid="${CSS.escape(x.place.slice(8))}"]`;
-    if (location.hash === "#sessions") route(); else location.hash = "#sessions";
+    if (location.hash === "#studio") route(); else location.hash = "#studio";
     return;
   }
   sessionStorage.removeItem("lfg.prpass." + x.pr);
@@ -7317,6 +7386,7 @@ function applyGoto(view) {
   const el = $(state.goto, view);
   state.goto = null;
   if (!el) return;
+  for (let d = el.parentElement.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;  // a folded row
   // code snippets above it load after this and push it down: keep it in place until they're in, or you scroll
   const until = Date.now() + 4000, keep = () => el.isConnected && el.scrollIntoView({ block: "start" });
   keep();
@@ -7630,11 +7700,11 @@ window.addEventListener("focus", () => checkUpdate());
 function refresh() { Object.keys(state.snips || {}).forEach(k => { if (!state.snips[k]) delete state.snips[k]; }); state.cache = {}; state.fresh = true; mapStatus(); checkUpdate(true); route().finally(() => { state.fresh = false; }); }
 /* Pages whose data changes without you (GitHub, running jobs) reload every 10 minutes, unless you're typing or a
    drawer is open, so nothing you're in the middle of is thrown away. */
-const AUTO_REFRESH = ["home", "sessions", "environment", "prs", "checks", "runs", "issues"];
+const AUTO_REFRESH = ["home", "studio", "environment", "prs", "checks", "runs", "issues"];
 setInterval(() => {
   const page = (location.hash.slice(1) || "home").split("/")[0];
   const busy = document.hidden || document.querySelector("#drawer:not([hidden])") ||
     ["TEXTAREA", "INPUT", "SELECT"].includes((document.activeElement || {}).tagName);
-  if (AUTO_REFRESH.includes(page) && !busy) { state.cache = {}; state.fresh = true; softRoute().finally(() => { state.fresh = false; }); }  // in place
+  if (AUTO_REFRESH.includes(page) && (page !== "studio" || location.hash === "#studio") && !busy) { state.cache = {}; state.fresh = true; softRoute().finally(() => { state.fresh = false; }); }  // in place
 }, 10 * 60 * 1000);
 init();

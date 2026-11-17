@@ -310,5 +310,84 @@ class StudioListTest(unittest.TestCase):
             self.assertIn(sid, rows)
 
 
+class ListPageTest(unittest.TestCase):
+    """The Studio list page's row, menu and old addresses, run as the real app.js code in Node."""
+
+    def run_js(self, start, end, script):
+        import json
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node isn't installed")
+        here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin", "lib", "lfgcore")
+        with open(os.path.join(here, "ui_assets", "app.js")) as f:
+            js = f.read()
+        block = js[js.index(start):js.index(end)]
+        out = subprocess.run([node, "-e", block + "\n" + script], capture_output=True, text=True, check=True).stdout
+        return json.loads(out)
+
+    def test_old_addresses_land_on_the_list_with_their_scope(self):
+        script = """
+const store = {}, localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); } };
+const state = { repo: "r1" }, location = { hash: "" }, history = { replaceState: (a, b, h) => { location.hash = h; } };
+const go = h => { location.hash = h; ssRedirect(); return [location.hash, store[SS_SCOPE_KEY], !!state.showHidden]; };
+const out = {};
+store["lfg.sessions.loose"] = "1"; out.stored = go("#sessions");          // the Sessions page's choice, read once
+store["lfg.sessions.loose"] = ""; out.again = go("#sessions");             // already moved over: kept
+out.all = go("#sessions/all");
+out.hidden = go("#sessions?loose=1&hidden=1");
+state.showHidden = false; out.studioAll = go("#studio/all");
+out.open = go("#studio/0b1c");                                             // an open session is left alone
+state.repo = ""; store[SS_SCOPE_KEY] = "repo"; out.norepo = ssScope();
+console.log(JSON.stringify(out));
+"""
+        out = self.run_js("/* The Studio list's scope", "/* The Studio list: every session", script)
+        self.assertEqual(out["stored"], ["#studio", "loose", False])
+        self.assertEqual(out["again"], ["#studio", "loose", False])
+        self.assertEqual(out["all"], ["#studio", "all", False])
+        self.assertEqual(out["hidden"], ["#studio", "loose", True])
+        self.assertEqual(out["studioAll"], ["#studio", "loose", False])
+        self.assertEqual(out["open"], ["#studio/0b1c", "loose", False])
+        self.assertEqual(out["norepo"], "all")
+
+    def test_a_row_has_its_chips_open_and_the_menu_in_order(self):
+        script = r"""
+const esc = s => String(s ?? ""), icon = k => "", dot = t => "", ago = () => "now", homePath = p => p;
+const money = v => "$" + v, groupPath = g => g, labelChips = () => "", skillRuns = () => "";
+const unlockCmd = () => "lfg ui --unlock";
+const strip = h => h.replace(/<[^>]+>/g, "|").split("|").map(x => x.trim()).filter(Boolean);
+const menu = h => strip(h.slice(h.indexOf('<div class="sess-menu"')));
+const chips = h => strip(h.slice(0, h.indexOf('<span class="sess-menu-wrap')));
+const base = { id: "a", title: "Fix it", repo: "api", modified: "2020-01-01T00:00:00Z", resume: "claude -r a" };
+const dflt = { model: "", model_label: "Claude Code default" };
+const studio = sessRow({ ...base, ...dflt, kind: "studio", state: "working", live: true, folder: "Epic" },
+  { unlocked: true });
+const term = sessRow({ ...base, ...dflt, kind: "terminal", state: "saved", worktree: "fix", branch: "lee/fix",
+  cost: 2, folder_exists: false }, { unlocked: true });
+const ended = sessRow({ ...base, kind: "studio", state: "ended", live: true, model: "claude-opus-5-5",
+  model_label: "Opus 5.5" }, { unlocked: false });
+console.log(JSON.stringify({ studio: chips(studio), menu: menu(studio), term: chips(term), termMenu: menu(term),
+  busyDelete: /data-sess-trash="a" disabled title="End it first"/.test(studio),
+  termDelete: /data-sess-trash="a" title=/.test(term),
+  lockedDelete: /data-sess-trash="a" disabled title="Locked/.test(ended), sid: /data-sid="a"/.test(studio),
+  openHref: /href="#studio\/a">Open</.test(studio) }));
+"""
+        out = self.run_js("/* One session as a row", "/* The menu opens beside its button", script)
+        self.assertEqual(out["studio"], ["☆", "Fix it", "Studio", "api", "Claude Code default", "working", "now",
+                                         "Open"])
+        self.assertEqual(out["menu"], ["Copy resume command", "What it changed", "Run a skill…", "Rules",
+                                       "Remind it of my style", "Rename", "Change group", "Labels…", "Hide", "Delete"])
+        # a terminal session with no known model has no model chip; worktree, branch, cost and a gone folder are meta
+        self.assertEqual(out["term"], ["☆", "Fix it", "Terminal", "api", "idle", "now", "worktree", "fix", "·",
+                                       "lee/fix", "· $2 ·", "its folder is gone", "Open"])
+        self.assertIn("Add to a group…", out["termMenu"])
+        self.assertTrue(out["busyDelete"])
+        self.assertTrue(out["termDelete"])
+        self.assertTrue(out["lockedDelete"])
+        self.assertTrue(out["sid"])
+        self.assertTrue(out["openHref"])
+
+
 if __name__ == "__main__":
     unittest.main()
