@@ -273,11 +273,13 @@ def group_info():
                 "tickets": list(p["group_tickets"].get(g, []))} for g in sorted(_group_set(p))}
 
 
-def listing(days=None, scripted=False, hidden=False, only=None, loose=False):
+def listing(days=None, scripted=False, hidden=False, only=None, loose=False, also=(), with_path=False):
     """Sessions newest first, each with repo, ticket, group, name, folder and the resume command. Sessions started
     by a script (`claude -p`, e.g. the dashboard's review runs) are left out unless `scripted`. `only`: a main
     checkout; keeps the sessions that ran in it or one of its worktrees. `loose`: only the sessions started outside
-    any git repo (your home folder, ~/code, a scratch folder), whatever `only` says. `loose_count` counts those."""
+    any git repo (your home folder, ~/code, a scratch folder), whatever `only` says. `loose_count` counts those.
+    `with_path`: keep each row's transcript path, size and mtime.
+    `also`: ids of scripted sessions to show anyway (LFG's own studios run as `claude -p`)."""
     p = prefs()
     want = os.path.realpath(only) if only else ""
     scanned = scan()
@@ -288,7 +290,7 @@ def listing(days=None, scripted=False, hidden=False, only=None, loose=False):
     rows, loose_count = [], 0
     for s in scanned:
         # a script's session (`claude -p`, e.g. a dashboard review run) shows when it joined a group through its PR
-        by_pr = placed.get(s["id"], {}).get("via") == "pr"
+        by_pr = placed.get(s["id"], {}).get("via") == "pr" or s["id"] in also
         if s["mtime"] < cut or (s["entrypoint"] == "sdk-cli" and not scripted and not by_pr) or \
                 (s["id"] in hid and not hidden):
             continue
@@ -319,7 +321,7 @@ def listing(days=None, scripted=False, hidden=False, only=None, loose=False):
             or ("(no branch)" if r["root"] else "Not in a repo")
         r["resume"] = resume_command(r)
         r["modified"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(s["mtime"]))
-        for k in ("path", "size", "mtime", "sidechain_only"):
+        for k in ("sidechain_only",) if with_path else ("path", "size", "mtime", "sidechain_only"):
             r.pop(k, None)
         rows.append(r)
     rows.sort(key=lambda r: r["modified"], reverse=True)
@@ -549,9 +551,38 @@ def placements(sessions=None):
     return out
 
 
+def row_of(sid, path=None):
+    """One session's own settings, with the keys a list row has (name, auto_name, resume, folder, labels, starred,
+    hidden): what an open session's header needs for the shared session menu. `path`: its transcript, when there
+    is one yet."""
+    p = prefs()
+    own = p["names"].get(sid, "")
+    out = {"id": sid, "name": own, "auto_name": "", "resume": "", "starred": sid in p["starred"],
+           "hidden": sid in p["hidden"], "folder": "", "via_pr": False, "via_ticket": False,
+           "labels": [{"name": n, "color": p["label_colors"].get(n.lower(), "gray")} for n in p["labels"].get(sid, [])]}
+    s = None
+    if path:
+        try:
+            s = parse(path)
+        except OSError:
+            s = None
+    if s:
+        r = dict(s, ticket=_ticket(s["branch"], s["title"], s["ai_title"], s["first"]))
+        out.update(name=name_for(r, own), auto_name=name_for(r), resume=resume_command(r))
+    where = placements([s] if s else []).get(sid) or {"folder": "", "via": ""}
+    out.update(folder=where["folder"], via_pr=where["via"] == "pr", via_ticket=where["via"] == "ticket")
+    return out
+
+
 def groups_of(pr):
     """The groups that follow a PR."""
     return sorted(g for g, prs in prefs()["group_prs"].items() if pr in prs)
+
+
+def display_title(sid, names, *rest):
+    """The title a session shows everywhere: your own name for it (Rename in LFG) first, then the first of `rest`
+    that is set (a studio's title, Claude Code's /rename title, the made-up name)."""
+    return (names or {}).get(sid) or next((x for x in rest if x), "") or "Untitled session"
 
 
 def rename(sid, name):
@@ -1071,8 +1102,34 @@ def remove_worktree(path):
     return {"path": path, "branch": st["branch"]}
 
 
+RUN_QUIET_SECS = 120  # a background run whose transcript changed this recently is still going
+
+
+def _still_running(rows):
+    """Why a worktree must stay: a studio still running in LFG (not ended) or a background run in progress, for
+    the sessions `rows` that ran in it; "" when none."""
+    from . import claudesess as CS
+    for r in rows:
+        live = CS._LIVE.get(r["id"])
+        if live and live.state != "ended":
+            return "a studio is still running here"
+    now = time.time()
+    for r in rows:
+        if r.get("entrypoint") == "sdk-cli" and r["id"] not in CS._LIVE and now - r.get("mtime", 0) < RUN_QUIET_SECS:
+            return "a background run is still going here"
+    return ""
+
+
 def group_cleanup(repo, group):
-    """For "Done with this": the group's sessions and the worktrees they ran in, each with what removing it loses."""
-    rows = [r for r in listing(hidden=True)["sessions"] if r["repo"] == repo and r["group"] == group]
+    """For "Done with this": the group's sessions and the worktrees they ran in, each with what removing it loses.
+    Scripted sessions count too (LFG's studios and background runs), as the Studio list shows them in the group.
+    A worktree a studio or background run is still using is kept (`safe` false), as one with unsaved work is."""
+    rows = [r for r in listing(hidden=True, scripted=True, with_path=True)["sessions"]
+            if r["repo"] == repo and r["group"] == group]
     paths = sorted({r["cwd"] for r in rows if r["worktree"] and r["cwd"]})
-    return {"sessions": [r["id"] for r in rows if not r["hidden"]], "worktrees": [worktree_state(p) for p in paths]}
+    out = []
+    for p in paths:
+        st = worktree_state(p)
+        busy = _still_running([r for r in rows if r["cwd"] == p])
+        out.append(dict(st, safe=False, why=busy) if busy else st)
+    return {"sessions": [r["id"] for r in rows if not r["hidden"]], "worktrees": out}

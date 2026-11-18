@@ -98,14 +98,15 @@ class ChatRedrawTest(unittest.TestCase):
 
     def test_studio_updates_the_conversation_and_header_in_place(self):
         studio = body(js(), "function wireStudio(")
-        self.assertIn("morph(conv, ssConv(n)); morph(head, ssHead(n));", studio)
+        self.assertIn("morph(conv, ssConv(n)); morph(head, ssHead(d));", studio)  # d: n plus the row read once
         self.assertNotRegex(studio, r"(conv|head)\.innerHTML\s*=")
         self.assertIn('if (once(conv, "at-end")) conv.scrollTop = conv.scrollHeight;', studio)
         self.assertIn("morph(box, ssAct(n))", studio)
 
     def test_studio_menu_images_and_rewind_survive_a_redraw(self):
         src = js()
-        self.assertIn('class="ss-menu" role="menu" data-keep="hidden"', body(src, "function ssHead("))
+        self.assertIn("sessMenu(s, { unlocked, extra: SS_MENU_EXTRA })", body(src, "function ssHead("))
+        self.assertIn('class="sess-menu" role="menu" data-keep="hidden style"', body(src, "function sessMenu("))
         self.assertIn('data-fill data-keep="class"', body(src, "function ssItems("))
         self.assertIn('box.dataset.local = ""', src)
 

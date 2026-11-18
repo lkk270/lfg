@@ -401,6 +401,10 @@ def api(view, q):
             BR.maybe_summarize(key, data=data)  # in the background: the page never waits for it
         return data
     rid = _rid(q)
+    if view == "studio" and not rid:  # no repo picked: the list still has every session, or those outside a repo
+        from . import studiolist as SL
+        return SL.listing("", None, hidden=_arg(q, "hidden") in ("1", "true"),
+                          scope="loose" if _arg(q, "scope") == "loose" else "all")
     if not rid:
         return {"available": False, "why": "No repo yet. Open Claude Code in a git repo; LFG builds its graphs "
                                            "on the first session."}
@@ -415,8 +419,11 @@ def api(view, q):
     if view in ("studio", "studio_session"):  # Studio: Claude Code sessions run from the dashboard
         from . import claudesess as CS
         root = dash.repo_root(rid)
-        return CS.listing(rid, root) if view == "studio" else \
-            CS.detail(rid, root, _arg(q, "id"), limit=int(_arg(q, "limit") or 0) or None)
+        if view == "studio":
+            from . import studiolist as SL
+            return SL.listing(rid, root, hidden=_arg(q, "hidden") in ("1", "true"), scope=_arg(q, "scope") or "repo")
+        return CS.detail(rid, root, _arg(q, "id"), limit=int(_arg(q, "limit") or 0) or None,
+                         row=_arg(q, "row") in ("1", "true"))
     if view == "studio_changes":  # every file a session changed, as diffs, from its transcript
         from . import claudesess as CS
         return CS.changes(rid, dash.repo_root(rid), _arg(q, "id"))
@@ -651,6 +658,10 @@ def save(what, body):
                     raise ValueError("ids must be a list")
                 return SS.hide(ids, on=body.get("on", True) is not False)
             if what == "session_trash":
+                from . import claudesess as CS
+                live = CS._LIVE.get(str(body.get("id") or ""))
+                if live and live.state != "ended":
+                    raise ValueError("That session is still running in LFG. End it first, then delete it.")
                 return SS.trash(body.get("id"))
             if what == "session_star":
                 return SS.star(body.get("id"), body.get("on", True) is not False)
@@ -856,6 +867,8 @@ def session_action(what, body):
         if what == "sess_mode":
             CS.live(sid).set_mode(str(body.get("mode") or ""))
             return {"saved": True}
+        if what == "sess_model":
+            return CS.set_model(sid, str(body.get("model") or ""))
         if what == "sess_interrupt":
             CS.live(sid).interrupt()
             return {"saved": True}

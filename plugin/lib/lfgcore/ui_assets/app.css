@@ -558,8 +558,8 @@ details.more { margin-top: 18px; } details.more > summary { cursor: pointer; col
 .sess-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; flex: 0 1 430px; }  /* the buttons wrap as one block */
 .sess-list > li.sess:last-child { border-bottom: 0; }
 .sess-list .title { font-weight: 500; }
-.sess-list .star { background: none; border: 0; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
-.sess-list .star.on { color: #e3b341; } .sess-list .star:disabled { cursor: default; opacity: .6; }
+.sess-list .star, .sess-row .star, .sess-actions .star { background: none; border: 0; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
+.sess-list .star.on, .sess-row .star.on, .sess-actions .star.on { color: #e3b341; } .sess-list .star:disabled, .sess-row .star:disabled { cursor: default; opacity: .6; }
 details.sess-old { margin: 0 0 8px 22px; } details.sess-old > summary { font-size: 12.5px; margin-bottom: 4px; }
 .sess-list details.more { margin-top: 4px; } .sess-list details.more > summary { margin-bottom: 0; font-size: 12.5px; }
 .sess-recent { margin-top: 6px; max-width: 760px; }
@@ -1112,12 +1112,6 @@ a.stk-i:hover { background: var(--hover); }
 .ss-grp { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 6px; }
 .ss-scrollarea > .ss-grp:first-child { margin-top: 4px; }
 .ss-list { padding: 0; }
-.ss-row { display: flex; gap: 16px; align-items: flex-start; padding: 11px 14px; color: var(--text); text-decoration: none; border-top: 1px solid var(--line); min-width: 0; }
-.ss-row:first-child { border-top: 0; } .ss-row:hover { background: var(--hover); }
-.ss-row .grow { display: grid; gap: 5px; min-width: 0; }
-.ss-row-t { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ss-row-m { flex: none; display: grid; justify-items: end; gap: 3px; font-size: 12px; color: var(--muted); }
-.ss-row-c { font-family: var(--mono); color: var(--text-2); }
 .ss-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .ss-tags .tg, .ss-tags .brtag { height: 20px; font-size: 11.5px; text-decoration: none; }
 .ss-tags .brtag { max-width: 220px; }
@@ -1402,7 +1396,7 @@ a.stk-i:hover { background: var(--hover); }
 .chip.c-green { color: var(--green-tx); background: var(--green-bg); }
 .chip.c-yellow { color: var(--yellow-tx); background: var(--yellow-bg); }
 .chip.c-red { color: var(--red-tx); background: var(--red-bg); }
-/* labels and nested groups (Sessions page, Studio's list) */
+/* labels and nested groups (Studio's list) */
 .lbl-row { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; vertical-align: middle; }
 .chip.lbl { height: 20px; font-size: 11.5px; border: 0; font-family: inherit; }
 button.chip.lbl { cursor: pointer; }
@@ -2438,15 +2432,8 @@ body.rail .ns-n { position: absolute; top: 1px; right: 3px; min-width: 15px; hei
 .ctx-legend .ctx-c { width: 10px; flex: none; }
 .ctx-pc { width: 40px; text-align: right; }
 .ss-head-a { position: relative; }
-.ss-more .ico { width: 16px; height: 16px; }
-.ss-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 230px; padding: 5px; border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--surface); box-shadow: 0 12px 32px -12px rgba(0, 0, 0, .35); display: grid; }
-.ss-menu button { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--text-2);
-  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
-.ss-menu button:hover { background: var(--hover); color: var(--text); }
-.ss-menu button .ico { width: 15px; height: 15px; color: var(--muted); }
-.ss-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
-.ss-menu .bad { color: var(--red); }
+.ss-head-a .star { background: none; border: 0; padding: 0 2px; font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer; }
+.ss-head-a .star.on { color: #e3b341; } .ss-head-a .star:disabled, .sess-actions .star:disabled { cursor: default; opacity: .6; }
 .ss-note { align-self: center; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .ss-note::before, .ss-note::after { content: ""; width: 40px; height: 1px; background: var(--line); }
 .ss-ai .ss-msg-a { grid-column: 2; }
@@ -2631,11 +2618,39 @@ body.sg-open { overflow: hidden; }
 .panel.recap { padding: 10px 14px; }
 .panel.recap .row { gap: 8px; }
 
-/* Studio's list: row actions and the group view */
-.ss-row-act { display: none; gap: 6px; align-items: center; align-self: center; }
-.ss-row:hover .ss-row-act, .ss-row:focus-within .ss-row-act { display: inline-flex; }
-.ss-row .lbl-row { margin-left: 8px; }
+/* Studio's list: one row per session (a studio chat and a terminal session look the same), its ... menu, the group view */
+.ss-allbox > :not(.ss-scrollarea) { flex: none; }
+.ss-allbox .page-tabs { margin: 10px 0 8px; }
+.ss-filters .seg { margin: 0; }
+.ss-hid.on { background: var(--active); color: var(--blue-tx); }
 .ss-tree details.item > .box { margin: 0 0 6px; }
+.ss-tree .grp-node > summary .btn { opacity: 0; transition: opacity .12s; }
+.ss-tree .grp-node > summary:hover .btn, .ss-tree .grp-node > summary:focus-within .btn { opacity: 1; }
+@media (hover: none) { .ss-tree .grp-node > summary .btn { opacity: 1; } }
+.sess-row { display: flex; gap: 12px; align-items: center; padding: 10px 12px 10px 8px; border-top: 1px solid var(--line); min-width: 0; }
+.ss-list > .sess-row:first-child { border-top: 0; }
+.sess-row:hover { background: var(--hover); }
+.sess-row.is-hidden .sess-main { opacity: .6; }
+.sess-row > .btn, .sess-row > .star, .sess-menu-wrap { flex: none; }
+.sess-main { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.sess-title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.sess-chips .tg { height: 20px; font-size: 11.5px; }
+.sess-kind .ico { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; }
+.sess-st { display: inline-flex; align-items: center; gap: 5px; }
+.sess-meta { font-size: 12px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.sess-row .skill-runs { margin-top: 2px; }
+.sess-menu { position: fixed; z-index: 60; min-width: 230px; padding: 5px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
+.sess-menu[hidden] { display: none; }
+.sess-menu button { display: block; width: 100%; text-align: left; background: none; border: 0; font: inherit; font-size: 13.5px; color: var(--text); padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.sess-menu button:hover:not(:disabled), .sess-menu button:focus-visible { background: var(--hover); outline: none; }
+.sess-menu button:disabled { color: var(--muted); cursor: default; opacity: .7; }
+.sess-menu button.danger:not(:disabled) { color: var(--red-tx, var(--red)); }
+.sess-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.ss-model-wrap { flex: none; }
+.ss-model:disabled { cursor: default; opacity: .6; }
+.ss-model-menu { min-width: 260px; }
+.sess-menu.ss-model-menu button.cur { background: var(--active); color: var(--blue-tx); font-weight: 600; }
 
 /* Where you left off: the list, the briefing and the session panel. Theme variables only, so light and dark both work. */
 .cont-list > li.cont-entry { border-bottom: 1px solid var(--line); }

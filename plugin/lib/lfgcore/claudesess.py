@@ -24,12 +24,12 @@ import threading
 import uuid
 
 from . import common as C
+from . import models as models_list
 from . import notify as N
 from . import sessions as US
 
 PROJECTS = os.path.join(C.HOME, ".claude", "projects")
 MODES = {"default": "Ask before edits", "acceptEdits": "Accept edits", "plan": "Plan only"}
-MODELS = ("opus", "sonnet", "haiku")
 MAX_ITEMS = 600
 SUMMARY_VERSION = 7
 _LIVE, _LOCK = {}, threading.RLock()
@@ -380,10 +380,11 @@ def _wt_name(root, cwd):
 
 def where(rid, root):
     """For the new-session screen: the branch checked out right now, the default branch, local branches, and every
-    worktree with where it stands (see worktree.status)."""
+    worktree with where it stands (see worktree.status), and the models it can start on."""
     from . import worktree as W
+    models = models_list.choices()
     if not root or not os.path.isdir(root):
-        return {"branch": "", "worktrees": [], "branches": []}
+        return {"branch": "", "worktrees": [], "branches": [], "models": models}
     sessions = {}
     for s in listing(rid, root)["sessions"]:
         if s.get("worktree_name"):
@@ -392,7 +393,7 @@ def where(rid, root):
     branches = C.run(["git", "for-each-ref", "refs/heads", "--format=%(refname:short)"], cwd=root,
                      timeout=10).stdout.split()
     return {"branch": C.git_branch(root), "default": W.default_branch(root), "worktrees": wts,
-            "branches": branches[:300]}
+            "branches": branches[:300], "models": models}
 
 
 def _pr_for(rid, branch):
@@ -423,6 +424,24 @@ def _summary_cache():
     return C.read_json(C.lfg_path("sessions", "list-cache.json"), {}) or {}
 
 
+def summary_for(cache, p, root, st=None):
+    """(the cached summary of one transcript, True when it was rebuilt). Keyed on version, mtime and size, so a hit
+    costs one stat. `cache` is updated in place; the caller writes it."""
+    st = st or os.stat(p)
+    key = "v%d:%s:%d:%d" % (SUMMARY_VERSION, p, st.st_mtime, st.st_size)  # a new version rebuilds them all
+    s = cache.get(p)
+    if s and s.get("key") == key:
+        return s, False
+    items, meta = read(p, limit=1)
+    s = {"key": key, "title": meta["title"] or _title(meta["first"]) or "Untitled session",
+         "worktree_name": _wt_name(root, meta["cwd"]),
+         "branch": meta["branch"], "entry": meta["entry"], "model": meta["model"], "skills": meta["skills"],
+         "updated": meta["updated"], "cost": _cost(p), "worktree": "-worktrees-" in os.path.dirname(p),
+         "files": len(meta["files"]), "issues": meta["issues"]}
+    cache[p] = s
+    return s, True
+
+
 def listing(rid, root):
     """Every Claude Code session for this project (its checkout and LFG's worktrees of it), newest first, with what
     each is about, where it came from, its branch, cost, and whether it's live here right now."""
@@ -438,16 +457,8 @@ def listing(rid, root):
               for sid, names in prefs["labels"].items()}
     for p in sorted(files, key=lambda p: -os.path.getmtime(p))[:200]:
         st = os.stat(p)
-        key = "v%d:%s:%d:%d" % (SUMMARY_VERSION, p, st.st_mtime, st.st_size)  # a new version rebuilds them all
-        s = cache.get(p)
-        if not s or s.get("key") != key:
-            items, meta = read(p, limit=1)
-            s = {"key": key, "title": meta["title"] or _title(meta["first"]) or "Untitled session",
-                 "worktree_name": _wt_name(root, meta["cwd"]),
-                 "branch": meta["branch"], "entry": meta["entry"], "model": meta["model"], "skills": meta["skills"],
-                 "updated": meta["updated"], "cost": _cost(p), "worktree": "-worktrees-" in os.path.dirname(p),
-                 "files": len(meta["files"]), "issues": meta["issues"]}
-            cache[p], changed = s, True
+        s, fresh = summary_for(cache, p, root, st)
+        changed = changed or fresh
         sid = os.path.basename(p)[:-6]
         live = _LIVE.get(sid)
         mine = idx.get(sid) or {}
@@ -467,8 +478,8 @@ def listing(rid, root):
     if changed:
         C.ensure_dir(C.lfg_path("sessions"))
         C.write_json(C.lfg_path("sessions", "list-cache.json"), {k: v for k, v in cache.items() if os.path.exists(k)})
-    return {"sessions": out, "modes": MODES, "models": list(MODELS), "group_info": SS.group_info(),
-            "label_list": SS.label_list()}
+    return {"sessions": out, "modes": MODES, "models": models_list.choices(),
+            "group_info": SS.group_info(), "label_list": SS.label_list()}
 
 
 LFG_PROMPTS = [  # LFG's own background runs, by how their prompt starts: a readable title instead
@@ -500,6 +511,11 @@ def _one_line(text):
 
 class Live:
     """One running `claude -p` in stream-json mode, kept open by `lfg ui` between your messages."""
+
+    # Claude Code answers a `set_model` control request, and the next reply uses the new model (probe:
+    # docs/superpowers/plans/2026-11-16-set-model-probe.md). When False, the model changes by restarting the process.
+    _native_set_model = True
+    model_pending = False
 
     def __init__(self, sid, rid, root, model, mode, title, resume, fork_of=None, fork_at=None, review=None):
         self.sid, self.rid, self.root, self.model, self.mode, self.title = sid, rid, root, model, mode, title
@@ -703,6 +719,8 @@ class Live:
     def say(self, text, attachments=None, turn=None):
         """`turn`: what a message about a review is ({"pr", "n", "fid", "qid", "q", "edits"}), kept until its reply."""
         content = _content(text, attachments)
+        if self.model_pending and self.state == "idle" and not self.pending:
+            return self._restart_with_model().say(text, attachments, turn)
         if self.state in ("working", "needs-you") or self.pending:
             self.queued.append(content)  # Claude is mid-turn or waiting on you: it goes in when this turn ends
             self._qmeta.append(turn)
@@ -762,6 +780,31 @@ class Live:
                      "request": {"subtype": "set_permission_mode", "mode": mode}})
         self.mode = mode
         _remember(self.sid, mode=mode)
+
+    def set_model(self, model):
+        """Change the model for the next messages: at once when Claude Code supports it, else the process restarts
+        with it when the next message is sent."""
+        if self.state in ("working", "starting", "needs-you") or self.pending:
+            raise Invalid("Wait for the answer to finish, then change the model.")
+        if not models_list.valid(model):
+            raise Invalid("not a model")
+        if model and self._native_set_model:
+            self._write({"type": "control_request", "request_id": "model-" + uuid.uuid4().hex[:8],
+                         "request": {"subtype": "set_model", "model": model}})
+            self.model_pending = False
+        else:  # "" is Claude Code's own default, which has no name to send
+            self.model_pending = True
+        self.model = model or None
+        _remember(self.sid, model=self.model)
+
+    def _restart_with_model(self):
+        """Stop this process and resume the session in a new one that starts with the stored model."""
+        self.stop()
+        with _LOCK:
+            new = _LIVE[self.sid] = Live(self.sid, self.rid, self.root, self.model, self.mode, self.title,
+                                         resume=True, review=self.review)
+        self.model_pending = False
+        return new
 
     def _send_queued(self, content):
         self.error = None
@@ -901,6 +944,28 @@ def image(sid, root, line, index):
     raise Invalid("that image isn't in the transcript")
 
 
+def set_model(sid, model):
+    """Change a session's model: on the running one, or for the next time a saved one is continued."""
+    if not models_list.valid(model):
+        raise Invalid("not a model")
+    l_ = _LIVE.get(sid)
+    if l_ and l_.state != "ended":
+        l_.set_model(model)
+    elif re.match(r"^[0-9a-f-]{36}$", str(sid or "")) and (sid in _index() or transcript(sid)):
+        _remember(sid, model=model or None)
+    else:
+        raise Invalid("that session isn't here any more")
+    return {"id": sid, "model": model}
+
+
+def chosen_model(mine, running=None, said=None):
+    """The model a session is set to: the one picked for it in LFG (none picked = Claude Code's default), else the
+    one its process runs, else the one its last reply used. `mine`: its entry in LFG's session index."""
+    if "model" in mine:
+        return mine["model"] or ""
+    return running or said or ""
+
+
 def start(rid, root, text, model=None, mode="default", title="", where=None, attachments=None):
     """A new session, starting with `text`, in this checkout or a worktree of it (see workdir)."""
     if not root or not os.path.isdir(root):
@@ -908,7 +973,8 @@ def start(rid, root, text, model=None, mode="default", title="", where=None, att
     if not C.which("claude"):
         raise Invalid("Claude Code (claude) isn't on PATH")
     text = _check(text, attachments)
-    model = model if model in MODELS else None  # none: Claude Code's own default, as the project's setup decides
+    # none: Claude Code's own default, as the project's setup decides
+    model = model if model and models_list.valid(model) else None
     mode = mode if mode in MODES else "default"
     sid = str(uuid.uuid4())
     title = _one_line(title or text or "Image")[:90]
@@ -1064,9 +1130,11 @@ def _review_items(items, chips):
     return out
 
 
-def detail(rid, root, sid, limit=None):
+def detail(rid, root, sid, limit=None, row=False):
     """One session: what was said and done (from its transcript), plus its live state and open permission prompts.
-    `limit`: only the last that many items (a review's chat shows the recent part; `earlier` says how many it left)."""
+    `limit`: only the last that many items (a review's chat shows the recent part; `earlier` says how many it left).
+    `row`: also its list settings (star, group, labels, hidden, resume command) for the header's menu. The page asks
+    once when it opens; its refreshes leave it out, since finding its group reads the other transcripts."""
     if not re.match(r"^[0-9a-f-]{36}$", str(sid or "")):
         return {"available": False, "why": "not a session id"}
     l_ = _LIVE.get(sid)
@@ -1078,10 +1146,15 @@ def detail(rid, root, sid, limit=None):
         items = _review_items(items, mine.get("chips") or {})
     from . import headroom as H
     via = l_.via if l_ else ("headroom" if H.base_url(root, use_env=False).rstrip("/") == H.local_url() else "direct")
-    return {"available": True, "id": sid, "items": items, "title": mine.get("title") or meta["title"] or
-            _one_line(meta["first"]) or "New session",
-            "branch": (l_.branch if l_ else None) or meta["branch"], "model": (l_.model if l_ else None) or
-            meta["model"] or mine.get("model"), "mode": (l_.mode if l_ else mine.get("mode")) or "default",
+    from . import sessions as SS
+    title = SS.display_title(sid, SS.prefs()["names"], mine.get("title"), meta["title"], _one_line(meta["first"]),
+                             "New session")
+    model = chosen_model(mine, l_.model if l_ else None, meta["model"])
+    out = {"available": True, "id": sid, "items": items, "title": title,
+            "branch": (l_.branch if l_ else None) or meta["branch"], "model": model,
+            "model_label": models_list.shown(model, meta["model"]),
+            "model_note": models_list.note(model, meta["model"]), "models": models_list.choices(),
+            "mode": (l_.mode if l_ else mine.get("mode")) or "default",
             "modes": MODES, "source": "lfg" if mine.get("lfg") else
             {"claude-desktop": "desktop", "cli": "terminal"}.get(meta["entry"], "background"),
             "state": l_.state if l_ else "saved", "pending": [{k: v for k, v in p.items() if k != "raw"}
@@ -1096,6 +1169,9 @@ def detail(rid, root, sid, limit=None):
             "issues": meta["issues"], "pr": _pr_for(rid, (l_.branch if l_ else None) or meta["branch"]),
             "worktree_name": _wt_name(root, l_.root if l_ else meta["cwd"]),
             "activity": activity(path, meta.get("activity") or [], bool(l_ and l_.state not in ("ended", "saved")))}
+    if row:  # and the groups and labels its Change group and Labels drawers offer
+        out.update(row=SS.row_of(sid, path), group_info=SS.group_info(), label_list=SS.label_list())
+    return out
 
 
 EDIT_TOOLS = ("Edit", "MultiEdit", "Write", "NotebookEdit")

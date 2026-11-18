@@ -6169,7 +6169,7 @@ class ReviewTest(unittest.TestCase):
         with self.assertRaises(ui.S.Invalid):
             ui.save("review_model", {"model": "gpt-5"})
         self.assertEqual(R.models()[1], {"id": "claude-fable-5-2", "label": "Fable 5.2"})
-        self.assertEqual(R.models()[2], {"id": "claude-fable-5-1", "label": "Fable 5.1"})  # 5.1 stays selectable
+        self.assertEqual(R.models()[3], {"id": "claude-fable-5-1", "label": "Fable 5.1"})  # 5.1 stays selectable
 
     def test_fable_5_2_is_a_choice_in_reviews_and_settings_and_is_priced(self):
         self.assertIn("claude-fable-5-2", [m["id"] for m in R.models()])
@@ -6734,7 +6734,6 @@ console.log(JSON.stringify(priorGroups([], {})));
         js = C.read_text(os.path.join(here, "ui_assets", "app.js"))
         tours = js[js.index("const PAGE_TOURS"):js.index("Object.keys(PAGE_TOURS)")]
         self.assertIn("/rename</code>", tours[tours.index("  studio:"):tours.index("  todos:")])
-        self.assertIn("/rename</code>", tours[tours.index("  sessions:"):tours.index("  todos:")])
         intro = C.read_text(os.path.join(here, "ui_assets", "intro", "03-everyday-commands.md"))
         self.assertIn("`/rename <name>`", intro)
         self.assertIn("/rename", C.read_text(os.path.join(here, "onboard.py")))
@@ -6769,12 +6768,12 @@ console.log(ssCtxHtml({ percent: null }) === "");
         self.assertEqual(json.loads(lines[1]), [False, False, True, True])  # warns only past 100k tokens
         self.assertEqual(lines[2], "true")
 
-    def test_sessions_page_can_show_only_starred_sessions(self):
+    def test_studio_list_can_show_only_starred_sessions(self):
         node = C.which("node")
         if not node:
             self.skipTest("node isn't installed")
         js = C.read_text(os.path.join(os.path.dirname(R.__file__), "ui_assets", "app.js"))
-        block = js[js.index("/* \"Starred only\" on the Sessions page"):js.index("PAGES.sessions = async")]
+        block = js[js.index("/* \"Starred only\" on the Studio list"):js.index("/* One session as a row")]
         script = """
 const store = {}, localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
 %s
@@ -6795,7 +6794,7 @@ console.log(JSON.stringify(out));
         self.assertEqual(out["none"], ["No starred sessions yet: star one to keep it here", ""])
         self.assertEqual(out["miss"][0], "No sessions match")  # starred ones exist, the search found none
         self.assertEqual(out["plain"][0], "No sessions match")
-        self.assertIn("sessShown(d.sessions, hit, starredOnly)", js)
+        self.assertIn("sessShown(all, hit, starredOnly)", js)
 
     def test_dead_running_job_reads_as_failed(self):
         C.write_json(R.job_path("o/r", 9), {"status": "running", "pid": 999999999})
