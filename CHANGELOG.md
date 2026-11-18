@@ -4,6 +4,17 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.8.0 (2026-11-17)
+
+### Added
+- Choose the model for a studio, in the new-studio box and in an open studio's header: Fable 5.2, Mythos 5.2, Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 or Claude Code's default
+
+### Changed
+- Studio is now the one list of every session, studio chat or terminal, with every action on each; the Sessions page redirects to it
+
+### Fixed
+- The top-right Studio button now opens the Studio list
+
 ## 0.7.4 (2026-11-16)
 
 ### Added
