@@ -1,0 +1,14 @@
+{
+  "changelog": {
+    "Added": [
+      "A message you queue while Claude is still answering can be edited or cancelled, in Studio and in a PR's chat. While you edit it, it is held back even if Claude is free, and goes out when you save."
+    ]
+  },
+  "whats_new": [
+    {
+      "title": "Edit or cancel a queued message",
+      "text": "A message waiting for Claude to finish now has Edit and Cancel. While you edit it, it won't send, even if Claude becomes free; it goes out when you save.",
+      "page": "studio"
+    }
+  ]
+}

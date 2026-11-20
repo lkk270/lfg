@@ -96,6 +96,44 @@ class ModelSwitchTest(unittest.TestCase):
         lv.proc = mock.MagicMock()
         return lv
 
+    def test_a_queued_message_can_be_edited_or_cancelled_and_waits_while_you_edit(self):
+        lv = self.live("working")
+        lv.say("first thought")
+        lv.say("second thought")
+        a, b = [q["id"] for q in lv.queue_view()]
+        lv.queue_cancel(b)
+        self.assertEqual([q["text"] for q in lv.queue_view()], ["first thought"])
+        lv.queue_hold(a, True)  # editing it
+        lv.state = "idle"  # Claude finishes meanwhile: it must not send what is half edited
+        self.assertFalse(lv._drain())
+        self.assertEqual(lv.sent, [])
+        lv.queue_edit(a, "first thought, reworded")  # done editing and Claude is free: it goes now
+        self.assertEqual(lv.sent[-1]["message"]["content"], "first thought, reworded")
+        self.assertEqual(lv.queue_view(), [])
+        with self.assertRaises(self.CS.Invalid):
+            lv.queue_edit(a, "too late")
+
+    def test_an_abandoned_edit_stops_holding_the_message(self):
+        lv = self.live("working")
+        lv.say("hello")
+        qid = lv.queue_view()[0]["id"]
+        with mock.patch.object(self.CS.threading, "Timer"):
+            lv.queue_hold(qid, True)
+        lv._qmeta[0]["hold"] = 1  # the browser went away long ago
+        lv.state = "idle"
+        self.assertTrue(lv._drain())
+        self.assertEqual(lv.sent[-1]["message"]["content"], "hello")
+
+    def test_editing_keeps_a_review_chats_note_out_of_sight_but_attached(self):
+        lv = self.live("working")
+        lv.say("why?\n\n<lfg-review pass=\"1\">\nctx\n</lfg-review>", turn={"q": "why?\n[file: /x/a.txt]"})
+        qid = lv.queue_view()[0]["id"]
+        self.assertEqual(lv.queue_view()[0]["text"], "why?")
+        lv.queue_edit(qid, "why not?")
+        self.assertEqual(lv.sent, [])  # Claude is still working: edited, still queued
+        self.assertEqual(lv.queued[0], "why not?\n\n<lfg-review pass=\"1\">\nctx\n</lfg-review>")
+        self.assertEqual(lv._qmeta[0]["turn"]["q"], "why not?\n[file: /x/a.txt]")
+
     def test_set_model_refused_while_working(self):
         for state in ("working", "starting"):
             lv = self.live(state)

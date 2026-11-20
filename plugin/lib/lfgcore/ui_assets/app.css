@@ -1134,6 +1134,10 @@ a.stk-i:hover { background: var(--hover); }
 .ss-bub.skill .ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
 .ss-bub.skill span { font-family: var(--sans); color: var(--text); }
 .ss-bub.queued { opacity: .7; border: 1px dashed var(--line-2); background: transparent; color: var(--text); }
+.ss-bub.queued.editing { opacity: 1; border-style: solid; }
+.ss-qm-bar { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+.ss-qm-bar a { font-size: 12px; }
+.ss-qm-text { width: 100%; min-width: 260px; box-sizing: border-box; font: inherit; resize: vertical; }
 .ss-ai { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; font-size: 14.5px; line-height: 1.65; overflow-wrap: anywhere; }
 .ss-ai-av { width: 26px; height: 26px; border-radius: 8px; background: var(--ai-bg); color: var(--ai-tx); display: inline-flex; align-items: center; justify-content: center; }
 .ss-ai-av .ico { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
