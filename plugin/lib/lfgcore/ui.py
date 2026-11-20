@@ -869,6 +869,15 @@ def session_action(what, body):
             return {"saved": True}
         if what == "sess_model":
             return CS.set_model(sid, str(body.get("model") or ""))
+        if what in ("sess_queue_hold", "sess_queue_edit", "sess_queue_cancel"):  # a message waiting for Claude
+            live, qid = CS.live(sid), str(body.get("queued") or "")
+            if what == "sess_queue_hold":
+                live.queue_hold(qid, bool(body.get("on", True)))
+            elif what == "sess_queue_edit":
+                live.queue_edit(qid, body.get("text"))
+            else:
+                live.queue_cancel(qid)
+            return {"saved": True}
         if what == "sess_interrupt":
             CS.live(sid).interrupt()
             return {"saved": True}

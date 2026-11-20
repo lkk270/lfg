@@ -5243,7 +5243,7 @@ function wireChatPane(root) {
     if (!document.body.contains(conv) || !rv.sid) return;
     const nd = await api("studio_session", { id: rv.sid, limit: 40 }).catch(() => null);
     if (!nd || nd.available === false || !document.body.contains(conv)) return;
-    const was = rv.d, sig = d => JSON.stringify([d.items.length, d.state, (d.pending || []).length, (d.queued || []).length, d.error, (d.items[d.items.length - 1] || {}).result != null, d.items.map(x => x.changed ? 1 : 0).join("")]);
+    const was = rv.d, sig = d => JSON.stringify([d.items.length, d.state, (d.pending || []).length, JSON.stringify(d.queued || []), (state.qEdit || {}).id, d.error, (d.items[d.items.length - 1] || {}).result != null, d.items.map(x => x.changed ? 1 : 0).join("")]);
     const changed = !was || was.id !== nd.id || sig(was) !== sig(nd);
     rv.d = nd;
     if (changed) draw();
@@ -6707,9 +6707,17 @@ function ssFollowups(d) {
   out.push(["", "Summarize what changed", "Summarize what you changed in this session and anything left to do, in a few bullets."]);
   return `<div class="ss-follow"><span class="muted small">Next</span>${out.map(([k, l, p]) => `<button class="chip" data-follow="${esc(p)}">${k ? `<span class="ss-sug-k">${esc(k)}</span>` : ""}${esc(l)}</button>`).join("")}</div>`;
 }
+/* A message waiting for Claude to finish the one before it: Edit or Cancel it. While it is being edited it is held back,
+   even when Claude is free, so it never goes out half-written. state.qEdit is the one being edited and its text so far. */
+function ssQueued(q) {
+  const ed = (state.qEdit || {}).id === q.id;
+  return `<div class="ss-me" data-qm="${esc(q.id)}"><div class="ss-bub queued${ed ? " editing" : ""}">${ed
+    ? `<textarea class="ss-qm-text" rows="3" aria-label="Edit the queued message">${esc(state.qEdit.text)}</textarea><div class="ss-qm-bar"><button class="btn small primary" data-qm-save>Save</button><button class="btn small" data-qm-back>Back</button><span class="muted small">Waits while you edit</span></div>`
+    : `${esc(q.text)}<div class="ss-qm-bar"><span class="muted small">${q.editing ? "being edited elsewhere" : "goes in when Claude is ready"}</span><a href="#" data-qm-edit>Edit</a><a href="#" data-qm-cancel>Cancel</a></div>`}</div></div>`;
+}
 function ssConv(d, chat) {  // chat: on a review's page, where there is no Rewind or Fork and no suggested next steps
   const live = ssLive(d.state);
-  return `${ssItems(d.items || [], live, (d.review || {}).pr, chat)}${(d.queued || []).map(q => `<div class="ss-me"><div class="ss-bub queued">${esc(q)}<span class="muted small"> · goes in when Claude is ready</span></div></div>`).join("")}
+  return `${ssItems(d.items || [], live, (d.review || {}).pr, chat)}${(d.queued || []).map(ssQueued).join("")}
     ${ssPending(d)}${d.state === "working" || d.state === "starting" ? `<div class="ss-working"><span class="ss-pulse"></span> Claude is working… <button class="btn small" data-ss-interrupt>Stop</button></div>` : ""}
     ${d.error ? `<div class="callout bad small">${fmtWhy(d.error)}</div>` : ""}${ssOutside(d)}${chat ? "" : ssFollowups(d)}${!(d.items || []).length && !live && !chat ? empty("Nothing to show", "This session has no messages yet.") : ""}`;
 }
@@ -7100,6 +7108,33 @@ function ssConvWirer(o) {
         if (r.ok) refresh();
       };
     });
+    $$("[data-qm]", conv).forEach(row => {  // queued messages: edit (held back meanwhile), cancel
+      const qm = row.dataset.qm, post = (what, extra) => save(what, Object.assign({ repo: state.repo, id: S.id, queued: qm }, extra));
+      const stopBeat = () => { if (state.qEdit && state.qEdit.beat) clearInterval(state.qEdit.beat); };
+      const leave = async () => { stopBeat(); state.qEdit = null; await post("sess_queue_hold", { on: false }); refresh(); };
+      const edit = $("[data-qm-edit]", row), cancel = $("[data-qm-cancel]", row), ta = $(".ss-qm-text", row);
+      if (edit) edit.onclick = async e => {
+        e.preventDefault();
+        const r = await post("sess_queue_hold", { on: true });
+        if (!r.ok) { refresh(); return; }  // it already went to Claude
+        const q = (d.queued || []).find(x => x.id === qm);
+        state.qEdit = { id: qm, text: q ? q.text : "", beat: setInterval(() => post("sess_queue_hold", { on: true }), 10000) };
+        refresh();
+      };
+      if (cancel) cancel.onclick = async e => { e.preventDefault(); const r = await post("sess_queue_cancel", {}); if (!r.ok) alert(String(r.why || "That didn't work.")); refresh(); };
+      if (ta) {
+        ta.oninput = () => { state.qEdit.text = ta.value; };
+        if (!ta._focused) { ta._focused = true; ta.focus({ preventScroll: true }); }
+        const save_ = $("[data-qm-save]", row), back = $("[data-qm-back]", row);
+        back.onclick = leave;
+        save_.onclick = async () => {
+          if (!ta.value.trim()) { ta.focus(); return; }
+          stopBeat();
+          const r = await post("sess_queue_edit", { text: ta.value });
+          if (r.ok) { state.qEdit = null; refresh(); } else { alert(String(r.why || "That didn't work.")); leave(); }
+        };
+      }
+    });
     const stop = $("[data-ss-interrupt]", conv); if (stop) stop.onclick = () => go("sess_interrupt", { id: S.id }, stop, "Stopping…");
     $$("[data-follow]", conv).forEach(b => b.onclick = () => o.follow(b.dataset.follow));
     $$("[data-ss-copy]", conv).forEach(b => b.onclick = async () => { await navigator.clipboard.writeText(ssItemText(d.items[+b.dataset.ssCopy])); const t = b.innerHTML; b.textContent = "Copied"; setTimeout(() => { b.innerHTML = t; }, 1200); });
@@ -7286,7 +7321,7 @@ function wireStudio(root) {
   const atBottom = () => conv.scrollTop + conv.clientHeight >= conv.scrollHeight - 120;
   if (once(conv, "at-end")) conv.scrollTop = conv.scrollHeight;  // a session opens at its end; a redraw leaves you where you are
   let sig = "";
-  const sigOf = n => JSON.stringify([n.items.length, n.state, n.model, (n.pending || []).length, (n.queued || []).length, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null, (n.outside || {}).ts]);
+  const sigOf = n => JSON.stringify([n.items.length, n.state, n.model, (n.pending || []).length, JSON.stringify(n.queued || []), (state.qEdit || {}).id, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null, (n.outside || {}).ts]);
   const busyBg = n => (n.activity || []).some(a => a.status === "running");
   wireAct($("#ss-act", root));
   const drawAct = n => { const box = $("#ss-act", root); if (box) morph(box, ssAct(n)); const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };

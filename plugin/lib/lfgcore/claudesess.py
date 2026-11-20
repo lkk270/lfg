@@ -73,6 +73,8 @@ def transcript(sid, cwd=None):
 
 # ---------------------------------------------------------------- reading a transcript
 
+_QLOCK = threading.RLock()  # the queue is changed by the session's reader and by the dashboard's requests
+QUEUE_HOLD = 30  # seconds a queued message stays unsent after the last sign you are editing it
 REVIEW_NOTE = re.compile(r"\s*<lfg-review\b[^>]*>[\s\S]*?</lfg-review>\s*")  # what a review's chat adds to a message
 COMMAND = re.compile(r"<command-name>/?([^<]+)</command-name>")
 ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
@@ -596,8 +598,8 @@ class Live:
                 if ev.get("is_error"):
                     self.error = str(ev.get("result") or ev.get("subtype") or "the turn failed")[:400]
                 self.state = "idle" if not self.pending else "needs-you"
-                if self.queued:  # a message sent while Claude was busy goes in now
-                    self._send_queued(self.queued.pop(0))
+                if self.queued:  # a message sent while Claude was busy goes in now, unless you are editing it
+                    self._drain()
                 else:
                     path = transcript(self.sid, self.root)
                     spent = _cost(path) if path else None
@@ -722,8 +724,12 @@ class Live:
         if self.model_pending and self.state == "idle" and not self.pending:
             return self._restart_with_model().say(text, attachments, turn)
         if self.state in ("working", "needs-you") or self.pending:
-            self.queued.append(content)  # Claude is mid-turn or waiting on you: it goes in when this turn ends
-            self._qmeta.append(turn)
+            with _QLOCK:
+                self.queued.append(content)  # Claude is mid-turn or waiting on you: it goes in when this turn ends
+                cut = str(text).find("<lfg-review")  # a review chat's note rides along, never edited
+                self._qmeta.append({"turn": turn, "id": uuid.uuid4().hex[:8], "attach": attachments, "hold": 0,
+                                    "text": str(text)[:cut].rstrip() if cut >= 0 else str(text).strip(),
+                                    "suffix": str(text)[cut:] if cut >= 0 else ""})
             return "queued"
         self.error = None
         if not self._write({"type": "user", "message": {"role": "user", "content": content}}):
@@ -806,15 +812,75 @@ class Live:
         self.model_pending = False
         return new
 
-    def _send_queued(self, content):
+    def _drain(self, idle_only=False):
+        """Send the first queued message, unless you are editing it (then it waits until you are done). idle_only:
+        when the edit finished, so only if Claude is free now."""
+        with _QLOCK:
+            if not self.queued or (self._qmeta and self._qmeta[0].get("hold", 0) > time.time()):
+                return False
+            if idle_only and (self.state != "idle" or self.pending):
+                return False
+            content, meta = self.queued.pop(0), (self._qmeta.pop(0) if self._qmeta else {})
         self.error = None
-        turn = self._qmeta.pop(0) if self._qmeta else None
         if self._write({"type": "user", "message": {"role": "user", "content": content}}):
-            self._turns.append(turn)
+            self._turns.append(meta.get("turn"))
             self.state = "working"
+        return True
+
+    def _queued_at(self, qid):
+        for i, m in enumerate(self._qmeta):
+            if m.get("id") == qid:
+                return i
+        raise Invalid("that message already went to Claude")
+
+    def queue_view(self):
+        """The messages waiting for Claude: id, the text you wrote, and whether you are editing it now."""
+        with _QLOCK:
+            out = []
+            for i, q in enumerate(self.queued):
+                m = self._qmeta[i] if i < len(self._qmeta) else {}
+                out.append({"id": m.get("id", ""), "editing": m.get("hold", 0) > time.time(),
+                            "text": m["text"] if "text" in m else
+                            REVIEW_NOTE.sub("", _text_of(q) if isinstance(q, list) else q)})
+            return out
+
+    def queue_hold(self, qid, on=True):
+        """You are editing a queued message (call again within QUEUE_HOLD seconds to keep it): it is not sent while you
+        are. Done (on false) or silent for that long, and it goes as soon as Claude is free."""
+        with _QLOCK:
+            self._qmeta[self._queued_at(qid)]["hold"] = time.time() + QUEUE_HOLD if on else 0
+        if on:
+            t = threading.Timer(QUEUE_HOLD + 1, self._drain, kwargs={"idle_only": True})
+            t.daemon = True
+            t.start()
+        else:
+            self._drain(idle_only=True)
+
+    def queue_edit(self, qid, text):
+        """Replace a queued message's text (its files and a review chat's note stay), and send it if Claude is free."""
+        with _QLOCK:
+            i = self._queued_at(qid)
+            m = self._qmeta[i]
+            text = _check(text, m.get("attach"))
+            self.queued[i] = _content(text + ("\n\n" + m["suffix"] if m.get("suffix") else ""), m.get("attach"))
+            m.update(text=text, hold=0)
+            turn = m.get("turn")
+            if turn:  # what the chat history keeps of it: the words, then its files
+                tail = re.search(r"(\n\[(?:image|file): [^\]]+\])*$", turn.get("q") or "").group(0)
+                turn["q"] = (text + tail).strip()
+        self._drain(idle_only=True)
+
+    def queue_cancel(self, qid):
+        """Take a queued message back: it is never sent."""
+        with _QLOCK:
+            i = self._queued_at(qid)
+            self.queued.pop(i)
+            self._qmeta.pop(i)
+        self._drain(idle_only=True)  # a message behind it that was waiting for this one
 
     def interrupt(self):
-        self.queued, self._qmeta = [], []
+        with _QLOCK:
+            self.queued, self._qmeta = [], []
         self._write({"type": "control_request", "request_id": "stop-" + uuid.uuid4().hex[:8],
                      "request": {"subtype": "interrupt"}})
 
@@ -1159,7 +1225,7 @@ def detail(rid, root, sid, limit=None, row=False):
             {"claude-desktop": "desktop", "cli": "terminal"}.get(meta["entry"], "background"),
             "state": l_.state if l_ else "saved", "pending": [{k: v for k, v in p.items() if k != "raw"}
                                                               for p in (l_.pending.values() if l_ else [])],
-            "queued": [REVIEW_NOTE.sub("", _text_of(q) if isinstance(q, list) else q) for q in l_.queued] if l_ else [],
+            "queued": l_.queue_view() if l_ else [],
             "error": l_.error if l_ else None, "forked_from": mine.get("forked_from"),
             "outside": outside(l_, meta),
             "review": mine.get("review"), "earlier": earlier,
