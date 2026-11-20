@@ -1336,8 +1336,13 @@ def run(repo, number, ticket=None, fresh=False, together=(), model=None, method=
     log = job_path(repo, number)[:-5] + ".log"
     refs = [ref(*x) for x in prs]
     for x in prs:
+        try:
+            head = pr_meta(*x)["head_sha"]  # the commit this review starts on, kept as the commit it read
+        except ReviewError:
+            head = ""
         C.write_json(job_path(*x), {
             "repo": x[0], "number": x[1], "status": "running", "pid": os.getpid(), "started": C.now_iso(),
+            "head_sha": head,
             "cwd": cwd, "log": log, "re_review": before[x] > 0 and not fresh, "fresh": bool(fresh),
             "with": [r for r in refs if r != ref(*x)], "ticket": ticket or "", "model": model or chosen_model(),
             "method": label, "fresh_eyes": bool(fresh_eyes), "notes": notes or ""})
@@ -2571,6 +2576,11 @@ def _save_from_log(repo, number, log, ticket, many=False):
     if not data:
         return "Claude finished without a review of this PR to save; see the log"
     data.setdefault("reviewer", me())
+    started = (job(repo, number) or {}).get("head_sha")
+    if started and not data.get("head_sha"):
+        # the commit the run began on, not the PR's head now: commits pushed while it ran were not read, so the next
+        # re-review still has to look at them
+        data["head_sha"] = started
     try:
         save(repo, number, data, ticket=ticket)
     except ReviewError as e:

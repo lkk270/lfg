@@ -1,0 +1,14 @@
+{
+  "changelog": {
+    "Fixed": [
+      "A re-review reads the PR's latest commit: it fetches into a forced ref instead of a branch an earlier review's worktree had checked out, so findings the author already fixed are no longer reported as still open. A pass also keeps the commit its run started on, so commits pushed during a review are checked by the next one."
+    ]
+  },
+  "whats_new": [
+    {
+      "title": "Re-reviews see the latest commits",
+      "text": "A re-review now reads the newest code on the PR, so findings the author already fixed stop showing as still open.",
+      "page": "prs"
+    }
+  ]
+}
