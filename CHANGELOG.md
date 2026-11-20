@@ -4,6 +4,14 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.9.0 (2026-11-19)
+
+### Added
+- A message you queue while Claude is still answering can be edited or cancelled, in Studio and in a PR's chat. While you edit it, it is held back even if Claude is free, and goes out when you save.
+
+### Fixed
+- A re-review reads the PR's latest commit: it fetches into a forced ref instead of a branch an earlier review's worktree had checked out, so findings the author already fixed are no longer reported as still open. A pass also keeps the commit its run started on, so commits pushed during a review are checked by the next one.
+
 ## 0.8.0 (2026-11-17)
 
 ### Added

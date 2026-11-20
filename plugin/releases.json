@@ -2,6 +2,22 @@
   "_about": "What's new in each LFG release, said to the user: the walkthrough the dashboard shows once after an update, Help → What's new, and the lines `lfg setup` prints. Each item is one step of the walkthrough: page and sel (optional) say which page to open and what to light up on it. Newest release first. CHANGELOG.md keeps the detailed record.",
   "releases": [
     {
+      "version": "0.9.0",
+      "title": "Edit queued messages, fresher re-reviews",
+      "items": [
+        {
+          "title": "Re-reviews see the latest commits",
+          "text": "A re-review now reads the newest code on the PR, so findings the author already fixed stop showing as still open.",
+          "page": "prs"
+        },
+        {
+          "title": "Edit or cancel a queued message",
+          "text": "A message waiting for Claude to finish now has Edit and Cancel. While you edit it, it won't send, even if Claude becomes free; it goes out when you save.",
+          "page": "studio"
+        }
+      ]
+    },
+    {
       "version": "0.8.0",
       "title": "One list for studios and sessions",
       "items": [
