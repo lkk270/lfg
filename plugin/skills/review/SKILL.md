@@ -75,8 +75,12 @@ preflight: graphs
    absent alone (no ticket or no description is said in `intent`, not filed). `major` only when a wrong ticket or
    description is steering the change to the wrong fix, or would mislead someone merging or testing it.
 6. **Read the change.** `gh pr view <n> -R <repo> --json files` and `gh pr diff <n> -R <repo>`. Read the code
-   around each hunk at `head_sha`: from a worktree (`git fetch origin pull/<n>/head:review/pr-<n>` then
-   `lfg worktree new review/pr-<n>`) when the repo is local, else `gh api repos/<repo>/contents/<path>?ref=<sha>`.
+   around each hunk at `head_sha`. When the repo is local, fetch the PR into a ref of its own, forced so a re-review
+   and a force-push both move it: `git fetch --no-tags origin +pull/<n>/head:refs/lfg-review/pr-<n>`. Then check
+   `git rev-parse refs/lfg-review/pr-<n>` is `head_sha`; if it is not, the code you would read is out of date, so
+   fall back to `gh api repos/<repo>/contents/<path>?ref=<head_sha>`. Read with `git show <head_sha>:<path>` and
+   `git grep <pattern> <head_sha>`, never from a branch or worktree left by an earlier review: those still hold the
+   old commit, and reading them marks fixed findings as still open. Without a local repo, use the `gh api` form.
 7. **First review** (`re_review` false): one full pass over the whole diff, following the method. Every finding
    gets `since: "first"`. **Fresh eyes** (`fresh_eyes` true) is a first review on a PR that has earlier ones: skip
    steps 8 and 9, leave `prior` and `echoes` empty, and don't look for earlier reviews or others' comments (the

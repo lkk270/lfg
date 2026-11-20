@@ -4690,6 +4690,22 @@ class ReviewTest(unittest.TestCase):
             self.assertEqual(R._save_from_log("o/r", 7, log, None), "")
         self.assertEqual(R.load("o/r", 7)["passes"][0]["score"], 88)  # 100 minus its one major
 
+    def test_a_pass_keeps_the_commit_the_run_started_on_not_the_one_pushed_while_it_ran(self):
+        j = {"summary": "s", "score": 90, "findings": [self.finding()]}
+        log = os.path.join(self.tmp_dir(), "run.log")
+        with open(log, "w") as f:
+            f.write(json.dumps({"type": "result", "result": "```json\n%s\n```" % json.dumps(j)}))
+        C.write_json(R.job_path("o/r", 7), {"status": "running", "pid": os.getpid(), "head_sha": "b" * 40})
+        pushed_later = dict(self.META, head_sha="c" * 40)  # the author pushed again while the review ran
+        with mock.patch.object(R, "pr_meta", return_value=pushed_later), mock.patch.object(R, "me", return_value="me"):
+            self.assertEqual(R._save_from_log("o/r", 7, log, None), "")
+        self.assertEqual(R.load("o/r", 7)["passes"][0]["head_sha"], "b" * 40)
+
+    def test_the_review_skill_never_reads_old_code_from_a_branch_an_earlier_review_left(self):
+        text = open(os.path.join(C.PLUGIN_ROOT, "skills", "review", "SKILL.md")).read()
+        self.assertIn("+pull/<n>/head:refs/lfg-review/pr-<n>", text)  # forced, so a second review moves it
+        self.assertNotIn("pull/<n>/head:review/pr-<n>", text)  # git refuses this when a worktree has it checked out
+
     def fake_claude(self, events):
         """A stand-in for `claude -p`: writes these stream-json events to the run's log."""
         def run(cmd, cwd=None, stdout=None, **kw):
