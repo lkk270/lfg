@@ -1244,11 +1244,10 @@ EDIT_TOOLS = ("Edit", "MultiEdit", "Write", "NotebookEdit")
 
 
 def changes(rid, root, sid):
-    """Every file this session changed, as diffs: Claude Code keeps the exact patch of each Edit and the content of
-    each new file in its transcript, so this is what the session itself did (not what git shows now, which can mix in
-    other sessions and your own edits). Edits that were denied, failed or rewound are left out. One file's edits stay
-    separate hunks, in order, each with when it was made. Changes made by shell commands (sed, a script, a
-    formatter) aren't recorded as edits; they're listed as commands to look at."""
+    """Every file this session's work changed, as diffs: its branch's PR as GitHub has it, else the branch against
+    its base (sessdiff.py), so files changed by shell commands (sed, a script, a formatter) are in it. Only with no
+    branch to compare (the default branch with no PR, no repo) is it the transcript's own Edit and Write patches,
+    with denied, failed and rewound edits left out and shell commands that may write files listed."""
     if not re.match(r"^[0-9a-f-]{36}$", str(sid or "")):
         return {"available": False, "why": "not a session id"}
     l_ = _LIVE.get(sid)
@@ -1320,8 +1319,18 @@ def changes(rid, root, sid):
     for f in out:
         if sum(len(h["lines"]) for h in f["hunks"]) > 6000:
             f["too_big"], f["hunks"] = True, []
-    return {"available": True, "id": sid, "files": out, "shell": shells[-30:],
-            "additions": sum(f["additions"] for f in out), "deletions": sum(f["deletions"] for f in out)}
+    recorded = {"files": len(out), "additions": sum(f["additions"] for f in out),
+                "deletions": sum(f["deletions"] for f in out)}
+    # the branch's real diff (its PR on GitHub, else the branch against its base): it has what shell commands
+    # changed too, which the transcript doesn't record
+    from . import sessdiff as SD
+    edited = [it.get("input", {}).get("file_path") for it in items if it.get("id") in kept]
+    got = SD.actual(base, [p for p in edited if p], [it.get("input", {}).get("command") for it in items
+                                                     if it.get("k") == "tool" and it.get("name") == "Bash"], rid)
+    if got:
+        return dict(got, available=True, id=sid, shell=[], recorded=recorded)
+    return dict(recorded, available=True, id=sid, files=out, shell=shells[-30:], recorded=recorded,
+                source={"kind": "record"}, shell_count=len(shells))
 
 
 QUIET = re.compile(r"\d?>>?\s*/dev/null|\d?>&\d")  # output thrown away, not a file written

@@ -1,0 +1,13 @@
+{
+  "changelog": {
+    "Fixed": [
+      "A session's What it changed page shows the branch's whole pull request diff from GitHub (or the branch's diff when there's no PR yet), so files Claude changed with shell commands are no longer missing"
+    ]
+  },
+  "whats_new": [
+    {
+      "title": "What a session changed matches its PR",
+      "text": "A session's What it changed page now shows its branch's pull request as GitHub has it, so files Claude changed with scripts or sed show up too. It warns when the worktree has commits not pushed or uncommitted files that aren't on GitHub yet."
+    }
+  ]
+}

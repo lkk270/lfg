@@ -2275,6 +2275,8 @@ class ClaudeSessionsTest(unittest.TestCase):
         wt = os.path.join(tempfile.mkdtemp(), "lfg-ATO-1")
         C.run(["git", "worktree", "add", "-q", "-b", "lfg-ATO-1", wt], cwd=self.root)
         fp = os.path.join(wt, "src", "server.ts")
+        os.makedirs(os.path.dirname(fp))
+        C.write_text(fp, "b\n")
         base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
         self._transcript(sid, [
             dict(base, type="assistant", message={"content": [
@@ -2285,6 +2287,75 @@ class ClaudeSessionsTest(unittest.TestCase):
         with mock.patch.object(CS, "PROJECTS", self.proj):
             (f,) = CS.changes("r", self.root, sid)["files"]
         self.assertEqual((f["path"], f["outside"], f["worktree"]), ("src/server.ts", False, "lfg-ATO-1"))
+
+    def _branch_session(self, sid):
+        """A repo on main with a worktree on its own branch; the session Edits one file there and a shell command
+        changes another, which the transcript can't show."""
+        who = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        C.run(["git", "init", "-q", "-b", "main"], cwd=self.root)
+        C.write_text(os.path.join(self.root, "a.py"), "one\n")
+        C.write_text(os.path.join(self.root, "b.py"), "x\n")
+        C.run(["git", "add", "."], cwd=self.root)
+        C.run(who + ["commit", "-q", "-m", "start"], cwd=self.root)
+        wt = os.path.join(tempfile.mkdtemp(), "feat-x")
+        C.run(["git", "worktree", "add", "-q", "-b", "feat-x", wt], cwd=self.root)
+        C.write_text(os.path.join(wt, "a.py"), "two\n")       # by Edit
+        C.write_text(os.path.join(wt, "b.py"), "y\nz\n")     # by a shell script
+        C.run(who + ["commit", "-qam", "work"], cwd=wt)
+        C.write_text(os.path.join(wt, "new.py"), "n\n")      # uncommitted, untracked
+        base = {"cwd": self.root, "timestamp": "2026-10-24T10:00:00Z"}
+        self._transcript(sid, [
+            dict(base, type="assistant", message={"content": [
+                {"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": os.path.join(wt, "a.py")}},
+                {"type": "tool_use", "id": "b1", "name": "Bash",
+                 "input": {"command": "cd %s && python3 - <<'EOF'\nopen('b.py','w')\nEOF" % wt}}]}),
+            dict(base, type="user", toolUseResult={"filePath": os.path.join(wt, "a.py"), "structuredPatch": [
+                {"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-one", "+two"]}]},
+                 message={"content": [{"type": "tool_result", "tool_use_id": "e1", "content": "ok"}]}),
+            dict(base, type="user", message={"content": [{"type": "tool_result", "tool_use_id": "b1",
+                                                          "content": ""}]})])
+        return wt
+
+    def test_changes_are_the_branchs_whole_diff_with_what_shell_commands_changed(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-777777777777"
+        wt = self._branch_session(sid)
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            c = CS.changes("r", self.root, sid)
+        files = {f["path"]: f for f in c["files"]}
+        self.assertEqual(sorted(files), ["a.py", "b.py", "new.py"])  # b.py: by shell; new.py: not committed yet
+        self.assertEqual((files["b.py"]["additions"], files["b.py"]["deletions"]), (2, 1))
+        self.assertEqual((files["new.py"]["status"], files["a.py"]["worktree"]), ("added", "feat-x"))
+        self.assertEqual(os.path.realpath(files["b.py"]["full"]), os.path.realpath(os.path.join(wt, "b.py")))
+        self.assertEqual((c["source"]["kind"], c["source"]["branch"], c["source"]["base"]),
+                         ("branch", "feat-x", "main"))
+        self.assertEqual((c["recorded"]["files"], c["shell"]), (1, []))
+
+    def test_changes_are_the_prs_diff_as_github_has_it_when_the_branch_has_one(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-888888888888"
+        from lfgcore import prreview as PR
+        from lfgcore import sessdiff as SD
+        wt = self._branch_session(sid)
+        head = C.run(["git", "rev-parse", "HEAD"], cwd=wt).stdout.strip()
+        mb = C.run(["git", "rev-parse", "main"], cwd=wt).stdout.strip()
+        pr = {"number": 7, "url": "https://github.com/o/r/pull/7", "title": "T", "baseRefName": "main"}
+        with mock.patch.object(CS, "PROJECTS", self.proj), mock.patch.object(SD, "_pr", return_value=7), \
+                mock.patch.object(PR, "_pr_view", return_value=pr), \
+                mock.patch.object(PR, "_fetch", return_value=(head, mb)) as fetch:
+            c = CS.changes("r", self.root, sid)
+        fetch.assert_called_once()
+        self.assertEqual(sorted(f["path"] for f in c["files"]), ["a.py", "b.py"])  # committed: what the PR has
+        self.assertEqual((c["source"]["kind"], c["source"]["number"], c["source"]["local"]["uncommitted"]),
+                         ("pr", 7, 1))  # new.py isn't on GitHub yet, and the page says so
+
+    def test_changes_on_the_default_branch_with_no_pr_are_the_transcripts_and_say_what_they_miss(self):
+        CS, sid = self.CS, "77777777-2222-3333-4444-999999999999"
+        wt = self._branch_session(sid)
+        C.run(["git", "checkout", "-q", "--detach"], cwd=self.root)
+        C.run(["git", "checkout", "-q", "main"], cwd=wt)  # the worktree now sits on the default branch
+        with mock.patch.object(CS, "PROJECTS", self.proj):
+            c = CS.changes("r", self.root, sid)
+        self.assertEqual(([f["path"] for f in c["files"]], c["source"]["kind"], c["shell_count"]),
+                         (["a.py"], "record", 1))
 
     def test_subagents_and_background_work_are_tracked(self):
         CS = self.CS

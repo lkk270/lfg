@@ -1,9 +1,9 @@
 """What a Claude Code session changed and what it has running, read from its own transcript. Read only.
 
-Changes: Claude Code keeps the exact patch of each Edit and the content of each new file in the transcript, so this is
-what the session itself did, not what git shows now (which mixes in other sessions and your own edits). Edits that
-were denied, failed or rewound are left out. Shell commands that may write files (sed -i, a script, a formatter) aren't
-recorded as edits, so they're listed for you to look at.
+Changes: the diff of the session's branch, its PR as GitHub has it or else the branch against its base (sessdiff.py),
+so files changed by shell commands are in it. With no branch to compare (the default branch with no PR), the
+transcript's own Edit and Write patches, denied, failed and rewound edits left out, and the shell commands that may
+have written files listed.
 
 Background work: subagents (the Agent tool) and background commands, with what each subagent is doing now from its
 own transcript in <session>/subagents/. Ideas from upstream LFG's Studio (claudesess.py), reworked for this fork."""
@@ -164,8 +164,18 @@ def changes(sid):
     for f in out:
         if sum(len(h["lines"]) for h in f["hunks"]) > TOO_BIG:
             f["too_big"], f["hunks"] = True, []
-    return {"available": True, "id": sid, "cwd": cwd, "files": out, "shell": shell[-30:],
-            "additions": sum(f["additions"] for f in out), "deletions": sum(f["deletions"] for f in out)}
+    recorded = {"files": len(out), "additions": sum(f["additions"] for f in out),
+                "deletions": sum(f["deletions"] for f in out)}
+    # the branch's real diff (its PR on GitHub, else the branch against its base): it has what shell commands
+    # changed too, which the transcript doesn't record
+    from . import sessdiff as SD
+    got = SD.actual(cwd, [c["input"].get("file_path") for c in seq if c["name"] in EDIT_TOOLS
+                          and c["input"].get("file_path")],
+                    [c["input"].get("command") for c in seq if c["name"] == "Bash"])
+    if got:
+        return dict(got, available=True, id=sid, cwd=cwd, shell=[], recorded=recorded)
+    return dict(recorded, available=True, id=sid, cwd=cwd, files=out, shell=shell[-30:], recorded=recorded,
+                source={"kind": "record"}, shell_count=len(shell))
 
 
 def _where(fp, cwd):
