@@ -3190,7 +3190,7 @@ function skillRuns(runs, unlocked) {
       ${j.used ? `<details class="more"><summary class="small">What it used</summary>${usedTags(j.used)}</details>` : ""}</div>`;
   }).join("")}</div>`;
 }
-/* What a session changed: its own edits as diffs, read from its transcript (not git). Click a line number, then
+/* What a session changed: the diff of its branch's PR on GitHub (else its branch, else its transcript's edits). Click a line number, then
    shift-click another, to pick lines; Ask or Make this change sends them to the session through a skill run. */
 async function sessionChanges(sid, name, unlocked) {
   openDrawer(`What ${name} changed`, '<div class="skeleton"></div>');
@@ -3199,11 +3199,11 @@ async function sessionChanges(sid, name, unlocked) {
   if (d.available === false) { body.innerHTML = `<p class="muted">${fmtWhy(d.why)}</p>`; return; }
   const where = f => `${f.worktree ? `<span class="tag mono" title="Edited in this worktree">${esc(f.worktree)}</span> ` : ""}${esc(f.outside ? homePath(f.path) : f.path)}`;
   const row = (fi, hi, li, x) => `<tr class="${x.t === "+" ? "add" : x.t === "-" ? "del" : ""}" data-l="${fi}.${hi}.${li}"><td class="ln pick">${esc(x.old ?? "")}</td><td class="ln pick">${esc(x.new ?? "")}</td><td class="sg">${x.t === " " ? "" : esc(x.t)}</td><td class="tx">${esc(x.text)}</td></tr>`;
-  const file = (f, fi) => `<details class="sc-file" ${d.files.length <= 6 ? "open" : ""}><summary><span class="grow mono small">${where(f)}${f.outside ? ' <span class="tag" title="Outside this session\'s project: a scratch file or another repo">outside</span>' : ""}</span><span class="diffstat"><b class="add">+${f.additions}</b><b class="del">−${f.deletions}</b></span><span class="muted small nowrap">${plural(f.edits, "edit")}${f.status === "added" ? " · new file" : ""}</span></summary>
-    ${f.too_big ? '<p class="muted small">Too big to draw here.</p>' : f.hunks.map((h, hi) => `<div class="pr-snip"><div class="pr-snip-h mono">${esc(h.header)} <span class="muted">· edited ${ago(h.at)}</span></div><div class="pr-snip-b"><table>${h.lines.map((x, li) => row(fi, hi, li, x)).join("")}</table></div></div>`).join("")}</details>`;
+  const file = (f, fi) => `<details class="sc-file" ${d.files.length <= 6 ? "open" : ""}><summary><span class="grow mono small">${where(f)}${f.outside ? ' <span class="tag" title="Outside this session\'s project: a scratch file or another repo">outside</span>' : ""}</span><span class="diffstat"><b class="add">+${f.additions}</b><b class="del">−${f.deletions}</b></span><span class="muted small nowrap">${f.edits ? plural(f.edits, "edit") : ""}${f.status === "added" ? `${f.edits ? " · " : ""}new file` : f.status === "deleted" ? "deleted" : ""}</span></summary>
+    ${f.too_big ? '<p class="muted small">Too big to draw here.</p>' : f.hunks.map((h, hi) => `<div class="pr-snip"><div class="pr-snip-h mono">${esc(h.header)}${h.at ? ` <span class="muted">· edited ${ago(h.at)}</span>` : ""}</div><div class="pr-snip-b"><table>${h.lines.map((x, li) => row(fi, hi, li, x)).join("")}</table></div></div>`).join("")}</details>`;
   const shell = (d.shell || []).length ? `<details class="more"><summary class="small">${plural(d.shell.length, "shell command")} that may also have changed files (not shown above)</summary><ul class="mono small">${d.shell.map(x => `<li>${esc(x.command)}</li>`).join("")}</ul></details>` : "";
   body.innerHTML = `<div class="readable sc">
-    <p class="muted small">${d.files.length ? `${plural(d.files.length, "file")} · <span class="diffstat"><b class="add">+${d.additions}</b><b class="del">−${d.deletions}</b></span> · what this session itself did, from its transcript; denied and rewound edits are left out.` : "This session hasn't edited any files."} Click a line number, then shift-click another, to pick lines.</p>
+    <p class="muted small">${d.files.length ? `${plural(d.files.length, "file")} · <span class="diffstat"><b class="add">+${d.additions}</b><b class="del">−${d.deletions}</b></span> · ${sessDiffSource(d)}.` : (d.source || {}).kind === "record" ? "This session hasn't edited any files." : "No changes on this branch."} Click a line number, then shift-click another, to pick lines.</p>
     ${shell}${d.files.map(file).join("")}
     <div class="sc-ask" hidden><div class="small"><b id="sc-what"></b></div>
       <div class="pr-compose"><textarea id="sc-say" data-grow rows="2" placeholder="Ask about these lines, or say what to change"></textarea></div>
@@ -3237,7 +3237,7 @@ async function sessionChanges(sid, name, unlocked) {
   const send = kind => async () => {
     const said = $("#sc-say").value.trim();
     if (!said) { $("#sc-msg").textContent = kind === "ask" ? "Say what you want to know." : "Say what to change."; return; }
-    const r = await save("session_lines", { session: sid, path: d.files[pick.fi].path, lines: picked().map(y => y.x), said, kind, fork: !$("#sc-in").checked });
+    const r = await save("session_lines", { session: sid, path: d.files[pick.fi].full || d.files[pick.fi].path, lines: picked().map(y => y.x), said, kind, fork: !$("#sc-in").checked });
     if (!r.ok) return saidMsg($("#sc-msg"), r, "");
     closeDrawer(); prefToast(kind === "ask" ? "Asked. The answer shows under the session when it's done." : "It's making the change. You'll see it under the session."); softRoute();
   };
@@ -6900,7 +6900,17 @@ function ssFit(root) {
 }
 window.addEventListener("resize", () => { if ((location.hash.slice(1) || "").split("/")[0] === "studio") ssFit(document); });
 
-/* What one session changed: every file it edited or created, as diffs, from its own transcript. The same diff view as
+/* Where a session's diff came from, in one line: its PR on GitHub, its branch, or (on the default branch with no PR)
+   only what Claude's edit tools recorded, which leaves out files changed by shell commands. */
+function sessDiffSource(c) {
+  const s = c.source || {}, r = c.recorded || {};
+  const lo = s.local || {}, unsent = [lo.unpushed ? plural(lo.unpushed, "commit") + " not pushed" : "", lo.uncommitted ? plural(lo.uncommitted, "uncommitted file") : ""].filter(Boolean).join(" and ");
+  if (s.kind === "pr") return `the whole diff of <a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">PR #${s.number}</a>, as GitHub has it (${esc(s.branch)} into ${esc(s.base)})${unsent ? ` · <b class="warn-tx">${esc(unsent)} in ${esc(s.worktree || "the checkout")} aren't in it yet</b>` : ""}`;
+  if (s.kind === "branch") return `everything on ${esc(s.branch)} since it left ${esc(s.base)}, including uncommitted and new files (no PR yet)`;
+  return `only what Claude's edit tools recorded${c.shell_count ? `: <b class="warn-tx">files changed by ${plural(c.shell_count, "shell command")} aren't shown</b>` : ""}`;
+}
+
+/* What one session changed: the diff of its branch's PR on GitHub (else its branch, else what its transcript recorded). The same diff view as
    Reviews (file tree, folding, filter), read-only. Shell commands that may also have changed files are listed. */
 async function ssChanges(id) {
   const [c, d] = await Promise.all([api("studio_changes", { id }), api("studio_session", { id }).catch(() => ({}))]);
@@ -6911,7 +6921,7 @@ async function ssChanges(id) {
   // files outside the project (scratch notes, another repo) go under their own folder in the tree; files in one of
   // the project's worktrees go under that worktree's name
   const files = c.files.map(f => f.outside ? Object.assign({}, f, { path: "Outside this project/" + f.path.split("/").pop(), full: f.path })
-    : f.worktree ? Object.assign({}, f, { path: `${f.worktree} (worktree)/${f.path}`, full: f.path }) : f);
+    : f.worktree ? Object.assign({}, f, { path: `${f.worktree} (worktree)/${f.path}`, full: f.full || f.path }) : f);
   state.sscFiles = Object.fromEntries(files.map(f => [f.path, f.full || f.path]));  // shown path -> the real one
   state.dfOpen = { n: "ss-" + id, paths: [], shut: [], filter: "" };
   const total = files.reduce((a, f) => a + f.hunks.reduce((b, h) => b + h.lines.length, 0), 0);
@@ -6919,12 +6929,12 @@ async function ssChanges(id) {
   const shell = c.shell.length ? `<details class="box ssc-sh"><summary><b>${plural(c.shell.length, "shell command")}</b> that can also change files <span class="muted small">(sed, scripts, installs, formatters: these aren't recorded as edits, so check git for what they did)</span></summary>
     <ul>${c.shell.slice().reverse().map(x => `<li><code>${esc(x.command)}</code><span class="muted small">${ago(x.ts)}</span></li>`).join("")}</ul></details>` : "";
   return `<div class="ssc"><div class="ssc-h">${back}<div class="grow"><h1>What this session changed</h1>
-      <p class="muted">${esc(d && d.title || "")}${d && d.title ? " · " : ""}${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span> · from the session's own record, so it shows exactly what Claude edited here, even after commits</p></div></div>
+      <p class="muted">${esc(d && d.title || "")}${d && d.title ? " · " : ""}${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span> · ${sessDiffSource(c)}</p></div></div>
     ${shell}
     ${files.length ? `<p class="muted small df-note">Drag down the line numbers, or click one and shift-click another, to ask about those lines or ask for a change. It goes into this same session, with the file and lines pointed out.</p>` : ""}
     ${files.length ? `<div class="df"><aside class="df-side"><div class="df-filter"><input type="search" id="df-filter" placeholder="Filter files…" aria-label="Filter files"></div>
       <div class="df-sum">${plural(files.length, "file")} · <span class="add">+${n_(c.additions)}</span> <span class="del">−${n_(c.deletions)}</span></div>
-      <div class="df-tree" id="df-tree">${diffTree(files, {})}</div></aside><div class="df-main">${body}</div></div>` : empty("No file edits in this session", "Claude didn't edit or create files here. Shell commands, if any, are listed above.")}</div>`;
+      <div class="df-tree" id="df-tree">${diffTree(files, {})}</div></aside><div class="df-main">${body}</div></div>` : empty((c.source || {}).kind === "record" ? "No file edits in this session" : "No changes on this branch", (c.source || {}).kind === "record" ? "Claude didn't edit or create files here. Shell commands, if any, are listed above." : "The branch has nothing its base doesn't.")}</div>`;
 }
 function wireSessChanges(root) {
   const id = (location.hash.match(/^#studio\/([0-9a-f-]{36})\/changes/) || [])[1];

@@ -567,6 +567,7 @@ details.sess-old { margin: 0 0 8px 22px; } details.sess-old > summary { font-siz
 .sess-turn.you { border-left-color: var(--series-1, #4a86e8); }
 .sess-list .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .bad-tx { color: var(--red); }
+.warn-tx { color: var(--yellow-tx); }
 input.wide { width: 100%; }
 #update-banner { margin: 10px 14px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #update-banner details.inline { display: inline-block; margin: 0; }
