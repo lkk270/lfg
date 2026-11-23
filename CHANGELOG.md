@@ -4,6 +4,11 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.9.1 (2026-11-23)
+
+### Fixed
+- A session's What it changed page shows the branch's whole pull request diff from GitHub (or the branch's diff when there's no PR yet), so files Claude changed with shell commands are no longer missing
+
 ## 0.9.0 (2026-11-19)
 
 ### Added

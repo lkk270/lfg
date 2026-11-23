@@ -2,6 +2,16 @@
   "_about": "What's new in each LFG release, said to the user: the walkthrough the dashboard shows once after an update, Help → What's new, and the lines `lfg setup` prints. Each item is one step of the walkthrough: page and sel (optional) say which page to open and what to light up on it. Newest release first. CHANGELOG.md keeps the detailed record.",
   "releases": [
     {
+      "version": "0.9.1",
+      "title": "Session diffs match the PR",
+      "items": [
+        {
+          "title": "What a session changed matches its PR",
+          "text": "A session's What it changed page now shows its branch's pull request as GitHub has it, so files Claude changed with scripts or sed show up too. It warns when the worktree has commits not pushed or uncommitted files that aren't on GitHub yet."
+        }
+      ]
+    },
+    {
       "version": "0.9.0",
       "title": "Edit queued messages, fresher re-reviews",
       "items": [
