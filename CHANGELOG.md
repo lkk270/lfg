@@ -4,6 +4,12 @@ All notable changes to LFG. The version lives in `plugin/.claude-plugin/plugin.j
 
 ## Unreleased
 
+## 0.10.0 (2026-11-23)
+
+### Added
+- Download a PR review as a Markdown file from its page
+- Studio sessions have a hideable sidebar with notes and a pinned checklist that you and Claude both update (lfg checklist)
+
 ## 0.9.1 (2026-11-23)
 
 ### Fixed
