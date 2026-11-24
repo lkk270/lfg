@@ -79,7 +79,9 @@ off when there is nothing to copy). Under it, **New in this review** comes first
 ones first. A fixed or withdrawn earlier finding is one quiet line: a green **Fixed in <commit>** chip, its title
 crossed out, the points the fix gave back (**+12 back**) and the reason. The score line reads "100 - 4 for open findings
 = 96", because the 4 is points, not a count. **Copy all questions** on the Questions box copies every question with
-its answer so far. A first review looks as before.
+its answer so far. **Download .md**, next to **Copy summary and findings**, saves the same text as a file named
+`<owner>-<repo>-<number>-review-pass<n>.md`, without the findings you dropped (it says "No open findings." when none are
+left). A first review looks as before.
 
 ## Code map
 

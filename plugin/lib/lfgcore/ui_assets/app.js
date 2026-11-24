@@ -619,6 +619,10 @@ document.addEventListener("click", async e => {  // [data-copy="<id>"]: copy tha
   try { await navigator.clipboard.writeText(el ? el.textContent : ""); b.textContent = "Copied"; } catch (err) { b.textContent = "Select and copy"; }
   setTimeout(() => (b.textContent = "Copy"), 1600);
 });
+document.addEventListener("click", e => {  // [data-export-md]: save its text as the file named in data-export-name
+  const b = e.target.closest("[data-export-md]");
+  if (b) ssDownload(b.dataset.exportName || "review.md", b.dataset.exportMd);
+});
 document.addEventListener("keydown", openKnow);
 
 
@@ -5012,7 +5016,7 @@ async function prDetail(arg) {
     ${actions}
     ${passTabs}
     <div class="pr-split"><div class="pr-pass-body">
-      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · reviewed at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${d.gh && d.gh.head_sha && d.gh.head_sha !== p.head_sha ? ` · <span class="tag warn" title="Commits were pushed after this review. Is it fixed? checks a finding against the newest code; a re-review reads them all">PR is now at <span class="mono">${esc(d.gh.head_sha.slice(0, 8))}</span></span>` : ""}${p.imported_from ? " · imported from a session" : ""}${(p.run || {}).notes ? ` · <span class="tag" title="${esc(p.run.notes)}">with your notes</span>` : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button>${discard}</div>
+      <div class="panel">${verdictHero({ ...p, history: passes.map(x => ({ n: x.n, score: x.score, kind: x.kind })) }, together.length, d.gh)}<div class="row"><span class="muted">${ago(p.ts)} · reviewed at commit <span class="mono">${esc(p.head_sha.slice(0, 8))}</span>${d.gh && d.gh.head_sha && d.gh.head_sha !== p.head_sha ? ` · <span class="tag warn" title="Commits were pushed after this review. Is it fixed? checks a finding against the newest code; a re-review reads them all">PR is now at <span class="mono">${esc(d.gh.head_sha.slice(0, 8))}</span></span>` : ""}${p.imported_from ? " · imported from a session" : ""}${(p.run || {}).notes ? ` · <span class="tag" title="${esc(p.run.notes)}">with your notes</span>` : ""}</span><span class="grow"></span><button class="btn small" data-copy="${esc(prCopyText(rec, p))}" title="The summary, approach notes and every finding, as Markdown to paste to an agent">Copy summary and findings</button><button class="btn small" data-export-md="${esc(prExportText(rec, p))}" data-export-name="${esc(prExportName(rec, p))}" title="Save the summary and every finding you haven't dropped as a Markdown file">Download .md</button>${discard}</div>
         ${p.summary ? `<p>${txt(p.summary)}</p>` : ""}${intentLine(p)}
         ${(p.run || {}).notes ? usedNotes(p.run.notes, pr, `Your notes for review ${p.n}`) : ""}
         ${(p.approach_notes || []).length ? `<div class="k">Approach notes (not posted)</div><ul>${p.approach_notes.map(x => `<li>${txt(x)}</li>`).join("")}</ul>` : ""}
@@ -5044,7 +5048,7 @@ function findingState(x) {
     x.check && x.check.state ? `Re-check: ${x.check.state}${x.check.why ? ". " + x.check.why : ""}` : "",
     (x.fixed || {}).commit ? `Fixed in ${x.fixed.commit}` : ""].filter(Boolean);
 }
-function prCopyText(rec, p) {
+function prCopyText(rec, p, none = "None.") {
   const decided = { keep: "kept", drop: "dropped", pending: "not decided yet" };
   const byId = Object.fromEntries((rec.passes || []).flatMap(x => x.findings).map(x => [x.id, x]));
   const f = p.findings.map((x, i) => [`### ${i + 1}. ${x.title || x.issue || x.id} (${x.id}, ${x.severity}, ${decided[x.status] || x.status}${x.comment_url ? ", posted" : ""})`,
@@ -5062,9 +5066,12 @@ function prCopyText(rec, p) {
     (p.run || {}).notes ? `## Your notes for this review\n${p.run.notes}` : "",
     qs.length ? `## Questions (${qs.length})\n${qs.join("\n")}` : "",
     prior.length ? `## Earlier review comments (${prior.length})\n${prior.join("\n")}` : "",
-    `## Findings (${p.findings.length})`, f.join("\n\n") || "None.",
+    `## Findings (${p.findings.length})`, f.join("\n\n") || none,
     (p.chat || []).length ? `## Discussion of the whole review\n\n${copyChat(p.chat)}` : ""].filter(Boolean).join("\n\n");
 }
+/* Download .md: the same text as the copy button, without the findings you dropped. */
+const prExportText = (rec, p) => prCopyText(rec, { ...p, findings: p.findings.filter(f => f.status !== "drop") }, "No open findings.");
+const prExportName = (rec, p) => `${String(rec.repo).replace(/[^A-Za-z0-9._-]+/g, "-")}-${rec.number}-review-pass${p.n}.md`;
 async function prImport(pr, path, btn) {
   btn.disabled = true; btn.textContent = path === "log" ? "Saving…" : "Importing…";
   const d = await save("review_import", { pr, path });
