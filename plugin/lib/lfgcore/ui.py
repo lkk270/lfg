@@ -242,6 +242,9 @@ def api(view, q):
             return dict(SS.recent(_arg(q, "id")), used=SS.usage_of(_arg(q, "id")))
         except ValueError as e:
             return {"available": False, "why": str(e)}
+    if view == "session_notes":  # a Studio session's notes and pinned checklist
+        from . import checklist as CK
+        return CK.get(_arg(q, "id"))
     if view in ("sessionchanges", "sessionwork"):  # what a session changed, what it has running (read only)
         from . import sesswork as SW
         try:
@@ -692,6 +695,31 @@ def save(what, body):
                 return res
             return SS.file_into(body.get("id"), body.get("folder"), body.get("from") or "")
         except ValueError as e:
+            raise S.Invalid(str(e)) from None
+    if what in ("session_notes", "checklist_set", "checklist_add", "checklist_done", "checklist_edit", "checklist_rm",
+                "checklist_move", "checklist_clear_done"):  # the Studio sidebar: notes and the pinned checklist
+        from . import checklist as CK
+        sid = body.get("id")
+        try:
+            if what == "session_notes":
+                return CK.set_notes(sid, body.get("text"))
+            if what == "checklist_set":
+                items = body.get("items")
+                if not isinstance(items, list):
+                    raise ValueError("items must be a list")
+                return CK.set_items(sid, items, title=body.get("title") or "")
+            if what == "checklist_add":
+                return CK.add(sid, body.get("text"))
+            if what == "checklist_done":
+                return CK.mark(sid, body.get("item"), body.get("on", True) is not False)
+            if what == "checklist_edit":
+                return CK.edit(sid, body.get("item"), body.get("text"))
+            if what == "checklist_rm":
+                return CK.remove(sid, body.get("item"))
+            if what == "checklist_move":
+                return CK.move(sid, body.get("item"), body.get("to"))
+            return CK.clear_done(sid)
+        except (ValueError, TypeError) as e:
             raise S.Invalid(str(e)) from None
     if what == "session_lines":  # lines picked in a session's changes: ask about them, or have it change them
         from . import sesswork as SW

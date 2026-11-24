@@ -6222,7 +6222,7 @@ PAGES.studio = async (arg, opts) => {
   state.sess = { d, id: arg, unlocked };
   crumbs("studio", d && d.available !== false ? d.title : null, `#studio/${arg}`);
   if (d.available !== false) tabOpen("studio", arg, d.title);
-  return d.available === false ? unavailable(d) : `${tabStrip("studio")}<div class="ss-one${(d.activity || []).length ? " has-act" : ""}">${ssDetail(d)}</div>`;
+  return d.available === false ? unavailable(d) : `${tabStrip("studio")}<div class="ss-one${(d.activity || []).length ? " has-act" : ""}${ssSideOpen() ? " has-side" : ""}">${ssDetail(d)}</div>`;
 };
 
 /* tags: one look tells you what a session is about and where it stands */
@@ -6757,14 +6757,91 @@ function ssHead(d) {
   const s = ssRowOf(d), unlocked = !!(state.sess || {}).unlocked;
   return `<div class="grow"><h1 class="ss-title"${unlocked ? ' title="Click to rename" data-ss-rename' : ""}>${esc(d.title)}</h1>
       <div class="ss-tags">${ssTagList(d, true)}${d.via === "headroom" ? '<span class="tg on">via Headroom</span>' : ""}${labelChips(s)}</div></div>
-    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}${ssModelBtn(d, unlocked)}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${sessStar(s, unlocked)}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}${sessMenu(s, { unlocked, extra: SS_MENU_EXTRA })}</div>`;
+    <div class="ss-head-a">${ssLive(d.state) ? ssCtxHtml((state.ssCtx || {})[d.id]) : ""}<button type="button" class="btn small" data-ss-side aria-pressed="${ssSideOpen()}" title="Show or hide the notes and checklist beside the conversation">${icon("todos")}Notes</button>${ssModelBtn(d, unlocked)}${d.cost ? `<span class="ss-cost" title="What this session has cost so far">${money(d.cost)}</span>` : ""}${sessStar(s, unlocked)}${ssLive(d.state) ? `<button class="btn small" data-ss-end title="End the Claude Code process; you can continue the session later">End</button>` : ""}${sessMenu(s, { unlocked, extra: SS_MENU_EXTRA })}</div>`;
 }
+/* The Studio sidebar: a checklist pinned at the top (you tick, add and edit; Claude ticks with `lfg checklist`) and
+   notes below it. Hidden or shown with the Notes button in the header; the choice is kept in this browser. */
+const SS_SIDE_KEY = "lfg.ss.side";
+const ssSideOpen = () => { try { return localStorage.getItem(SS_SIDE_KEY) !== "0"; } catch (e) { return true; } };
+function ssCkInner(c) {
+  const items = ((c || {}).checklist || {}).items || [], done = items.filter(i => i.done).length;
+  return `<div class="row"><b>Checklist</b><span class="muted small">${items.length ? `${done} of ${items.length}` : ""}</span><span class="grow"></span>${done ? '<button class="btn small" data-ck-clear title="Remove the items that are ticked">Clear done</button>' : ""}</div>
+    <ul class="ss-ck-list">${items.map(i => `<li class="${i.done ? "done" : ""}"><input type="checkbox" data-ck="${esc(i.id)}"${i.done ? " checked" : ""} aria-label="${esc(i.text)}"><span class="ss-ck-t" data-ck-edit="${esc(i.id)}" title="Double-click to edit${i.by === "claude" ? ". Ticked or added by Claude" : ""}">${esc(i.text)}</span><button class="ss-ck-x" data-ck-rm="${esc(i.id)}" title="Remove" aria-label="Remove">×</button></li>`).join("")}</ul>
+    <input type="text" class="ss-ck-add" data-ck-add placeholder="Add an item, then Enter" maxlength="500">`;
+}
+const ssNotesInner = c => `<b>Notes</b><textarea data-notes rows="8" placeholder="Anything worth keeping while you work with Claude" maxlength="100000">${esc((c || {}).notes || "")}</textarea>`;
+const ssSideHtml = c => `<section class="ss-ck">${ssCkInner(c)}</section><section class="ss-notes">${ssNotesInner(c)}</section>`;
+
+/* Fill the sidebar and keep it current: it asks again while Claude works (so a tick from `lfg checklist` shows up) and
+   after each of your own changes. Typing in the add box or the notes is never overwritten by a redraw. */
+function wireSide(root, sid) {
+  const box = $("#ss-side", root);
+  if (!box || !once(box, "side")) return;
+  let sig = "", timer = 0, saveNotes = 0;
+  const load = async () => {
+    const c = await api("session_notes", { id: sid }).catch(() => null);
+    if (!c || !box.isConnected) return;
+    if (!$(".ss-ck", box)) { box.innerHTML = ssSideHtml(c); sig = JSON.stringify(c.checklist); return; }
+    const next = JSON.stringify(c.checklist);
+    if (next !== sig) {
+      sig = next;
+      const add = $("[data-ck-add]", box), v = add ? add.value : "", had = add && add === document.activeElement;
+      if ($("[data-ck-editing]", box)) return;  // not while one is being edited
+      morph($(".ss-ck", box), ssCkInner(c));
+      const a2 = $("[data-ck-add]", box); if (a2) { a2.value = v; if (had) a2.focus(); }
+    }
+    const ta = $("[data-notes]", box);
+    if (ta && ta !== document.activeElement && ta.value !== c.notes) ta.value = c.notes;
+  };
+  const act = async (what, body) => {
+    const r = await save(what, { id: sid, ...body });
+    if (r && r.ok === false) prefToast(String(r.why || "That didn't work.").replace(/`/g, ""), true);
+    await load();
+  };
+  const tick = async () => {
+    clearTimeout(timer);
+    if (!box.isConnected || state.sess.id !== sid) return;
+    await load();
+    const d = state.sess.d;
+    timer = setTimeout(tick, d && (d.state === "working" || d.state === "starting") ? 2500 : 10000);
+  };
+  box.addEventListener("change", e => { const c = e.target.closest("[data-ck]"); if (c) act("checklist_done", { item: c.dataset.ck, on: c.checked }); });
+  box.addEventListener("click", e => {
+    const rm = e.target.closest("[data-ck-rm]"); if (rm) return act("checklist_rm", { item: rm.dataset.ckRm });
+    if (e.target.closest("[data-ck-clear]")) act("checklist_clear_done", {});
+  });
+  box.addEventListener("dblclick", e => {
+    const t = e.target.closest("[data-ck-edit]"); if (!t) return;
+    const inp = document.createElement("input"); inp.type = "text"; inp.className = "ss-ck-edit"; inp.maxLength = 500;
+    inp.value = t.textContent; inp.dataset.ckEditing = t.dataset.ckEdit; t.replaceWith(inp); inp.focus(); inp.select();
+  });
+  box.addEventListener("keydown", e => {
+    const add = e.target.closest("[data-ck-add]"), ed = e.target.closest("[data-ck-editing]");
+    if (add && e.key === "Enter" && add.value.trim()) { const text = add.value; add.value = ""; act("checklist_add", { text }); }
+    if (ed && e.key === "Enter") ed.blur();
+    if (ed && e.key === "Escape") { ed.dataset.ckCancel = "1"; ed.blur(); }
+  });
+  box.addEventListener("focusout", e => {
+    const ed = e.target.closest("[data-ck-editing]"); if (!ed) return;
+    const id = ed.dataset.ckEditing, text = ed.value.trim(), cancel = ed.dataset.ckCancel;
+    ed.removeAttribute("data-ck-editing");
+    if (!cancel && text) act("checklist_edit", { item: id, text }); else { sig = ""; load(); }
+  });
+  box.addEventListener("input", e => {
+    const ta = e.target.closest("[data-notes]"); if (!ta) return;
+    clearTimeout(saveNotes);
+    saveNotes = setTimeout(() => save("session_notes", { id: sid, text: ta.value }), 600);
+  });
+  tick();
+}
+
 function ssDetail(d) {
   const live = ssLive(d.state), fork = state.ssFork && state.ssFork.sid === d.id ? state.ssFork : null;
   return `<header class="ss-head" id="ss-head">${ssHead(d)}</header>
     <div class="ss-conv${d.state === "working" || d.state === "starting" || (d.pending || []).length ? " ss-busy" : ""}" id="ss-conv">${ssConv(d)}</div>
     ${ssComposer({ live, studio: d.source === "lfg", mode: d.mode, fork })}
-    <aside class="ss-act" id="ss-act" aria-label="Running in the background" aria-live="polite">${ssAct(d)}</aside>`;
+    <div class="ss-right" id="ss-right"><aside class="ss-side" id="ss-side" aria-label="Notes and checklist"${ssSideOpen() ? "" : " hidden"}><div class="skeleton"></div></aside>
+    <aside class="ss-act" id="ss-act" aria-label="Running in the background" aria-live="polite">${ssAct(d)}</aside></div>`;
 }
 
 /* Beside the conversation: the subagents and background commands this session has going, so you can see Claude
@@ -7334,6 +7411,16 @@ function wireStudio(root) {
   const sigOf = n => JSON.stringify([n.items.length, n.state, n.model, (n.pending || []).length, JSON.stringify(n.queued || []), (state.qEdit || {}).id, n.error, n.cost, (n.items[n.items.length - 1] || {}).result != null, (n.outside || {}).ts]);
   const busyBg = n => (n.activity || []).some(a => a.status === "running");
   wireAct($("#ss-act", root));
+  wireSide(root, S.id);
+  head.addEventListener("click", e => {  // the Notes button: hide or show the sidebar
+    if (!e.target.closest("[data-ss-side]")) return;
+    const open = !ssSideOpen();
+    try { localStorage.setItem(SS_SIDE_KEY, open ? "1" : "0"); } catch (err) { /* private window */ }
+    const side = $("#ss-side", root), one = $(".ss-one", root);
+    if (side) side.hidden = !open;
+    if (one) one.classList.toggle("has-side", open);
+    const b = $("[data-ss-side]", head); if (b) b.setAttribute("aria-pressed", String(open));
+  });
   const drawAct = n => { const box = $("#ss-act", root); if (box) morph(box, ssAct(n)); const one = $(".ss-one", root); if (one) one.classList.toggle("has-act", !!(n.activity || []).length); };
   sig = sigOf(d);
   async function refresh() {

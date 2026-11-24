@@ -2505,11 +2505,12 @@ body.sg-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .lv-shade, .lv-v { animation: none; } }
 
 /* Studio: subagents and background commands, beside the conversation (above the composer on narrow screens) */
-.ss-one.has-act { max-width: 1400px; grid-template-columns: minmax(0, 1fr) 280px; column-gap: 20px; }
-.ss-one.has-act > .ss-head { grid-column: 1 / -1; }
-.ss-one.has-act > .ss-conv { grid-column: 1; grid-row: 2; }
-.ss-one.has-act > .ss-comp, .ss-one.has-act > .ss-forking { grid-column: 1; }
-.ss-one.has-act > .ss-act { grid-column: 2; grid-row: 2 / span 2; }
+.ss-one:is(.has-act, .has-side) { max-width: 1400px; grid-template-columns: minmax(0, 1fr) 280px; column-gap: 20px; }
+.ss-one:is(.has-act, .has-side) > .ss-head { grid-column: 1 / -1; }
+.ss-one:is(.has-act, .has-side) > .ss-conv { grid-column: 1; grid-row: 2; }
+.ss-one:is(.has-act, .has-side) > .ss-comp, .ss-one:is(.has-act, .has-side) > .ss-forking { grid-column: 1; }
+.ss-one:is(.has-act, .has-side) > .ss-right { grid-column: 2; grid-row: 2 / span 2; min-height: 0; overflow-y: auto; align-self: start; max-height: 100%; display: grid; gap: 14px; align-content: start; }
+.ss-one:not(.has-act):not(.has-side) > .ss-right { display: none; }
 .ss-act:empty { display: none; }
 .ss-act { min-height: 0; overflow-y: auto; align-self: start; max-height: 100%; display: grid; gap: 6px; align-content: start; }
 .ss-act-h { display: flex; gap: 8px; align-items: center; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
@@ -2539,9 +2540,9 @@ body.sg-open { overflow: hidden; }
 :root[data-motion="off"] .ss-act-i.run .ss-act-dot { animation: none; }
 @media (prefers-reduced-motion: reduce) { .ss-act-i.run .ss-act-dot { animation: none; } }
 @media (max-width: 1080px) {
-  .ss-one.has-act { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; }
-  .ss-one.has-act > .ss-act { grid-column: 1; grid-row: 3; max-height: 160px; }
-  .ss-one.has-act > .ss-comp { grid-row: 4; }
+  .ss-one:is(.has-act, .has-side) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; }
+  .ss-one:is(.has-act, .has-side) > .ss-right { grid-column: 1; grid-row: 3; max-height: 220px; }
+  .ss-one:is(.has-act, .has-side) > .ss-comp { grid-row: 4; }
 }
 
 /* Studio: what one session changed (the Reviews diff, read-only) */
@@ -2708,3 +2709,18 @@ body.sg-open { overflow: hidden; }
 .cont-other > summary { color: var(--text-2); }
 .cont-live { color: var(--blue-tx); font-weight: 600; }
 .cont-own { color: var(--muted); }
+
+/* Studio sidebar: the pinned checklist and the notes, beside the conversation */
+.ss-side { display: grid; gap: 14px; align-content: start; min-width: 0; } .ss-side[hidden] { display: none; }
+.ss-ck, .ss-notes { display: grid; gap: 6px; min-width: 0; }
+.ss-ck-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ss-ck-list li { display: flex; gap: 8px; align-items: flex-start; padding: 3px 4px; border-radius: 4px; }
+.ss-ck-list li:hover { background: var(--hover); }
+.ss-ck-list input[type="checkbox"] { margin-top: 3px; flex: none; }
+.ss-ck-t { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; cursor: text; }
+.ss-ck-list li.done .ss-ck-t { color: var(--muted); text-decoration: line-through; }
+.ss-ck-x { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; opacity: 0; }
+.ss-ck-list li:hover .ss-ck-x, .ss-ck-x:focus-visible { opacity: 1; }
+.ss-ck-add, .ss-ck-edit, .ss-notes textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface, var(--page)); color: var(--text); }
+.ss-ck-edit { flex: 1; min-width: 0; padding: 2px 6px; }
+.ss-notes textarea { resize: vertical; min-height: 120px; }

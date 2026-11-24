@@ -1,0 +1,15 @@
+{
+  "changelog": {
+    "Added": [
+      "Studio sessions have a hideable sidebar with notes and a pinned checklist that you and Claude both update (lfg checklist)"
+    ]
+  },
+  "whats_new": [
+    {
+      "title": "Notes and a pinned checklist",
+      "text": "Each Studio session has a sidebar for notes and a checklist. Tick items yourself, or let Claude tick them as it works. Hide it with the Notes button.",
+      "page": "studio",
+      "sel": "[data-ss-side]"
+    }
+  ]
+}
