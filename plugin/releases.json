@@ -2,6 +2,24 @@
   "_about": "What's new in each LFG release, said to the user: the walkthrough the dashboard shows once after an update, Help → What's new, and the lines `lfg setup` prints. Each item is one step of the walkthrough: page and sel (optional) say which page to open and what to light up on it. Newest release first. CHANGELOG.md keeps the detailed record.",
   "releases": [
     {
+      "version": "0.10.0",
+      "title": "Studio notes and checklist, download reviews",
+      "items": [
+        {
+          "title": "Download a review",
+          "text": "Each review page has a Download .md button that saves the summary and every finding you haven't dropped.",
+          "page": "prs",
+          "sel": "[data-export-md]"
+        },
+        {
+          "title": "Notes and a pinned checklist",
+          "text": "Each Studio session has a sidebar for notes and a checklist. Tick items yourself, or let Claude tick them as it works. Hide it with the Notes button.",
+          "page": "studio",
+          "sel": "[data-ss-side]"
+        }
+      ]
+    },
+    {
       "version": "0.9.1",
       "title": "Session diffs match the PR",
       "items": [
