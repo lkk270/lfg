@@ -1086,6 +1086,35 @@ def cmd_prefs(a):
     return 0
 
 
+def cmd_checklist(a):
+    from . import checklist as CK
+    sid = a.session or os.environ.get("LFG_SESSION_ID") or ""
+    if not sid:
+        C.die("No session: run this inside a Studio chat or pass --session <id>.")
+    args, by = list(a.args or []), "claude"
+    try:
+        if a.action == "set":
+            d = CK.set_items(sid, args, title=a.title or "", by=by)
+        elif a.action == "add":
+            d = CK.add(sid, " ".join(args), by)
+        elif a.action in ("done", "undo"):
+            for ref in args or [""]:
+                d = CK.mark(sid, ref, a.action == "done", by)
+        elif a.action == "edit":
+            if len(args) < 2:
+                C.die('usage: lfg checklist edit <number|id> "<new text>"', 2)
+            d = CK.edit(sid, args[0], " ".join(args[1:]), by)
+        elif a.action == "rm":
+            for ref in args or [""]:
+                d = CK.remove(sid, ref)
+        else:
+            d = CK.get(sid)
+    except ValueError as e:
+        C.die(str(e))
+    print(CK.lines(d))
+    return 0
+
+
 def cmd_corrections(a):
     from . import corrections as CR
     act, args = a.action, list(a.args or [])
@@ -1800,6 +1829,12 @@ def main(argv=None):
     pf.add_argument("value", nargs="?", help="set: on/off, or one of the choices")
     pf.add_argument("--session", help="one session (its id from lfg sessions); default: the defaults")
     pf.add_argument("--by-user", action="store_true", help="allow loosening (your own terminal only)")
+    ck = sp.add_parser("checklist", help="the pinned checklist of a Studio session (Claude ticks items off)")
+    ck.add_argument("action", choices=["set", "add", "done", "undo", "edit", "rm", "show"],
+                    help="set: replace the list with the items given; done/undo/rm: item numbers or ids")
+    ck.add_argument("args", nargs="*")
+    ck.add_argument("--title", help="set: a name for the list")
+    ck.add_argument("--session", help="the Studio session (default: $LFG_SESSION_ID, set inside a Studio chat)")
     cr = sp.add_parser("corrections", help="what you correct Claude on, queued for you to turn into rules")
     cr.add_argument("action", nargs="?", default="list",
                     choices=["list", "show", "add", "approve", "merge", "discard", "brain", "rules", "on", "off",
@@ -1969,6 +2004,7 @@ def main(argv=None):
             "release": cmd_release,
             "plugins": cmd_plugins,
             "corrections": cmd_corrections,
+            "checklist": cmd_checklist,
             "vendor": cmd_vendor,
             "omnigraph": cmd_omnigraph, "sonar": cmd_sonar,
             "headroom": cmd_headroom,

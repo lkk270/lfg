@@ -121,12 +121,13 @@ class WiringTest(unittest.TestCase):
         self.assertIn("if (fresh) {", studio)
         self.assertIn('if (once(t, "grow")) t.addEventListener', body(src, "function grow("))
         self.assertIn('once(box, "act")', body(src, "function wireAct("))
+        self.assertIn('once(box, "side")', body(src, "function wireSide("))
         self.assertIn("if (!o.comp._att) o.comp._att = ssAttachNew(o);", body(src, "function ssAttach("))
 
     def test_no_element_listener_is_added_on_every_wiring_of_a_view(self):
         # every addEventListener inside a wire* function is guarded by once(), or sits on something rebuilt each time
         src = js()
-        allowed = {"wireInsights", "wireStudio", "wireAct", "wireView"}  # each checked above or guarded on the line
+        allowed = {"wireInsights", "wireStudio", "wireAct", "wireView", "wireSide"}  # each checked above
         for m in re.finditer(r"\n(?:async )?function (wire\w*)\(", src):
             name = m.group(1)
             fn = body(src, m.group(0).strip("\n"))

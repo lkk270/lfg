@@ -539,6 +539,8 @@ class Live:
         argv = [C.which("claude") or "claude", "-p", "--input-format", "stream-json", "--output-format",
                 "stream-json", "--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", mode] + \
             (["--model", model] if model else []) + where
+        from . import checklist as CK
+        argv += CK.setup(env, sid)  # LFG_SESSION_ID and a line about the pinned checklist
         if review:  # a review's chat may look at anything, but never write to GitHub
             from . import review as RV
             argv += ["--disallowedTools", ",".join(RV.RUN_DENY)]
