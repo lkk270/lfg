@@ -1,0 +1,14 @@
+{
+  "changelog": {
+    "Changed": [
+      "Reviews re-check settled decisions that cut scope (\"only these 16 settings\") against the ticket, smoke test or mock-up on a first review, instead of never raising them again."
+    ]
+  },
+  "whats_new": [
+    {
+      "title": "Scope cuts get re-checked",
+      "text": "A decision that left something out stays settled on re-reviews, but a first review checks it against the ticket and smoke test, flags it when they disagree, and lists the rest under Known scope cuts.",
+      "page": "prs"
+    }
+  ]
+}
