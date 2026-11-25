@@ -46,7 +46,12 @@ preflight: graphs
    those that fit this repo). Read them before filing anything.
    Never file a finding one of them covers, in other words or at another line. Raise it only if in this PR it is
    clearly worse than when it was settled (higher severity, wider reach, a new way to hit it) and say in `body` what is worse;
-   a decision saying something *is* a real problem means keep flagging it. A name in `unavailable` is a graph that
+   a decision saying something *is* a real problem means keep flagging it.
+   **Except scope cuts.** A settled item that makes the change do less than its ticket, the PR description, a
+   mock-up, a smoke test or the outside system it covers ("only these 16 settings", "admins only for now") is a
+   bet, not a fact. On a first review (not a re-review) re-check each one against that evidence: one the evidence
+   contradicts is a finding that names the decision and its date; the rest go in the summary under
+   `Known scope cuts`, one line each. Never fix a cut by widening scope yourself. A name in `unavailable` is a graph that
    couldn't be read: say so in the summary.
 5. **Intent: the ticket and the description.** Always, with any method and in Fresh eyes too (neither is an earlier
    review's opinion). Context gives `description` (the PR body) and `ticket`: the Linear id its branch, title or
